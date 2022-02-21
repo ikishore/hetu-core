@@ -14,6 +14,7 @@
  */
 package io.prestosql.snapshot;
 
+import com.google.common.base.Stopwatch;
 import com.google.common.io.ByteStreams;
 import io.airlift.log.Logger;
 import io.prestosql.spi.filesystem.HetuFileSystemClient;
@@ -31,6 +32,7 @@ import java.util.List;
 import java.util.Map;
 import java.util.Optional;
 import java.util.Set;
+import java.util.concurrent.TimeUnit;
 
 /**
  * SnapshotStoreFileBased is an implementation of SnapshotStoreClient.
@@ -51,9 +53,10 @@ public class SnapshotFileBasedClient
     }
 
     @Override
-    public void storeState(SnapshotStateId snapshotStateId, Object state)
+    public void storeState(SnapshotStateId snapshotStateId, Object state, SnapshotDataCollector dataCollector)
             throws IOException
     {
+        Stopwatch timer = Stopwatch.createStarted();
         Path file = SnapshotUtils.createStatePath(rootPath, snapshotStateId.getHierarchy());
 
         fsClient.createDirectories(file.getParent());
@@ -61,26 +64,43 @@ public class SnapshotFileBasedClient
         try (OutputStream outputStream = fsClient.newOutputStream(file)) {
             SnapshotUtils.serializeState(state, outputStream);
         }
+        timer.stop();
+        if (dataCollector != null) {
+            long snapshotId = snapshotStateId.getSnapshotId();
+            long size = ((Long) fsClient.getAttribute(file, "size")).longValue();
+            dataCollector.updateSnapshotCaptureSize(snapshotId, size);
+            dataCollector.updateSnapshotCaptureCpuTime(snapshotId, timer.elapsed(TimeUnit.MILLISECONDS));
+        }
     }
 
     @Override
-    public Optional<Object> loadState(SnapshotStateId snapshotStateId)
+    public Optional<Object> loadState(SnapshotStateId snapshotStateId, SnapshotDataCollector dataCollector)
             throws IOException, ClassNotFoundException
     {
+        Optional<Object> result;
+        Stopwatch timer = Stopwatch.createStarted();
         Path file = SnapshotUtils.createStatePath(rootPath, snapshotStateId.getHierarchy());
         if (!fsClient.exists(file)) {
             return Optional.empty();
         }
 
         try (InputStream inputStream = fsClient.newInputStream(file)) {
-            return Optional.of(SnapshotUtils.deserializeState(inputStream));
+            result = Optional.of(SnapshotUtils.deserializeState(inputStream));
         }
+        timer.stop();
+        if (dataCollector != null) {
+            long size = ((Long) fsClient.getAttribute(file, "size")).longValue();
+            dataCollector.updateSnapshotRestoreSize(size);
+            dataCollector.updateSnapshotRestoreCpuTime(timer.elapsed(TimeUnit.MILLISECONDS));
+        }
+        return result;
     }
 
     @Override
-    public void storeFile(SnapshotStateId snapshotStateId, Path sourceFile)
+    public void storeFile(SnapshotStateId snapshotStateId, Path sourceFile, SnapshotDataCollector dataCollector)
             throws IOException
     {
+        Stopwatch timer = Stopwatch.createStarted();
         List<String> hierarchy = new ArrayList<>(snapshotStateId.getHierarchy());
         hierarchy.add(sourceFile.getFileName().toString());
         Path file = SnapshotUtils.createStatePath(rootPath, hierarchy);
@@ -91,12 +111,20 @@ public class SnapshotFileBasedClient
                 InputStream inputStream = Files.newInputStream(sourceFile)) {
             ByteStreams.copy(inputStream, outputStream);
         }
+        timer.stop();
+        if (dataCollector != null) {
+            long snapshotId = snapshotStateId.getSnapshotId();
+            long size = ((Long) fsClient.getAttribute(file, "size")).longValue();
+            dataCollector.updateSnapshotCaptureSize(snapshotId, size);
+            dataCollector.updateSnapshotCaptureCpuTime(snapshotId, timer.elapsed(TimeUnit.MILLISECONDS));
+        }
     }
 
     @Override
-    public boolean loadFile(SnapshotStateId snapshotStateId, Path targetPath)
+    public boolean loadFile(SnapshotStateId snapshotStateId, Path targetPath, SnapshotDataCollector dataCollector)
             throws IOException
     {
+        Stopwatch timer = Stopwatch.createStarted();
         List<String> hierarchy = new ArrayList<>(snapshotStateId.getHierarchy());
         String fileName = targetPath.getFileName().toString();
         hierarchy.add(fileName);
@@ -113,6 +141,12 @@ public class SnapshotFileBasedClient
                 OutputStream outputStream = Files.newOutputStream(targetPath)) {
             ByteStreams.copy(inputStream, outputStream);
         }
+        timer.stop();
+        if (dataCollector != null) {
+            long size = ((Long) fsClient.getAttribute(file, "size")).longValue();
+            dataCollector.updateSnapshotRestoreSize(size);
+            dataCollector.updateSnapshotRestoreCpuTime(timer.elapsed(TimeUnit.MILLISECONDS));
+        }
         return true;
     }
 
@@ -125,7 +159,7 @@ public class SnapshotFileBasedClient
     }
 
     @Override
-    public void storeSnapshotResult(String queryId, Map<Long, SnapshotResult> result)
+    public void storeSnapshotResult(String queryId, Map<Long, SnapshotInfo> result)
             throws IOException
     {
         Path file = SnapshotUtils.createStatePath(rootPath, queryId, "result");

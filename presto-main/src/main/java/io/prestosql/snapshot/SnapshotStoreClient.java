@@ -27,25 +27,25 @@ public interface SnapshotStoreClient
     /**
      * Store state in snapshot store
      */
-    void storeState(SnapshotStateId snapshotStateId, Object state)
+    void storeState(SnapshotStateId snapshotStateId, Object state, SnapshotDataCollector dataCollector)
             throws Exception;
 
     /**
      * Load state from snapshot store. Optional.empty() is returned if state doesn't exist.
      */
-    Optional<Object> loadState(SnapshotStateId snapshotStateId)
+    Optional<Object> loadState(SnapshotStateId snapshotStateId, SnapshotDataCollector dataCollector)
             throws Exception;
 
     /**
      * Store file from sourcePath to snapshotStateId of snapshot store
      */
-    void storeFile(SnapshotStateId snapshotStateId, Path sourcePath)
+    void storeFile(SnapshotStateId snapshotStateId, Path sourcePath, SnapshotDataCollector dataCollector)
             throws Exception;
 
     /**
      * Load file from snapshotStateId of snapshot store to targetPath
      */
-    boolean loadFile(SnapshotStateId snapshotStateId, Path targetPath)
+    boolean loadFile(SnapshotStateId snapshotStateId, Path targetPath, SnapshotDataCollector dataCollector)
             throws Exception;
 
     /**
@@ -57,7 +57,7 @@ public interface SnapshotStoreClient
     /**
      * Store snapshot result of query
      */
-    void storeSnapshotResult(String queryId, Map<Long, SnapshotResult> result)
+    void storeSnapshotResult(String queryId, Map<Long, SnapshotInfo> result)
             throws Exception;
 
     /**

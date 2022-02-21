@@ -37,11 +37,11 @@ public class TestSnapshotFileBasedClient
     {
         SnapshotFileBasedClient client = new SnapshotFileBasedClient(new HetuLocalFileSystemClient(new LocalConfig(new Properties()), Paths.get(ROOT_PATH_STR)), Paths.get(ROOT_PATH_STR));
         String queryId = "query1";
-        LinkedHashMap<Long, SnapshotResult> map = new LinkedHashMap<>();
-        map.put(3L, SnapshotResult.SUCCESSFUL);
-        map.put(1L, SnapshotResult.FAILED);
-        map.put(5L, SnapshotResult.FAILED_FATAL);
-        map.put(8L, SnapshotResult.SUCCESSFUL);
+        LinkedHashMap<Long, SnapshotInfo> map = new LinkedHashMap<>();
+        map.put(3L, SnapshotInfo.withStatus(SnapshotResult.SUCCESSFUL));
+        map.put(1L, SnapshotInfo.withStatus(SnapshotResult.FAILED));
+        map.put(5L, SnapshotInfo.withStatus(SnapshotResult.FAILED_FATAL));
+        map.put(8L, SnapshotInfo.withStatus(SnapshotResult.SUCCESSFUL));
 
         // Test store and Load
         client.storeSnapshotResult(queryId, map);

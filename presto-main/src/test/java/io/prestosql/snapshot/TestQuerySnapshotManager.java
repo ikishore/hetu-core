@@ -87,6 +87,7 @@ public class TestQuerySnapshotManager
         queryId = new QueryId("resumeid");
         QuerySnapshotManager snapshotManager = new QuerySnapshotManager(queryId, snapshotUtils, TEST_SNAPSHOT_SESSION);
         TaskId taskId = new TaskId(queryId.getId(), 2, 3);
+        SnapshotInfo info = SnapshotInfo.withStatus(SnapshotResult.SUCCESSFUL);
 
         // Try1: no id is available yet
         snapshotManager.addNewTask(taskId);
@@ -95,22 +96,22 @@ public class TestQuerySnapshotManager
 
         // Try2: setup some successful snapshots
         snapshotManager.addNewTask(taskId);
-        snapshotManager.updateQueryCapture(taskId, Collections.singletonMap(1L, SnapshotResult.SUCCESSFUL));
-        snapshotManager.updateQueryCapture(taskId, Collections.singletonMap(2L, SnapshotResult.SUCCESSFUL));
+        snapshotManager.updateQueryCapture(taskId, Collections.singletonMap(1L, info));
+        snapshotManager.updateQueryCapture(taskId, Collections.singletonMap(2L, info));
         sid = snapshotManager.getResumeSnapshotId();
         assertEquals(sid.getAsLong(), 2);
 
         // Try3: get available snapshot before 2
         snapshotManager.addNewTask(taskId);
-        snapshotManager.updateQueryCapture(taskId, Collections.singletonMap(1L, SnapshotResult.SUCCESSFUL));
-        snapshotManager.updateQueryCapture(taskId, Collections.singletonMap(2L, SnapshotResult.SUCCESSFUL));
+        snapshotManager.updateQueryCapture(taskId, Collections.singletonMap(1L, info));
+        snapshotManager.updateQueryCapture(taskId, Collections.singletonMap(2L, info));
         sid = snapshotManager.getResumeSnapshotId();
         assertEquals(sid.getAsLong(), 1);
 
         // Try4: get available snapshot before 1
         snapshotManager.addNewTask(taskId);
-        snapshotManager.updateQueryCapture(taskId, Collections.singletonMap(1L, SnapshotResult.SUCCESSFUL));
-        snapshotManager.updateQueryCapture(taskId, Collections.singletonMap(2L, SnapshotResult.SUCCESSFUL));
+        snapshotManager.updateQueryCapture(taskId, Collections.singletonMap(1L, info));
+        snapshotManager.updateQueryCapture(taskId, Collections.singletonMap(2L, info));
         sid = snapshotManager.getResumeSnapshotId();
         assertFalse(sid.isPresent());
     }
@@ -125,9 +126,9 @@ public class TestQuerySnapshotManager
         snapshotManager.setRescheduler(rescheduler);
 
         snapshotManager.addNewTask(taskId);
-        snapshotManager.updateQueryCapture(taskId, Collections.singletonMap(1L, SnapshotResult.SUCCESSFUL));
+        snapshotManager.updateQueryCapture(taskId, Collections.singletonMap(1L, SnapshotInfo.withStatus(SnapshotResult.SUCCESSFUL)));
         OptionalLong sid = snapshotManager.getResumeSnapshotId();
-        snapshotManager.updateQueryRestore(taskId, Optional.of(new RestoreResult(sid.getAsLong(), SnapshotResult.FAILED)));
+        snapshotManager.updateQueryRestore(taskId, Optional.of(new RestoreResult(sid.getAsLong(), SnapshotInfo.withStatus(SnapshotResult.FAILED))));
 
         verify(rescheduler).run();
     }
@@ -146,7 +147,7 @@ public class TestQuerySnapshotManager
         snapshotManager.setRescheduler(() -> future.set(null));
 
         snapshotManager.addNewTask(taskId);
-        snapshotManager.updateQueryCapture(taskId, Collections.singletonMap(1L, SnapshotResult.SUCCESSFUL));
+        snapshotManager.updateQueryCapture(taskId, Collections.singletonMap(1L, SnapshotInfo.withStatus(SnapshotResult.SUCCESSFUL)));
         snapshotManager.getResumeSnapshotId();
 
         future.get(1, TimeUnit.SECONDS);
@@ -166,8 +167,8 @@ public class TestQuerySnapshotManager
         snapshotManager.setRescheduler(rescheduler);
 
         snapshotManager.addNewTask(taskId);
-        snapshotManager.updateQueryCapture(taskId, Collections.singletonMap(1L, SnapshotResult.SUCCESSFUL));
-        snapshotManager.updateQueryCapture(taskId, Collections.singletonMap(2L, SnapshotResult.SUCCESSFUL));
+        snapshotManager.updateQueryCapture(taskId, Collections.singletonMap(1L, SnapshotInfo.withStatus(SnapshotResult.SUCCESSFUL)));
+        snapshotManager.updateQueryCapture(taskId, Collections.singletonMap(2L, SnapshotInfo.withStatus(SnapshotResult.SUCCESSFUL)));
         assertTrue(snapshotManager.getResumeSnapshotId().isPresent());
         try {
             snapshotManager.getResumeSnapshotId();
@@ -186,14 +187,14 @@ public class TestQuerySnapshotManager
         TaskId taskId = new TaskId(queryId.getId(), 2, 3);
         snapshotManager.addNewTask(taskId);
 
-        snapshotManager.updateQueryRestore(taskId, Optional.of(new RestoreResult(1, SnapshotResult.SUCCESSFUL)));
-        assertEquals(snapshotManager.getQuerySnapshotRestoreResult().getSnapshotResult(), SnapshotResult.SUCCESSFUL);
+        snapshotManager.updateQueryRestore(taskId, Optional.of(new RestoreResult(1, SnapshotInfo.withStatus(SnapshotResult.SUCCESSFUL))));
+        assertEquals(snapshotManager.getQuerySnapshotRestoreResult().getSnapshotInfo().getSnapshotResult(), SnapshotResult.SUCCESSFUL);
 
-        snapshotManager.updateQueryRestore(taskId, Optional.of(new RestoreResult(2, SnapshotResult.FAILED)));
-        assertEquals(snapshotManager.getQuerySnapshotRestoreResult().getSnapshotResult(), SnapshotResult.FAILED);
+        snapshotManager.updateQueryRestore(taskId, Optional.of(new RestoreResult(2, SnapshotInfo.withStatus(SnapshotResult.FAILED))));
+        assertEquals(snapshotManager.getQuerySnapshotRestoreResult().getSnapshotInfo().getSnapshotResult(), SnapshotResult.FAILED);
 
-        snapshotManager.updateQueryRestore(taskId, Optional.of(new RestoreResult(3, SnapshotResult.FAILED_FATAL)));
-        assertEquals(snapshotManager.getQuerySnapshotRestoreResult().getSnapshotResult(), SnapshotResult.FAILED_FATAL);
+        snapshotManager.updateQueryRestore(taskId, Optional.of(new RestoreResult(3, SnapshotInfo.withStatus(SnapshotResult.FAILED_FATAL))));
+        assertEquals(snapshotManager.getQuerySnapshotRestoreResult().getSnapshotInfo().getSnapshotResult(), SnapshotResult.FAILED_FATAL);
     }
 
     @Test
@@ -208,7 +209,7 @@ public class TestQuerySnapshotManager
         snapshotManager.addNewTask(taskId2);
 
         snapshotManager.updateFinishedQueryComponents(ImmutableList.of(taskId2));
-        snapshotManager.updateQueryCapture(taskId1, Collections.singletonMap(1L, SnapshotResult.SUCCESSFUL));
+        snapshotManager.updateQueryCapture(taskId1, Collections.singletonMap(1L, SnapshotInfo.withStatus(SnapshotResult.SUCCESSFUL)));
         assertEquals(snapshotManager.getResumeSnapshotId().getAsLong(), 1);
     }
 
@@ -220,7 +221,7 @@ public class TestQuerySnapshotManager
 
         TaskId taskId1 = new TaskId(queryId.getId(), 2, 3);
         snapshotManager.addNewTask(taskId1);
-        snapshotManager.updateQueryCapture(taskId1, Collections.singletonMap(1L, SnapshotResult.SUCCESSFUL));
+        snapshotManager.updateQueryCapture(taskId1, Collections.singletonMap(1L, SnapshotInfo.withStatus(SnapshotResult.SUCCESSFUL)));
 
         assertTrue(snapshotManager.getResumeSnapshotId().isPresent());
         snapshotManager.invalidateAllSnapshots();

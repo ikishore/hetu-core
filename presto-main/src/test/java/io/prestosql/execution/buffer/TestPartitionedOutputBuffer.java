@@ -332,12 +332,12 @@ public class TestPartitionedOutputBuffer
         ArgumentCaptor<SnapshotStateId> idArgument = ArgumentCaptor.forClass(SnapshotStateId.class);
         ArgumentCaptor<Object> stateArgument = ArgumentCaptor.forClass(Object.class);
         // storeState is called once for each partition
-        verify(snapshotUtils, times(3)).storeState(idArgument.capture(), stateArgument.capture());
+        verify(snapshotUtils, times(3)).storeState(idArgument.capture(), stateArgument.capture(), null);
         List<SnapshotStateId> ids = idArgument.getAllValues();
         List<Object> states = stateArgument.getAllValues();
-        when(snapshotUtils.loadState(ids.get(0))).thenReturn(Optional.of(states.get(0)));
-        when(snapshotUtils.loadState(ids.get(1))).thenReturn(Optional.of(states.get(1)));
-        when(snapshotUtils.loadState(ids.get(2))).thenReturn(Optional.of(states.get(2)));
+        when(snapshotUtils.loadState(ids.get(0), null)).thenReturn(Optional.of(states.get(0)));
+        when(snapshotUtils.loadState(ids.get(1), null)).thenReturn(Optional.of(states.get(1)));
+        when(snapshotUtils.loadState(ids.get(2), null)).thenReturn(Optional.of(states.get(2)));
 
         buffer = createPartitionedBuffer(
                 createInitialEmptyOutputBuffers(PARTITIONED)
@@ -352,7 +352,7 @@ public class TestPartitionedOutputBuffer
 
         // Resume both partitions
         buffer.enqueue(firstPartition, ImmutableList.of(PAGES_SERDE.serialize(resume)), channel1);
-        verify(snapshotUtils, times(3)).loadState(anyObject());
+        verify(snapshotUtils, times(3)).loadState(anyObject(), null);
 
         // Newly added page (page2) should be received after the resume marker
         buffer.enqueue(firstPartition, ImmutableList.of(PAGES_SERDE.serialize(page2)), channel1);

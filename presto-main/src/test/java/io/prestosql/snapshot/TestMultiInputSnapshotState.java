@@ -166,7 +166,7 @@ public class TestMultiInputSnapshotState
         ret = processPage(source2, marker1);
         assertFalse(ret.isPresent());
 
-        verify(snapshotManager).storeState(eq(snapshotId1), argument.capture());
+        verify(snapshotManager).storeState(eq(snapshotId1), argument.capture(), 0);
         List<Object> savedState = argument.getValue();
         assertEquals(savedState.size(), 2);
         assertEquals(savedState.get(0), saved);
@@ -190,7 +190,7 @@ public class TestMultiInputSnapshotState
         ret = processSerializedPage(source2, serializedMarker);
         assertFalse(ret.isPresent());
 
-        verify(snapshotManager).storeState(eq(snapshotId1), argument.capture());
+        verify(snapshotManager).storeState(eq(snapshotId1), argument.capture(), 0);
         List<Object> savedState = argument.getValue();
         assertEquals(savedState.size(), 2);
         assertEquals(savedState.get(0), saved);
@@ -213,7 +213,7 @@ public class TestMultiInputSnapshotState
         processPage(source2, regularPage);
         processPage(source2, marker1);
 
-        verify(snapshotManager).storeState(eq(snapshotId1), argument.capture());
+        verify(snapshotManager).storeState(eq(snapshotId1), argument.capture(), 0);
         List<Object> savedState = argument.getValue();
         assertEquals(savedState.size(), 2);
         assertEquals(savedState.get(0), saved1);
@@ -223,7 +223,7 @@ public class TestMultiInputSnapshotState
         ret = processPage(source2, marker2);
         assertFalse(ret.isPresent());
 
-        verify(snapshotManager).storeState(eq(snapshotId2), argument.capture());
+        verify(snapshotManager).storeState(eq(snapshotId2), argument.capture(), 0);
         savedState = argument.getValue();
         assertEquals(savedState.size(), 3);
         assertEquals(savedState.get(0), saved2);
@@ -243,7 +243,7 @@ public class TestMultiInputSnapshotState
         processPage(source2, regularPage);
         processPage(source2, regularPage);
         processPage(source2, marker1);
-        verify(snapshotManager).storeState(eq(snapshotId1), argument.capture());
+        verify(snapshotManager).storeState(eq(snapshotId1), argument.capture(), 0);
 
         when(snapshotManager.loadState(snapshotId1)).thenReturn(Optional.of(argument.getValue()));
         Optional<Page> ret = processPageKeepState(source2, resume1);
@@ -268,7 +268,7 @@ public class TestMultiInputSnapshotState
 
         processPage(inputSnapshotState, source1, marker1);
         processPage(inputSnapshotState, source2, marker1);
-        verify(snapshotManager, never()).storeState(anyObject(), anyObject());
+        verify(snapshotManager, never()).storeState(anyObject(), anyObject(), 0);
     }
 
     @Test(expectedExceptions = IllegalStateException.class)
@@ -290,7 +290,7 @@ public class TestMultiInputSnapshotState
     {
         processPage(source1, marker1);
         processPage(source2, marker1);
-        verify(snapshotManager).storeState(eq(snapshotId1), argument.capture());
+        verify(snapshotManager).storeState(eq(snapshotId1), argument.capture(), 0);
 
         when(snapshotManager.loadState(snapshotId1)).thenReturn(Optional.of(argument.getValue()));
         processPage(source1, resume1);
@@ -305,7 +305,7 @@ public class TestMultiInputSnapshotState
     {
         processPage(source1, marker1);
         processPage(source2, marker1);
-        verify(snapshotManager).storeState(eq(snapshotId1), argument.capture());
+        verify(snapshotManager).storeState(eq(snapshotId1), argument.capture(), 0);
 
         when(snapshotManager.loadState(snapshotId1)).thenReturn(Optional.of(argument.getValue()));
         processPage(source1, resume1);
@@ -351,7 +351,7 @@ public class TestMultiInputSnapshotState
         assertEquals(pages.get(0), regularPage);
         assertEquals(pages.get(1), regularPage);
 
-        verify(snapshotManager).storeState(eq(snapshotId1), argument.capture());
+        verify(snapshotManager).storeState(eq(snapshotId1), argument.capture(), 0);
         when(snapshotManager.loadState(snapshotId1)).thenReturn(Optional.of(argument.getValue()));
 
         pages = processPages(source1, Arrays.asList(resume1));
@@ -445,7 +445,7 @@ public class TestMultiInputSnapshotState
         ret = processPage(null, resume1).get();
         assertEquals(ret, resume1);
 
-        verify(snapshotManager, never()).storeState(anyObject(), anyObject());
+        verify(snapshotManager, never()).storeState(anyObject(), anyObject(), 0);
         verify(snapshotManager, never()).loadState(anyObject());
     }
 
@@ -458,8 +458,8 @@ public class TestMultiInputSnapshotState
         restorable.setSupportsConsolidatedWrites(true);
         processPage(state, source1, marker1);
         processPage(state, source2, marker1);
-        verify(snapshotManager, never()).storeState(anyObject(), anyObject());
-        verify(snapshotManager, times(1)).storeConsolidatedState(anyObject(), argument.capture());
+        verify(snapshotManager, never()).storeState(anyObject(), anyObject(), 0);
+        verify(snapshotManager, times(1)).storeConsolidatedState(anyObject(), argument.capture(), 0);
 
         when(snapshotManager.loadConsolidatedState(anyObject())).thenReturn(Optional.of(argument.getValue()));
         processPage(state, source1, resume1);
@@ -476,8 +476,8 @@ public class TestMultiInputSnapshotState
         restorable.setSupportsConsolidatedWrites(false);
         processPage(state, source1, marker1);
         processPage(state, source2, marker1);
-        verify(snapshotManager, times(0)).storeConsolidatedState(anyObject(), anyObject());
-        verify(snapshotManager, times(1)).storeState(anyObject(), argument.capture());
+        verify(snapshotManager, times(0)).storeConsolidatedState(anyObject(), anyObject(), 0);
+        verify(snapshotManager, times(1)).storeState(anyObject(), argument.capture(), 0);
 
         when(snapshotManager.loadState(anyObject())).thenReturn(Optional.of(argument.getValue()));
         processPage(state, source1, resume1);

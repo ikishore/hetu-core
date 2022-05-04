@@ -41,6 +41,7 @@ public class SnapshotConfig
     public static final String SNAPSHOT_USE_KRYO_SERIALIZATION = "hetu.snapshot.useKryoSerialization";
     public static final String SPILLER_SPILL_PROFILE = "experimental.spiller-spill-profile";
     public static final String SPILLER_SPILL_TO_HDFS = "experimental.spiller-spill-to-hdfs";
+    public static final String SNAPSHOT_DISABLE_CAPTURE = "hetu.snapshot.disable.capture";
 
     private String snapshotProfile;
     private String spillProfile;
@@ -52,6 +53,7 @@ public class SnapshotConfig
     private long snapshotMaxRetries = 10;
     private Duration snapshotRetryTimeout = new Duration(10, TimeUnit.MINUTES);
     private boolean snapshotUseKryoSerialization;
+    private boolean disableSnapshotCapture;
 
     public enum IntervalType
     {
@@ -187,6 +189,19 @@ public class SnapshotConfig
     public SnapshotConfig setSpillToHdfs(boolean spillToHdfs)
     {
         this.spillToHdfs = spillToHdfs;
+        return this;
+    }
+
+    public boolean isSnapshotCaptureDisabled()
+    {
+        return disableSnapshotCapture;
+    }
+
+    @Config(SNAPSHOT_DISABLE_CAPTURE)
+    @ConfigDescription("snapshot capture disabled")
+    public SnapshotConfig setSnapshotCaptureDisabled(boolean disableSnapshotCapture)
+    {
+        this.disableSnapshotCapture = disableSnapshotCapture;
         return this;
     }
 }

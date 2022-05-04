@@ -46,6 +46,7 @@ import io.prestosql.metadata.Split;
 import io.prestosql.metadata.TableMetadata;
 import io.prestosql.seedstore.SeedStoreManager;
 import io.prestosql.snapshot.QuerySnapshotManager;
+import io.prestosql.snapshot.RecoveryManager;
 import io.prestosql.spi.HetuConstant;
 import io.prestosql.spi.PrestoException;
 import io.prestosql.spi.QueryId;
@@ -92,6 +93,7 @@ import io.prestosql.sql.planner.planprinter.IoPlanPrinter.IoPlan.TableColumnInfo
 import io.prestosql.statestore.LocalStateStoreProvider;
 import io.prestosql.testing.MaterializedResult;
 import io.prestosql.testing.MaterializedRow;
+import io.prestosql.testing.TestingSnapshotUtils;
 import io.prestosql.testing.TestingSplit;
 import io.prestosql.tests.AbstractTestIntegrationSmokeTest;
 import io.prestosql.tests.DistributedQueryRunner;
@@ -5566,7 +5568,8 @@ public class TestHiveIntegrationSmokeTest
                 new SplitSchedulerStats(),
                 new DynamicFilterService(new LocalStateStoreProvider(
                         new SeedStoreManager(new FileSystemClientManager()))),
-                new QuerySnapshotManager(stageId.getQueryId(), NOOP_SNAPSHOT_UTILS, TEST_SESSION));
+                new QuerySnapshotManager(stageId.getQueryId(), NOOP_SNAPSHOT_UTILS, TEST_SESSION),
+                new RecoveryManager(TestingSnapshotUtils.NOOP_SNAPSHOT_UTILS, TEST_SESSION, stageId.getQueryId()));
 
         Set<Split> splits = createAndGetSplits(10);
         Multimap<InternalNode, Split> producerAssignment = nodeSelector.computeAssignments(splits, ImmutableList.copyOf(taskMap.values()), Optional.of(producerStage)).getAssignments();
@@ -5591,7 +5594,8 @@ public class TestHiveIntegrationSmokeTest
                 new SplitSchedulerStats(),
                 new DynamicFilterService(new LocalStateStoreProvider(
                         new SeedStoreManager(new FileSystemClientManager()))),
-                new QuerySnapshotManager(stageId.getQueryId(), NOOP_SNAPSHOT_UTILS, TEST_SESSION));
+                new QuerySnapshotManager(stageId.getQueryId(), NOOP_SNAPSHOT_UTILS, TEST_SESSION),
+                new RecoveryManager(TestingSnapshotUtils.NOOP_SNAPSHOT_UTILS, TEST_SESSION, stageId.getQueryId()));
         Multimap<InternalNode, Split> consumerAssignment = nodeSelector.computeAssignments(splits, ImmutableList.copyOf(taskMap.values()), Optional.of(stage)).getAssignments();
 
         assertEquals(consumerAssignment.size(), consumerAssignment.size());
@@ -5646,7 +5650,8 @@ public class TestHiveIntegrationSmokeTest
                 new SplitSchedulerStats(),
                 new DynamicFilterService(new LocalStateStoreProvider(
                         new SeedStoreManager(new FileSystemClientManager()))),
-                new QuerySnapshotManager(stageId.getQueryId(), NOOP_SNAPSHOT_UTILS, TEST_SESSION));
+                new QuerySnapshotManager(stageId.getQueryId(), NOOP_SNAPSHOT_UTILS, TEST_SESSION),
+                new RecoveryManager(TestingSnapshotUtils.NOOP_SNAPSHOT_UTILS, TEST_SESSION, stageId.getQueryId()));
 
         Set<Split> producerSplits = createAndGetSplits(10);
         Multimap<InternalNode, Split> producerAssignment = nodeSelector.computeAssignments(producerSplits, ImmutableList.copyOf(taskMap.values()), Optional.of(producerStage)).getAssignments();
@@ -5671,7 +5676,8 @@ public class TestHiveIntegrationSmokeTest
                 new SplitSchedulerStats(),
                 new DynamicFilterService(new LocalStateStoreProvider(
                         new SeedStoreManager(new FileSystemClientManager()))),
-                new QuerySnapshotManager(stageId.getQueryId(), NOOP_SNAPSHOT_UTILS, TEST_SESSION));
+                new QuerySnapshotManager(stageId.getQueryId(), NOOP_SNAPSHOT_UTILS, TEST_SESSION),
+                new RecoveryManager(TestingSnapshotUtils.NOOP_SNAPSHOT_UTILS, TEST_SESSION, stageId.getQueryId()));
         Set<Split> consumerSplits = createAndGetSplits(50);
 
         try {

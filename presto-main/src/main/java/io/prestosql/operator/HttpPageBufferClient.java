@@ -31,12 +31,13 @@ import io.airlift.log.Logger;
 import io.airlift.slice.InputStreamSliceInput;
 import io.airlift.slice.SliceInput;
 import io.airlift.units.DataSize;
-import io.airlift.units.Duration;
 import io.hetu.core.transport.execution.buffer.SerializedPage;
-import io.prestosql.failuredetector.FailureDetector;
-import io.prestosql.server.remotetask.Backoff;
+import io.prestosql.failuredetector.FailureDetectorManager;
 import io.prestosql.snapshot.QuerySnapshotManager;
+import io.prestosql.snapshot.RecoveryManager;
 import io.prestosql.spi.PrestoException;
+import io.prestosql.spi.failuredetector.FailureRetryPolicy;
+import io.prestosql.spi.failuredetector.IBackoff;
 import org.joda.time.DateTime;
 
 import javax.annotation.Nullable;
@@ -116,8 +117,7 @@ public final class HttpPageBufferClient
     private final URI location;
     private final ClientCallback clientCallback;
     private final ScheduledExecutorService scheduler;
-    private final Backoff backoff;
-    private final FailureDetector failureDetector;
+    private final IBackoff backoff;
 
     @GuardedBy("this")
     private boolean closed;
@@ -148,42 +148,21 @@ public final class HttpPageBufferClient
 
     private final boolean isSnapshotEnabled;
     private final QuerySnapshotManager querySnapshotManager;
-    private boolean detectTimeoutFailures;
+    private final FailureRetryPolicy failureRetryPolicy;
+    private final RecoveryManager recoveryManager;
 
-    public HttpPageBufferClient(
-            HttpClient httpClient,
-            DataSize maxResponseSize,
-            Duration maxErrorDuration,
-            boolean acknowledgePages,
-            TaskLocation location,
-            ClientCallback clientCallback,
-            ScheduledExecutorService scheduler,
-            Executor pageBufferClientCallbackExecutor,
-            boolean isSnapshotEnabled,
-            QuerySnapshotManager querySnapshotManager,
-            FailureDetector failureDetector,
-            boolean detectTimeoutFailures,
-            int maxRetryCount)
-    {
-        this(httpClient, maxResponseSize, maxErrorDuration, acknowledgePages, location, clientCallback, scheduler, Ticker.systemTicker(), pageBufferClientCallbackExecutor, isSnapshotEnabled, querySnapshotManager, failureDetector, detectTimeoutFailures, maxRetryCount);
-    }
-
-    @VisibleForTesting
     HttpPageBufferClient(
             HttpClient httpClient,
             DataSize maxResponseSize,
-            Duration maxErrorDuration,
             boolean acknowledgePages,
             TaskLocation location,
             ClientCallback clientCallback,
             ScheduledExecutorService scheduler,
-            Ticker ticker,
             Executor pageBufferClientCallbackExecutor,
             boolean isSnapshotEnabled,
             QuerySnapshotManager querySnapshotManager,
-            FailureDetector failureDetector,
-            boolean detectTimeoutFailures,
-            int maxRetryCount)
+            FailureDetectorManager failureDetectorManager,
+            RecoveryManager recoveryManager)
     {
         this.httpClient = requireNonNull(httpClient, "httpClient is null");
         this.maxResponseSize = requireNonNull(maxResponseSize, "maxResponseSize is null");
@@ -194,13 +173,44 @@ public final class HttpPageBufferClient
         this.scheduler = requireNonNull(scheduler, "scheduler is null");
         this.taskInstanceId = requireNonNull(location.getInstanceId(), "taskInstanceId is null");
         this.pageBufferClientCallbackExecutor = requireNonNull(pageBufferClientCallbackExecutor, "pageBufferClientCallbackExecutor is null");
-        requireNonNull(maxErrorDuration, "maxErrorDuration is null");
-        requireNonNull(ticker, "ticker is null");
-        this.backoff = new Backoff(maxErrorDuration, ticker, maxRetryCount);
+        requireNonNull(failureDetectorManager, "failure detection manager is null");
+        this.failureRetryPolicy = failureDetectorManager.getFailureRetryPolicy(failureDetectorManager.getFailureRetryPolicyUserProfile());
+        this.backoff = this.failureRetryPolicy.getBackoff();
         this.isSnapshotEnabled = isSnapshotEnabled;
         this.querySnapshotManager = querySnapshotManager;
-        this.failureDetector = failureDetector;
-        this.detectTimeoutFailures = detectTimeoutFailures;
+        this.recoveryManager = recoveryManager;
+    }
+
+    @VisibleForTesting
+    HttpPageBufferClient(
+            HttpClient httpClient,
+            DataSize maxResponseSize,
+            boolean acknowledgePages,
+            TaskLocation location,
+            ClientCallback clientCallback,
+            ScheduledExecutorService scheduler,
+            Executor pageBufferClientCallbackExecutor,
+            boolean isSnapshotEnabled,
+            QuerySnapshotManager querySnapshotManager,
+            Ticker ticker,
+            FailureDetectorManager failureDetectorManager,
+            RecoveryManager recoveryManager)
+    {
+        this.httpClient = requireNonNull(httpClient, "httpClient is null");
+        this.maxResponseSize = requireNonNull(maxResponseSize, "maxResponseSize is null");
+        this.acknowledgePages = acknowledgePages;
+        requireNonNull(location, "TaskLocation is null");
+        this.location = requireNonNull(location.getUri(), "location is null");
+        this.clientCallback = requireNonNull(clientCallback, "clientCallback is null");
+        this.scheduler = requireNonNull(scheduler, "scheduler is null");
+        this.taskInstanceId = requireNonNull(location.getInstanceId(), "taskInstanceId is null");
+        this.pageBufferClientCallbackExecutor = requireNonNull(pageBufferClientCallbackExecutor, "pageBufferClientCallbackExecutor is null");
+        requireNonNull(failureDetectorManager, "failure detection manager is null");
+        this.failureRetryPolicy = failureDetectorManager.getFailureRetryPolicy(failureDetectorManager.getFailureRetryPolicyUserProfile(), ticker);
+        this.backoff = this.failureRetryPolicy.getBackoff();
+        this.isSnapshotEnabled = isSnapshotEnabled;
+        this.querySnapshotManager = querySnapshotManager;
+        this.recoveryManager = recoveryManager;
     }
 
     public synchronized PageBufferClientStatus getStatus()
@@ -334,7 +344,7 @@ public final class HttpPageBufferClient
                 addInstanceIdHeader(prepareGet())
                         .setHeader(PRESTO_MAX_SIZE, maxResponseSize.toString())
                         .setUri(uri).build(),
-                new PageResponseHandler(querySnapshotManager));
+                new PageResponseHandler(querySnapshotManager, recoveryManager));
 
         future = resultFuture;
         Futures.addCallback(resultFuture, new FutureCallback<PagesResponse>()
@@ -425,43 +435,24 @@ public final class HttpPageBufferClient
                 checkNotHoldsLock(this);
 
                 Throwable throwable = rewriteException(t);
-                if (!(throwable instanceof PrestoException)) {
-                    boolean hasFailed;
-                    if (detectTimeoutFailures) {
-                        // timeout based failure detection
-                        hasFailed = backoff.failure();
-                    }
-                    else { // max-retry-count based failure detection
+                boolean fail = failureRetryPolicy.hasFailed(fromUri(uri));
 
-                        /**
-                         * if max retry requests failed, check failure detector info on remote host.
-                         * If node state is gone or unresponsive (e.g. GC pause), immediately fail.
-                         * if node is otherwise (e.g.active), keep retrying till timeout of maxErrorDuration
-                         */
-                        FailureDetector.State state = failureDetector.getState(fromUri(uri));
-                        log.debug("failure detector state is " + state.toString());
-                        hasFailed = (backoff.maxTried() &&
-                                !FailureDetector.State.ALIVE.equals(state)
-                                || backoff.timeout());
+                if ((!(throwable instanceof PrestoException) || (throwable instanceof PageTransportErrorException)) && fail) {
+                    String message = format("%s (%s - %s failures, failure duration %s, total failed request time %s)",
+                            WORKER_NODE_ERROR,
+                            uri,
+                            backoff.getFailureCount(),
+                            backoff.getFailureDuration().convertTo(SECONDS),
+                            backoff.getFailureRequestTimeTotal().convertTo(SECONDS));
+                    if (recoveryManager != null) {
+                        log.debug(throwable, "Recovery: Failure detected in HttpPageBufferClient");
+                        recoveryManager.startRecovery();
+                        handleFailure(throwable, resultFuture);
+                        return;
                     }
-                    if (hasFailed) {
-                        String message = format("%s (%s - %s failures, failure duration %s, total failed request time %s)",
-                                WORKER_NODE_ERROR,
-                                uri,
-                                backoff.getFailureCount(),
-                                backoff.getFailureDuration().convertTo(SECONDS),
-                                backoff.getFailureRequestTimeTotal().convertTo(SECONDS));
-                        if (querySnapshotManager != null) {
-                            // Snapshot: recover from remote server errors
-                            log.debug(throwable, "Snapshot: remote task failed with resumable error: %s", message);
-                            querySnapshotManager.cancelToResume();
-                            handleFailure(throwable, resultFuture);
-                            return;
-                        }
-                        throwable = new PageTransportTimeoutException(fromUri(uri), message, throwable);
-                    }
+                    throwable = new PageTransportTimeoutException(fromUri(uri), message, throwable);
                 }
-                handleFailure(throwable, resultFuture);
+                handleFailure(throwable, resultFuture, fail);
             }
         }, pageBufferClientCallbackExecutor);
     }
@@ -519,7 +510,7 @@ public final class HttpPageBufferClient
         checkState(!Thread.holdsLock(lock), "Cannot execute this method while holding a lock");
     }
 
-    private void handleFailure(Throwable t, HttpResponseFuture<?> expectedFuture)
+    private void handleFailure(Throwable t, HttpResponseFuture<?> expectedFuture, boolean failed)
     {
         // Can not delegate to other callback while holding a lock on this
         checkNotHoldsLock(this);
@@ -527,7 +518,7 @@ public final class HttpPageBufferClient
         requestsFailed.incrementAndGet();
         requestsCompleted.incrementAndGet();
 
-        if (t instanceof PrestoException) {
+        if (t instanceof PrestoException && failed) {
             clientCallback.clientFailed(HttpPageBufferClient.this, t);
         }
 
@@ -538,6 +529,11 @@ public final class HttpPageBufferClient
             lastUpdate = DateTime.now();
         }
         clientCallback.requestComplete(HttpPageBufferClient.this);
+    }
+
+    private void handleFailure(Throwable t, HttpResponseFuture<?> expectedFuture)
+    {
+        handleFailure(t, expectedFuture, true);
     }
 
     @Override
@@ -598,10 +594,12 @@ public final class HttpPageBufferClient
             implements ResponseHandler<PagesResponse, RuntimeException>
     {
         private final QuerySnapshotManager querySnapshotManager;
+        private final RecoveryManager recoveryManager;
 
-        private PageResponseHandler(QuerySnapshotManager querySnapshotManager)
+        private PageResponseHandler(QuerySnapshotManager querySnapshotManager, RecoveryManager recoveryManager)
         {
             this.querySnapshotManager = querySnapshotManager;
+            this.recoveryManager = recoveryManager;
         }
 
         @Override
@@ -670,11 +668,10 @@ public final class HttpPageBufferClient
                 }
             }
             catch (PageTransportErrorException e) {
-                if (querySnapshotManager != null && querySnapshotManager.isCoordinator()) {
-                    // Snapshot: for internal server errors on the worker, or unexpected OK results, treat as resumable error.
+                if (recoveryManager != null && recoveryManager.isCoordinator()) {
                     if (response.getStatusCode() >= 500 || response.getStatusCode() == HttpStatus.OK.code()) {
                         log.debug(e.getMessage());
-                        querySnapshotManager.cancelToResume();
+                        recoveryManager.startRecovery();
                         return createEmptyPagesResponse(0, 0, false);
                     }
                 }

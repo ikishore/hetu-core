@@ -279,7 +279,8 @@ public class QueryContext
                 totalPartitions,
                 parent.orElse(null),
                 serdeFactory,
-                new TaskSnapshotManager(taskStateMachine.getTaskId(), resumeCount, snapshotUtils));
+                new TaskSnapshotManager(taskStateMachine.getTaskId(), resumeCount, snapshotUtils),
+                snapshotUtils.getOrCreateRecoveryManager(queryId, session));
         taskContexts.put(taskInstanceId, taskContext);
         return taskContext;
     }

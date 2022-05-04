@@ -22,16 +22,16 @@ import com.google.common.util.concurrent.SettableFuture;
 import io.airlift.http.client.HttpClient;
 import io.airlift.log.Logger;
 import io.airlift.units.DataSize;
-import io.airlift.units.Duration;
 import io.hetu.core.transport.execution.buffer.PageCodecMarker;
 import io.hetu.core.transport.execution.buffer.PagesSerde;
 import io.hetu.core.transport.execution.buffer.SerializedPage;
-import io.prestosql.failuredetector.FailureDetector;
+import io.prestosql.failuredetector.FailureDetectorManager;
 import io.prestosql.memory.context.LocalMemoryContext;
 import io.prestosql.operator.HttpPageBufferClient.ClientCallback;
 import io.prestosql.operator.WorkProcessor.ProcessState;
 import io.prestosql.snapshot.MultiInputSnapshotState;
 import io.prestosql.snapshot.QuerySnapshotManager;
+import io.prestosql.snapshot.RecoveryManager;
 import io.prestosql.spi.Page;
 import io.prestosql.spi.snapshot.BlockEncodingSerdeProvider;
 import org.apache.commons.lang3.tuple.Pair;
@@ -74,13 +74,10 @@ public class ExchangeClient
     private final long bufferCapacity;
     private final DataSize maxResponseSize;
     private final int concurrentRequestMultiplier;
-    private final Duration maxErrorDuration;
     private final boolean acknowledgePages;
     private final HttpClient httpClient;
     private final ScheduledExecutorService scheduler;
-    private final FailureDetector failureDetector;
-    private final boolean detectTimeoutFailures;
-    private final int maxRetryCount;
+    private final FailureDetectorManager failureDetectorManager;
 
     @GuardedBy("this")
     private boolean noMoreLocations;
@@ -89,6 +86,7 @@ public class ExchangeClient
 
     private boolean snapshotEnabled;
     private QuerySnapshotManager querySnapshotManager;
+    private RecoveryManager recoveryManager;
     // Only set for MergeOperator, to capture marker pages
     private MultiInputSnapshotState snapshotState;
 
@@ -135,43 +133,23 @@ public class ExchangeClient
     // ExchangeClientStatus.mergeWith assumes all clients have the same bufferCapacity.
     // Please change that method accordingly when this assumption becomes not true.
     public ExchangeClient(DataSize bufferCapacity,
-                          DataSize maxResponseSize,
-                          int concurrentRequestMultiplier,
-                          Duration maxErrorDuration,
-                          boolean acknowledgePages,
-                          HttpClient httpClient,
-                          ScheduledExecutorService scheduler,
-                          LocalMemoryContext systemMemoryContext,
-                          Executor pageBufferClientCallbackExecutor,
-                          FailureDetector failureDetector)
-    {
-        this(bufferCapacity, maxResponseSize, concurrentRequestMultiplier, maxErrorDuration, acknowledgePages, httpClient, scheduler, systemMemoryContext, pageBufferClientCallbackExecutor, failureDetector, ExchangeClientConfig.DETECT_TIMEOUT_FAILURES, ExchangeClientConfig.MAX_RETRY_COUNT);
-    }
-
-    public ExchangeClient(DataSize bufferCapacity,
                            DataSize maxResponseSize,
                            int concurrentRequestMultiplier,
-                           Duration maxErrorDuration,
                            boolean acknowledgePages,
                            HttpClient httpClient,
                            ScheduledExecutorService scheduler,
                            LocalMemoryContext systemMemoryContext,
                            Executor pageBufferClientCallbackExecutor,
-                           FailureDetector failureDetector,
-                           boolean detectTimeoutFailures,
-                           int maxRetryCount)
+                          FailureDetectorManager failureDetectorManager)
     {
         this.bufferCapacity = bufferCapacity.toBytes();
         this.maxResponseSize = maxResponseSize;
         this.concurrentRequestMultiplier = concurrentRequestMultiplier;
-        this.maxErrorDuration = maxErrorDuration;
         this.acknowledgePages = acknowledgePages;
         this.httpClient = httpClient;
         this.scheduler = scheduler;
         this.systemMemoryContext = systemMemoryContext;
-        this.failureDetector = failureDetector;
-        this.detectTimeoutFailures = detectTimeoutFailures;
-        this.maxRetryCount = maxRetryCount;
+        this.failureDetectorManager = failureDetectorManager;
         this.maxBufferRetainedSizeInBytes = Long.MIN_VALUE;
         this.pageBufferClientCallbackExecutor = requireNonNull(pageBufferClientCallbackExecutor, "pageBufferClientCallbackExecutor is null");
     }
@@ -182,10 +160,11 @@ public class ExchangeClient
         return Collections.unmodifiableSet(allClients.keySet());
     }
 
-    public void setSnapshotEnabled(QuerySnapshotManager querySnapshotManager)
+    public void setSnapshotEnabled(QuerySnapshotManager querySnapshotManager, RecoveryManager recoveryManager)
     {
         snapshotEnabled = true;
         this.querySnapshotManager = querySnapshotManager;
+        this.recoveryManager = recoveryManager;
     }
 
     void setSnapshotState(MultiInputSnapshotState snapshotState)
@@ -270,7 +249,6 @@ public class ExchangeClient
         HttpPageBufferClient client = new HttpPageBufferClient(
                 httpClient,
                 maxResponseSize,
-                maxErrorDuration,
                 acknowledgePages,
                 location,
                 new ExchangeClientCallback(uri),
@@ -278,9 +256,8 @@ public class ExchangeClient
                 pageBufferClientCallbackExecutor,
                 snapshotEnabled,
                 querySnapshotManager,
-                failureDetector,
-                detectTimeoutFailures,
-                maxRetryCount);
+                failureDetectorManager,
+                recoveryManager);
         allClients.put(uri, client);
         queuedClients.add(client);
 

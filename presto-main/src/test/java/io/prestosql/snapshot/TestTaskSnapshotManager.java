@@ -174,6 +174,16 @@ public class TestTaskSnapshotManager
         Assert.assertEquals(output, fileContent);
     }
 
+    private void onRecoveryComplete(boolean success)
+    {
+        return;
+    }
+
+    private Boolean isRecoveryInProgress(Void unused)
+    {
+        return true;
+    }
+
     @Test
     public void testStoreAndLoadFileBacktrack()
             throws Exception
@@ -194,6 +204,7 @@ public class TestTaskSnapshotManager
 
         QuerySnapshotManager querySnapshotManager = new QuerySnapshotManager(queryId, snapshotUtils, TEST_SNAPSHOT_SESSION);
         querySnapshotManager.addNewTask(taskId);
+        querySnapshotManager.setRecoveryInfo(this::onRecoveryComplete, this::isRecoveryInProgress);
 
         SnapshotStateId id4save = new SnapshotStateId(2, taskId, "component1");
         snapshotManager.storeFile(id4save, sourcePath);

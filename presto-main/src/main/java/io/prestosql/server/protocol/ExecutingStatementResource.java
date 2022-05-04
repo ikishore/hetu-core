@@ -196,7 +196,9 @@ public class ExecutingStatementResource
         query = queries.computeIfAbsent(queryId, id -> {
             ExchangeClient exchangeClient = exchangeClientSupplier.get(new SimpleLocalMemoryContext(newSimpleAggregatedMemoryContext(), ExecutingStatementResource.class.getSimpleName()));
             if (SystemSessionProperties.isSnapshotEnabled(session)) {
-                exchangeClient.setSnapshotEnabled(snapshotUtils.getOrCreateQuerySnapshotManager(queryId, session));
+                log.debug("Setting RecoveryManager to ExchangeClient!");
+                exchangeClient.setSnapshotEnabled(snapshotUtils.getOrCreateQuerySnapshotManager(queryId, session),
+                        snapshotUtils.getOrCreateRecoveryManager(queryId, session));
             }
             return Query.create(
                     session,

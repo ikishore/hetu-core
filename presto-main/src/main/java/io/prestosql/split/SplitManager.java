@@ -125,7 +125,7 @@ public class SplitManager
         if (minScheduleSplitBatchSize > 1) {
             splitSource = new BufferingSplitSource(splitSource, minScheduleSplitBatchSize);
         }
-        if (SystemSessionProperties.isSnapshotEnabled(session)) {
+        if (SystemSessionProperties.isSnapshotEnabled(session) && !SystemSessionProperties.isSnapshotCaptureDisabled(session)) {
             splitSource = announcer.createMarkerSplitSource(splitSource, nodeId);
         }
         return splitSource;

@@ -174,6 +174,7 @@ public final class SystemSessionProperties
     public static final String SNAPSHOT_SPLIT_COUNT_INTERVAL = "snapshot_split_count_interval";
     public static final String SNAPSHOT_MAX_RETRIES = "snapshot_max_retries";
     public static final String SNAPSHOT_RETRY_TIMEOUT = "snapshot_retry_timeout";
+    public static final String SNAPSHOT_DISABLE_CAPTURE = "snapshot_disable_capture";
     public static final String SKIP_ATTACHING_STATS_WITH_PLAN = "skip_attaching_stats_with_plan";
     public static final String SKIP_NON_APPLICABLE_RULES_ENABLED = "skip_non_applicable_rules_enabled";
 
@@ -793,6 +794,11 @@ public final class SystemSessionProperties
                         SNAPSHOT_RETRY_TIMEOUT,
                         "Snapshot retry timeout",
                         snapshotConfig.getSnapshotRetryTimeout(),
+                        false),
+                booleanProperty(
+                        SNAPSHOT_DISABLE_CAPTURE,
+                        "Snapshot disable capture",
+                        snapshotConfig.isSnapshotCaptureDisabled(),
                         false),
                 booleanProperty(
                         SORT_BASED_AGGREGATION_ENABLED,
@@ -1416,6 +1422,11 @@ public final class SystemSessionProperties
     public static Duration getSnapshotRetryTimeout(Session session)
     {
         return session.getSystemProperty(SNAPSHOT_RETRY_TIMEOUT, Duration.class);
+    }
+
+    public static boolean isSnapshotCaptureDisabled(Session session)
+    {
+        return session.getSystemProperty(SNAPSHOT_DISABLE_CAPTURE, Boolean.class);
     }
 
     public static boolean isSortBasedAggregationEnabled(Session session)

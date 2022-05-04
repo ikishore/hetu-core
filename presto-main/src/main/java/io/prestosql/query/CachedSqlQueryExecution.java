@@ -111,15 +111,15 @@ public class CachedSqlQueryExecution
     private final BeginTableWrite beginTableWrite;
 
     public CachedSqlQueryExecution(QueryPreparer.PreparedQuery preparedQuery, QueryStateMachine stateMachine,
-            String slug, Metadata metadata, CubeManager cubeManager, AccessControl accessControl, SqlParser sqlParser, SplitManager splitManager,
-            NodePartitioningManager nodePartitioningManager, NodeScheduler nodeScheduler,
-            List<PlanOptimizer> planOptimizers, PlanFragmenter planFragmenter, RemoteTaskFactory remoteTaskFactory,
-            LocationFactory locationFactory, int scheduleSplitBatchSize, ExecutorService queryExecutor,
-            ScheduledExecutorService schedulerExecutor, FailureDetector failureDetector, NodeTaskMap nodeTaskMap,
-            QueryExplainer queryExplainer, ExecutionPolicy executionPolicy, SplitSchedulerStats schedulerStats,
-            StatsCalculator statsCalculator, CostCalculator costCalculator, WarningCollector warningCollector,
-            DynamicFilterService dynamicFilterService, Optional<Cache<Integer, CachedSqlQueryExecutionPlan>> cache,
-            HeuristicIndexerManager heuristicIndexerManager, StateStoreProvider stateStoreProvider, SnapshotUtils snapshotUtils)
+                                   String slug, Metadata metadata, CubeManager cubeManager, AccessControl accessControl, SqlParser sqlParser, SplitManager splitManager,
+                                   NodePartitioningManager nodePartitioningManager, NodeScheduler nodeScheduler,
+                                   List<PlanOptimizer> planOptimizers, PlanFragmenter planFragmenter, RemoteTaskFactory remoteTaskFactory,
+                                   LocationFactory locationFactory, int scheduleSplitBatchSize, ExecutorService queryExecutor,
+                                   ScheduledExecutorService schedulerExecutor, FailureDetector failureDetector, NodeTaskMap nodeTaskMap,
+                                   QueryExplainer queryExplainer, ExecutionPolicy executionPolicy, SplitSchedulerStats schedulerStats,
+                                   StatsCalculator statsCalculator, CostCalculator costCalculator, WarningCollector warningCollector,
+                                   DynamicFilterService dynamicFilterService, Optional<Cache<Integer, CachedSqlQueryExecutionPlan>> cache,
+                                   HeuristicIndexerManager heuristicIndexerManager, StateStoreProvider stateStoreProvider, SnapshotUtils snapshotUtils)
     {
         super(preparedQuery, stateMachine, slug, metadata, cubeManager, accessControl, sqlParser, splitManager,
                 nodePartitioningManager, nodeScheduler, planOptimizers, planFragmenter, remoteTaskFactory, locationFactory,

@@ -15,16 +15,12 @@
 package io.prestosql.snapshot;
 
 import com.google.common.collect.ImmutableList;
-import com.google.common.util.concurrent.SettableFuture;
 import io.hetu.core.filesystem.HetuLocalFileSystemClient;
 import io.hetu.core.filesystem.LocalConfig;
-import io.prestosql.Session;
-import io.prestosql.SystemSessionProperties;
 import io.prestosql.execution.StageId;
 import io.prestosql.execution.TaskId;
 import io.prestosql.filesystem.FileSystemClientManager;
 import io.prestosql.metadata.InMemoryNodeManager;
-import io.prestosql.spi.PrestoException;
 import io.prestosql.spi.QueryId;
 import org.testng.annotations.AfterMethod;
 import org.testng.annotations.BeforeMethod;
@@ -39,11 +35,10 @@ import java.util.Map;
 import java.util.Optional;
 import java.util.OptionalLong;
 import java.util.Properties;
-import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicLong;
+import java.util.function.Consumer;
 
 import static io.prestosql.SessionTestUtils.TEST_SNAPSHOT_SESSION;
-import static io.prestosql.spi.StandardErrorCode.TOO_MANY_RESUMES;
 import static org.mockito.Matchers.any;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.verify;
@@ -51,7 +46,6 @@ import static org.mockito.Mockito.when;
 import static org.testng.Assert.assertEquals;
 import static org.testng.Assert.assertFalse;
 import static org.testng.Assert.assertTrue;
-import static org.testng.Assert.fail;
 
 @Test(singleThreaded = true)
 public class TestQuerySnapshotManager
@@ -130,8 +124,8 @@ public class TestQuerySnapshotManager
         queryId = new QueryId("resumefailure");
         QuerySnapshotManager snapshotManager = new QuerySnapshotManager(queryId, snapshotUtils, TEST_SNAPSHOT_SESSION);
         TaskId taskId = new TaskId(queryId.getId(), 2, 3);
-        Runnable rescheduler = mock(Runnable.class);
-        snapshotManager.setRescheduler(rescheduler);
+        Consumer recoveryComplete = mock(Consumer.class);
+        snapshotManager.setRecoveryInfo(recoveryComplete, this::isRecoveryInProgress);
 
         snapshotManager.addNewTask(taskId);
         snapshotManager.snapshotInitiated(1L);
@@ -139,57 +133,7 @@ public class TestQuerySnapshotManager
         OptionalLong sid = snapshotManager.getResumeSnapshotId();
         snapshotManager.updateQueryRestore(taskId, Optional.of(new RestoreResult(sid.getAsLong(), SnapshotInfo.withStatus(SnapshotResult.FAILED))));
 
-        verify(rescheduler).run();
-    }
-
-    @Test
-    public void testResumeTimeout()
-            throws Exception
-    {
-        queryId = new QueryId("resumetimeout");
-        Session session = Session.builder(TEST_SNAPSHOT_SESSION)
-                .setSystemProperty(SystemSessionProperties.SNAPSHOT_RETRY_TIMEOUT, "1ms")
-                .build();
-        QuerySnapshotManager snapshotManager = new QuerySnapshotManager(queryId, snapshotUtils, session);
-        TaskId taskId = new TaskId(queryId.getId(), 2, 3);
-        SettableFuture<?> future = SettableFuture.create();
-        snapshotManager.setRescheduler(() -> future.set(null));
-
-        snapshotManager.addNewTask(taskId);
-        snapshotManager.snapshotInitiated(1L);
-        snapshotManager.updateQueryCapture(taskId, Collections.singletonMap(1L, SnapshotInfo.withStatus(SnapshotResult.SUCCESSFUL)));
-        snapshotManager.getResumeSnapshotId();
-
-        future.get(1, TimeUnit.SECONDS);
-        assertTrue(future.isDone());
-    }
-
-    @Test
-    public void testResumeMaxRetries()
-    {
-        queryId = new QueryId("resumemaxretry");
-        Session session = Session.builder(TEST_SNAPSHOT_SESSION)
-                .setSystemProperty(SystemSessionProperties.SNAPSHOT_MAX_RETRIES, "1")
-                .build();
-        QuerySnapshotManager snapshotManager = new QuerySnapshotManager(queryId, snapshotUtils, session);
-        TaskId taskId = new TaskId(queryId.getId(), 2, 3);
-        Runnable rescheduler = mock(Runnable.class);
-        snapshotManager.setRescheduler(rescheduler);
-
-        snapshotManager.addNewTask(taskId);
-        snapshotManager.snapshotInitiated(1L);
-        snapshotManager.updateQueryCapture(taskId, Collections.singletonMap(1L, SnapshotInfo.withStatus(SnapshotResult.SUCCESSFUL)));
-        snapshotManager.snapshotInitiated(2L);
-        snapshotManager.updateQueryCapture(taskId, Collections.singletonMap(2L, SnapshotInfo.withStatus(SnapshotResult.SUCCESSFUL)));
-        assertTrue(snapshotManager.getResumeSnapshotId().isPresent());
-        try {
-            snapshotManager.getResumeSnapshotId();
-            fail();
-        }
-        catch (PrestoException e) {
-            // Expected
-            assertEquals(e.getErrorCode(), TOO_MANY_RESUMES.toErrorCode());
-        }
+        verify(recoveryComplete).accept(false);
     }
 
     @Test
@@ -200,6 +144,7 @@ public class TestQuerySnapshotManager
         TaskId taskId = new TaskId(queryId.getId(), 2, 3);
         snapshotManager.addNewTask(taskId);
         snapshotManager.snapshotInitiated(1L);
+        snapshotManager.setRecoveryInfo(this::onRecoveryComplete, this::isRecoveryInProgress);
 
         snapshotManager.updateQueryRestore(taskId, Optional.of(new RestoreResult(1, SnapshotInfo.withStatus(SnapshotResult.SUCCESSFUL))));
         assertEquals(snapshotManager.getQuerySnapshotRestoreResult().getSnapshotInfo().getSnapshotResult(), SnapshotResult.SUCCESSFUL);
@@ -244,7 +189,6 @@ public class TestQuerySnapshotManager
         assertTrue(snapshotManager.getResumeSnapshotId().isPresent());
         snapshotManager.invalidateAllSnapshots();
         assertFalse(snapshotManager.getResumeSnapshotId().isPresent());
-        assertFalse(snapshotManager.hasPendingResume());
     }
 
     @Test
@@ -315,6 +259,16 @@ public class TestQuerySnapshotManager
         assertEquals(wallTime, totalWallTimeMillis.get());
     }
 
+    private void onRecoveryComplete(boolean success)
+    {
+        return;
+    }
+
+    private Boolean isRecoveryInProgress(Void unused)
+    {
+        return true;
+    }
+
     @Test
     public void testRestoreStats()
     {
@@ -338,6 +292,7 @@ public class TestQuerySnapshotManager
             }
         }
 
+        snapshotManager.setRecoveryInfo(this::onRecoveryComplete, this::isRecoveryInProgress);
         snapshotManager.snapshotInitiated(1L);
         SnapshotInfo captureInfo = SnapshotInfo.withStatus(SnapshotResult.SUCCESSFUL);
         captureInfo.updateCpuTime(10);
@@ -530,6 +485,7 @@ public class TestQuerySnapshotManager
         snapshotManager.addNewTask(taskId11);
         snapshotManager.addNewTask(taskId20);
         snapshotManager.addNewTask(taskId21);
+        snapshotManager.setRecoveryInfo(this::onRecoveryComplete, this::isRecoveryInProgress);
 
         SnapshotInfo captureInfo = SnapshotInfo.withStatus(SnapshotResult.SUCCESSFUL);
         captureInfo.updateCpuTime(10);

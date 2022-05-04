@@ -28,10 +28,15 @@ import io.airlift.units.Duration;
 import io.hetu.core.transport.execution.buffer.PagesSerde;
 import io.hetu.core.transport.execution.buffer.SerializedPage;
 import io.prestosql.failuredetector.FailureDetector;
+import io.prestosql.failuredetector.FailureDetectorManager;
+import io.prestosql.failuredetector.FailureRetryConfig;
+import io.prestosql.failuredetector.MaxRetryFailureRetryFactory;
 import io.prestosql.failuredetector.NoOpFailureDetector;
+import io.prestosql.failuredetector.TimeoutFailureRetryFactory;
 import io.prestosql.operator.HttpPageBufferClient.ClientCallback;
 import io.prestosql.spi.HostAddress;
 import io.prestosql.spi.Page;
+import io.prestosql.spi.failuredetector.FailureRetryPolicy;
 import org.testng.annotations.AfterClass;
 import org.testng.annotations.BeforeClass;
 import org.testng.annotations.Test;
@@ -41,6 +46,7 @@ import java.security.GeneralSecurityException;
 import java.util.ArrayList;
 import java.util.Collections;
 import java.util.List;
+import java.util.Properties;
 import java.util.Set;
 import java.util.concurrent.BrokenBarrierException;
 import java.util.concurrent.CyclicBarrier;
@@ -70,6 +76,7 @@ public class TestHttpPageBufferClient
 {
     private ScheduledExecutorService scheduler;
     private ExecutorService pageBufferClientCallbackExecutor;
+    private FailureDetectorManager failureDetectorManager;
 
     private static final PagesSerde PAGES_SERDE = testingPagesSerde();
 
@@ -78,6 +85,7 @@ public class TestHttpPageBufferClient
     {
         scheduler = newScheduledThreadPool(4, daemonThreadsNamed("test-%s"));
         pageBufferClientCallbackExecutor = Executors.newSingleThreadExecutor();
+        failureDetectorManager = new FailureDetectorManager(new NoOpFailureDetector(), "60s");
     }
 
     @AfterClass(alwaysRun = true)
@@ -105,19 +113,20 @@ public class TestHttpPageBufferClient
         CyclicBarrier requestComplete = new CyclicBarrier(2);
 
         TestingClientCallback callback = new TestingClientCallback(requestComplete);
+        FailureDetectorManager.removeallFailureRetryFactory();
+        FailureDetectorManager.addFailureRetryFactory(new TimeoutFailureRetryFactory());
 
         URI location = URI.create("http://localhost:8080");
         String instanceId = "testing instance id";
         HttpPageBufferClient client = new HttpPageBufferClient(new TestingHttpClient(processor, scheduler),
                 expectedMaxSize,
-                new Duration(1, TimeUnit.MINUTES),
                 true,
                 new TaskLocation(location, instanceId),
                 callback,
                 scheduler,
                 pageBufferClientCallbackExecutor,
                 false,
-                null, new NoOpFailureDetector(), false, 10);
+                null, failureDetectorManager, null);
 
         assertStatus(client, location, "queued", 0, 0, 0, 0, "not scheduled");
 
@@ -193,19 +202,20 @@ public class TestHttpPageBufferClient
 
         CyclicBarrier requestComplete = new CyclicBarrier(2);
         TestingClientCallback callback = new TestingClientCallback(requestComplete);
+        FailureDetectorManager.removeallFailureRetryFactory();
+        FailureDetectorManager.addFailureRetryFactory(new TimeoutFailureRetryFactory());
 
         URI location = URI.create("http://localhost:8080");
         String instanceId = "testing instance id";
         HttpPageBufferClient client = new HttpPageBufferClient(new TestingHttpClient(processor, scheduler),
                 new DataSize(10, Unit.MEGABYTE),
-                new Duration(1, TimeUnit.MINUTES),
                 true,
                 new TaskLocation(location, instanceId),
                 callback,
                 scheduler,
                 pageBufferClientCallbackExecutor,
                 false,
-                null, new NoOpFailureDetector(), false, 10);
+                null, failureDetectorManager, null);
 
         assertStatus(client, location, "queued", 0, 0, 0, 0, "not scheduled");
 
@@ -236,19 +246,20 @@ public class TestHttpPageBufferClient
 
         CyclicBarrier requestComplete = new CyclicBarrier(2);
         TestingClientCallback callback = new TestingClientCallback(requestComplete);
+        FailureDetectorManager.removeallFailureRetryFactory();
+        FailureDetectorManager.addFailureRetryFactory(new TimeoutFailureRetryFactory());
 
         URI location = URI.create("http://localhost:8080");
         String instanceId = "testing instance id";
         HttpPageBufferClient client = new HttpPageBufferClient(new TestingHttpClient(processor, scheduler),
                 new DataSize(10, Unit.MEGABYTE),
-                new Duration(1, TimeUnit.MINUTES),
                 true,
                 new TaskLocation(location, instanceId),
                 callback,
                 scheduler,
                 pageBufferClientCallbackExecutor,
                 false,
-                null, new NoOpFailureDetector(), false, 10);
+                null, failureDetectorManager, null);
 
         assertStatus(client, location, "queued", 0, 0, 0, 0, "not scheduled");
 
@@ -308,19 +319,20 @@ public class TestHttpPageBufferClient
 
         CyclicBarrier requestComplete = new CyclicBarrier(2);
         TestingClientCallback callback = new TestingClientCallback(requestComplete);
+        FailureDetectorManager.removeallFailureRetryFactory();
+        FailureDetectorManager.addFailureRetryFactory(new TimeoutFailureRetryFactory());
 
         URI location = URI.create("http://localhost:8080");
         String instanceId = "testing instance id";
         HttpPageBufferClient client = new HttpPageBufferClient(new TestingHttpClient(processor, scheduler),
                 new DataSize(10, Unit.MEGABYTE),
-                new Duration(1, TimeUnit.MINUTES),
                 true,
                 new TaskLocation(location, instanceId),
                 callback,
                 scheduler,
                 pageBufferClientCallbackExecutor,
                 false,
-                null, new NoOpFailureDetector(), false, 10);
+                null, failureDetectorManager, null);
 
         assertStatus(client, location, "queued", 0, 0, 0, 0, "not scheduled");
 
@@ -337,6 +349,7 @@ public class TestHttpPageBufferClient
         }
         catch (BrokenBarrierException ignored) {
             // the exception could be ignored
+            System.out.println(" Exception Ignore");
         }
         try {
             afterRequest.await(10, TimeUnit.SECONDS);
@@ -367,19 +380,21 @@ public class TestHttpPageBufferClient
         CyclicBarrier requestComplete = new CyclicBarrier(2);
         TestingClientCallback callback = new TestingClientCallback(requestComplete);
 
+        FailureDetectorManager.removeallFailureRetryFactory();
+        FailureDetectorManager failureDetectorManager1 = new FailureDetectorManager(new NoOpFailureDetector(), "30s");
+        FailureDetectorManager.addFailureRetryFactory(new TimeoutFailureRetryFactory());
+
         URI location = URI.create("http://localhost:8080");
         String instanceId = "testing instance id";
         HttpPageBufferClient client = new HttpPageBufferClient(new TestingHttpClient(processor, scheduler),
                 new DataSize(10, Unit.MEGABYTE),
-                new Duration(30, TimeUnit.SECONDS),
                 true,
                 new TaskLocation(location, instanceId),
                 callback,
                 scheduler,
-                ticker,
                 pageBufferClientCallbackExecutor,
                 false,
-                null, new NoOpFailureDetector(), true, 10);
+                null, ticker, failureDetectorManager1, null);
 
         assertStatus(client, location, "queued", 0, 0, 0, 0, "not scheduled");
 
@@ -435,35 +450,43 @@ public class TestHttpPageBufferClient
 
         CyclicBarrier requestComplete = new CyclicBarrier(2);
         TestingClientCallback callback = new TestingClientCallback(requestComplete);
+        FailureRetryConfig cfg = new FailureRetryConfig();
+        cfg.setFailureRetryPolicyProfile("test");
+        Properties prop = new Properties();
+        prop.setProperty(FailureRetryPolicy.FD_RETRY_TYPE, FailureRetryPolicy.MAXRETRY);
+        prop.setProperty(FailureRetryPolicy.MAX_RETRY_COUNT, "10");
+        prop.setProperty(FailureRetryPolicy.MAX_TIMEOUT_DURATION, "300s");
+        FailureDetectorManager.addFrConfigs(cfg.getFailureRetryPolicyProfile(), prop);
 
+        FailureDetectorManager.addFailureRetryFactory(new MaxRetryFailureRetryFactory());
+        FailureDetectorManager.removeallFailureDetectors();
+
+        FailureDetectorManager failureDetectorManager1 = new FailureDetectorManager(cfg, new MockNodeCrashFailureDetector());
         URI location = URI.create("http://localhost:8080");
         String instanceId = "testing instance id";
         HttpPageBufferClient client = new HttpPageBufferClient(new TestingHttpClient(processor, scheduler),
                 new DataSize(10, Unit.MEGABYTE),
-                new Duration(300, TimeUnit.SECONDS),
                 true,
                 new TaskLocation(location, instanceId),
                 callback,
                 scheduler,
-                ticker,
                 pageBufferClientCallbackExecutor,
                 false,
-                null, new MockNodeCrashFailureDetector(), false, 100);
-
+                null, ticker, failureDetectorManager1, null);
         assertStatus(client, location, "queued", 0, 0, 0, 0, "not scheduled");
 
-        for (int i = 0; i < 101; i++) {
+        for (int i = 0; i < 11; i++) {
             client.scheduleRequest();
             requestComplete.await(10, TimeUnit.SECONDS);
-            tickerIncrement.set(new Duration(1, TimeUnit.SECONDS));
+            tickerIncrement.set(new Duration(10, TimeUnit.SECONDS));
         }
         assertEquals(callback.getPages().size(), 0);
-        assertEquals(callback.getCompletedRequests(), 101);
+        assertEquals(callback.getCompletedRequests(), 11);
         assertEquals(callback.getFinishedBuffers(), 0);
         assertEquals(callback.getFailedBuffers(), 2);
         assertInstanceOf(callback.getFailure(), PageTransportTimeoutException.class);
-        assertContains(callback.getFailure().getMessage(), WORKER_NODE_ERROR + " (http://localhost:8080/0 - 100 failures,");
-        assertStatus(client, location, "queued", 0, 101, 101, 101, "not scheduled");
+        assertContains(callback.getFailure().getMessage(), WORKER_NODE_ERROR + " (http://localhost:8080/0 - 10 failures,");
+        assertStatus(client, location, "queued", 0, 11, 11, 11, "not scheduled");
     }
 
     @Test
@@ -482,19 +505,30 @@ public class TestHttpPageBufferClient
         CyclicBarrier requestComplete = new CyclicBarrier(2);
         TestingClientCallback callback = new TestingClientCallback(requestComplete);
 
+        FailureRetryConfig cfg = new FailureRetryConfig();
+        cfg.setFailureRetryPolicyProfile("test");
+        Properties prop = new Properties();
+        prop.setProperty(FailureRetryPolicy.FD_RETRY_TYPE, FailureRetryPolicy.MAXRETRY);
+        prop.setProperty(FailureRetryPolicy.MAX_RETRY_COUNT, "10");
+        prop.setProperty(FailureRetryPolicy.MAX_TIMEOUT_DURATION, "300s");
+        FailureDetectorManager.addFrConfigs(cfg.getFailureRetryPolicyProfile(), prop);
+
+        FailureDetectorManager.addFailureRetryFactory(new MaxRetryFailureRetryFactory());
+        FailureDetectorManager.removeallFailureDetectors();
+
+        FailureDetectorManager failureDetectorManager1 = new FailureDetectorManager(cfg, new MockActiveFailureDetector());
+
         URI location = URI.create("http://localhost:8080");
         String instanceId = "testing instance id";
         HttpPageBufferClient client = new HttpPageBufferClient(new TestingHttpClient(processor, scheduler),
                 new DataSize(10, Unit.MEGABYTE),
-                new Duration(300, TimeUnit.SECONDS),
                 true,
                 new TaskLocation(location, instanceId),
                 callback,
                 scheduler,
-                ticker,
                 pageBufferClientCallbackExecutor,
                 false,
-                null, new MockActiveFailureDetector(), false, 100);
+                null, ticker, failureDetectorManager1, null);
 
         assertStatus(client, location, "queued", 0, 0, 0, 0, "not scheduled");
 

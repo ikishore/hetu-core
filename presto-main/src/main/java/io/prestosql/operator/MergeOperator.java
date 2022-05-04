@@ -171,7 +171,8 @@ public class MergeOperator
         String instanceId = ((RemoteSplit) split.getConnectorSplit()).getInstanceId();
         ExchangeClient exchangeClient = closer.register(exchangeClientSupplier.get(operatorContext.localSystemMemoryContext()));
         if (operatorContext.isSnapshotEnabled()) {
-            exchangeClient.setSnapshotEnabled(operatorContext.getDriverContext().getPipelineContext().getTaskContext().getSnapshotManager().getQuerySnapshotManager());
+            exchangeClient.setSnapshotEnabled(operatorContext.getDriverContext().getPipelineContext().getTaskContext().getSnapshotManager().getQuerySnapshotManager(),
+                    operatorContext.getDriverContext().getPipelineContext().getTaskContext().getRecoveryManager());
             exchangeClient.setSnapshotState(snapshotState);
         }
         exchangeClient.addTarget(id);

@@ -73,6 +73,7 @@ public class SnapshotUtils
     String rootPath = "/tmp/hetu/snapshot/";
 
     private final Map<QueryId, QuerySnapshotManager> snapshotManagers = new ConcurrentHashMap<>();
+    private final Map<QueryId, RecoveryManager> recoveryManagers = new ConcurrentHashMap<>();
     // Key is query id; value is number of attempts
     private final Map<String, Long> snapshotsToDelete = new ConcurrentHashMap<>();
     private final ScheduledThreadPoolExecutor deleteSnapshotExecutor = new ScheduledThreadPoolExecutor(1);
@@ -349,5 +350,20 @@ public class SnapshotUtils
                 LOG.debug("Failed to delete stored snapshot states for %s [age %d ms]: %s", queryId, age, e.getMessage());
             }
         }
+    }
+
+    public RecoveryManager getRecoveryManager(QueryId queryId)
+    {
+        return recoveryManagers.get(queryId);
+    }
+
+    public RecoveryManager getOrCreateRecoveryManager(QueryId queryId, Session session)
+    {
+        return recoveryManagers.computeIfAbsent(queryId, ignore -> new RecoveryManager(this, session, queryId));
+    }
+
+    public void removeRecoveryManager(QueryId queryId)
+    {
+        recoveryManagers.remove(queryId);
     }
 }

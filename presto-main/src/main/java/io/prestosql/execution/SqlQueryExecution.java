@@ -47,6 +47,7 @@ import io.prestosql.security.AccessControl;
 import io.prestosql.server.BasicQueryInfo;
 import io.prestosql.snapshot.MarkerAnnouncer;
 import io.prestosql.snapshot.QuerySnapshotManager;
+import io.prestosql.snapshot.RecoveryManager;
 import io.prestosql.snapshot.SnapshotUtils;
 import io.prestosql.spi.HetuConstant;
 import io.prestosql.spi.PrestoException;
@@ -123,7 +124,6 @@ import static io.prestosql.execution.buffer.OutputBuffers.BROADCAST_PARTITION_ID
 import static io.prestosql.execution.buffer.OutputBuffers.createInitialEmptyOutputBuffers;
 import static io.prestosql.execution.scheduler.SqlQueryScheduler.createSqlQueryScheduler;
 import static io.prestosql.spi.StandardErrorCode.NOT_SUPPORTED;
-import static io.prestosql.spi.StandardErrorCode.NO_NODES_AVAILABLE;
 import static io.prestosql.sql.planner.DistributedExecutionPlanner.Mode.NORMAL;
 import static io.prestosql.sql.planner.DistributedExecutionPlanner.Mode.RESUME;
 import static io.prestosql.sql.planner.DistributedExecutionPlanner.Mode.SNAPSHOT;
@@ -169,6 +169,7 @@ public class SqlQueryExecution
     private final HeuristicIndexerManager heuristicIndexerManager;
     private final StateStoreProvider stateStoreProvider;
     private final QuerySnapshotManager snapshotManager;
+    private final RecoveryManager recoveryManager;
     private final WarningCollector warningCollector;
 
     public SqlQueryExecution(
@@ -224,7 +225,7 @@ public class SqlQueryExecution
             this.dynamicFilterService = requireNonNull(dynamicFilterService, "dynamicFilterService is null");
             this.heuristicIndexerManager = requireNonNull(heuristicIndexerManager, "heuristicIndexerManager is null");
             this.warningCollector = requireNonNull(warningCollector);
-
+            this.recoveryManager = snapshotUtils.getOrCreateRecoveryManager(stateMachine.getQueryId(), stateMachine.getSession());
             this.snapshotManager = snapshotUtils.getOrCreateQuerySnapshotManager(stateMachine.getQueryId(), stateMachine.getSession());
 
             checkArgument(scheduleSplitBatchSize > 0, "scheduleSplitBatchSize must be greater than 0");
@@ -270,7 +271,7 @@ public class SqlQueryExecution
 
                 // Snapshot: query is now done, so clear its entries in the snapshot manager
                 if (SystemSessionProperties.isSnapshotEnabled(stateMachine.getSession())) {
-                    snapshotManager.doneQuery(state);
+                    recoveryManager.doneQuery(state);
                 }
                 SqlQueryScheduler scheduler = localQueryScheduler.get();
                 if (scheduler != null) {
@@ -500,19 +501,10 @@ public class SqlQueryExecution
                     // query already started or finished
                     return;
                 }
-                stateMachine.addStateChangeListener(state -> {
-                    if (state == QueryState.RESUMING) {
-                        // Snapshot: old stages/tasks have finished. Ready to resume.
-                        try {
-                            resumeQuery(plan);
-                        }
-                        catch (Throwable e) {
-                            fail(e);
-                            throwIfInstanceOf(e, Error.class);
-                            log.warn(e, "Encountered error while rescheduling query");
-                        }
-                    }
-                });
+                recoveryManager.setRescheduler(snapshotId -> {
+                    log.debug("Rescheduler is called");
+                    resumeQuery(snapshotId, plan);
+                }, warningCollector);
                 // if query is not finished, start the scheduler, otherwise cancel it
                 SqlQueryScheduler scheduler = queryScheduler.get();
 
@@ -528,7 +520,7 @@ public class SqlQueryExecution
         }
     }
 
-    private void resumeQuery(PlanRoot plan)
+    private void resumeQuery(OptionalLong snapshotId, PlanRoot plan)
     {
         SqlQueryScheduler oldScheduler = queryScheduler.get();
         try {
@@ -540,42 +532,22 @@ public class SqlQueryExecution
             throw new RuntimeException(e);
         }
 
-        log.debug("Rescheduling query %s from a resumable task failure.", getQueryId());
         PartitioningHandle partitioningHandle = plan.getRoot().getFragment().getPartitioningScheme().getPartitioning().getHandle();
         OutputBuffers rootOutputBuffers = createInitialEmptyOutputBuffers(partitioningHandle)
                 .withBuffer(OUTPUT_BUFFER_ID, BROADCAST_PARTITION_ID)
                 .withNoMoreBufferIds();
 
         // build the stage execution objects (this doesn't schedule execution)
-        SqlQueryScheduler scheduler;
-        try {
-            scheduler = createResumeScheduler(plan, rootOutputBuffers);
-        }
-        catch (PrestoException e) {
-            if (e.getErrorCode() == NO_NODES_AVAILABLE.toErrorCode()) {
-                // Not enough worker to resume all tasks. Retrying from any saved snapshot likely wont' work either.
-                // Clear ongoing and existing snapshots and restart.
-                snapshotManager.invalidateAllSnapshots();
-                scheduler = createResumeScheduler(plan, rootOutputBuffers);
-            }
-            else {
-                throw e;
-            }
-        }
+        SqlQueryScheduler scheduler = createResumeScheduler(snapshotId, plan, rootOutputBuffers);
         queryScheduler.set(scheduler);
-        log.debug("Restarting query %s from a resumable task failure.", getQueryId());
+        log.debug("Resuming query %s from a resumable task failure.", getQueryId());
         scheduler.start();
         stateMachine.transitionToStarting();
     }
 
-    private SqlQueryScheduler createResumeScheduler(PlanRoot plan, OutputBuffers rootOutputBuffers)
+    private SqlQueryScheduler createResumeScheduler(OptionalLong snapshotId, PlanRoot plan, OutputBuffers rootOutputBuffers)
     {
-        String resumeMessage = "Query encountered failures. Recovering using the distributed-snapshot feature.";
-        warningCollector.add(new PrestoWarning(StandardWarningCode.SNAPSHOT_RECOVERY, resumeMessage));
-        // Check if there is a snapshot we can restore to, or restart from beginning,
-        // and update marker split sources so they know where to resume from.
-        // This MUST be done BEFORE creating the new scheduler, because it resets the snapshotManager internal states.
-        OptionalLong snapshotId = snapshotManager.getResumeSnapshotId();
+        log.debug("createResumeScheduler snapshot Id: %d", snapshotId.orElse(0));
         MarkerAnnouncer announcer = splitManager.getMarkerAnnouncer(stateMachine.getSession());
         announcer.resumeSnapshot(snapshotId.orElse(0));
         // Clear any temporary content that's not part of the snapshot
@@ -606,6 +578,7 @@ public class SqlQueryExecution
                 dynamicFilterService,
                 heuristicIndexerManager,
                 snapshotManager,
+                recoveryManager,
                 // Require same number of tasks to be scheduled, but do not require it if starting from beginning
                 snapshotId.isPresent() ? queryScheduler.get().getStageTaskCounts() : null,
                 true);
@@ -874,6 +847,7 @@ public class SqlQueryExecution
                 dynamicFilterService,
                 heuristicIndexerManager,
                 snapshotManager,
+                recoveryManager,
                 null,
                 false);
 
@@ -1004,7 +978,7 @@ public class SqlQueryExecution
             stageInfo = Optional.ofNullable(scheduler.getStageInfo());
         }
 
-        QueryInfo queryInfo = stateMachine.updateQueryInfo(stageInfo);
+        QueryInfo queryInfo = stateMachine.updateQueryInfo(stageInfo, recoveryManager);
         if (queryInfo.isFinalQueryInfo()) {
             // capture the final query state and drop reference to the scheduler
             queryScheduler.set(null);
@@ -1074,31 +1048,31 @@ public class SqlQueryExecution
 
         @Inject
         SqlQueryExecutionFactory(QueryManagerConfig config,
-                HetuConfig hetuConfig,
-                Metadata metadata,
-                CubeManager cubeManager,
-                AccessControl accessControl,
-                SqlParser sqlParser,
-                LocationFactory locationFactory,
-                SplitManager splitManager,
-                NodePartitioningManager nodePartitioningManager,
-                NodeScheduler nodeScheduler,
-                PlanOptimizers planOptimizers,
-                PlanFragmenter planFragmenter,
-                RemoteTaskFactory remoteTaskFactory,
-                @ForQueryExecution ExecutorService queryExecutor,
-                @ForScheduler ScheduledExecutorService schedulerExecutor,
-                FailureDetector failureDetector,
-                NodeTaskMap nodeTaskMap,
-                QueryExplainer queryExplainer,
-                Map<String, ExecutionPolicy> executionPolicies,
-                SplitSchedulerStats schedulerStats,
-                StatsCalculator statsCalculator,
-                CostCalculator costCalculator,
-                DynamicFilterService dynamicFilterService,
-                HeuristicIndexerManager heuristicIndexerManager,
-                StateStoreProvider stateStoreProvider,
-                SnapshotUtils snapshotUtils)
+                                 HetuConfig hetuConfig,
+                                 Metadata metadata,
+                                 CubeManager cubeManager,
+                                 AccessControl accessControl,
+                                 SqlParser sqlParser,
+                                 LocationFactory locationFactory,
+                                 SplitManager splitManager,
+                                 NodePartitioningManager nodePartitioningManager,
+                                 NodeScheduler nodeScheduler,
+                                 PlanOptimizers planOptimizers,
+                                 PlanFragmenter planFragmenter,
+                                 RemoteTaskFactory remoteTaskFactory,
+                                 @ForQueryExecution ExecutorService queryExecutor,
+                                 @ForScheduler ScheduledExecutorService schedulerExecutor,
+                                 FailureDetector failureDetector,
+                                 NodeTaskMap nodeTaskMap,
+                                 QueryExplainer queryExplainer,
+                                 Map<String, ExecutionPolicy> executionPolicies,
+                                 SplitSchedulerStats schedulerStats,
+                                 StatsCalculator statsCalculator,
+                                 CostCalculator costCalculator,
+                                 DynamicFilterService dynamicFilterService,
+                                 HeuristicIndexerManager heuristicIndexerManager,
+                                 StateStoreProvider stateStoreProvider,
+                                 SnapshotUtils snapshotUtils)
         {
             requireNonNull(config, "config is null");
             this.schedulerStats = requireNonNull(schedulerStats, "schedulerStats is null");

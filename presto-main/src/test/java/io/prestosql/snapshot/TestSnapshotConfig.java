@@ -36,7 +36,8 @@ public class TestSnapshotConfig
                 .setSnapshotSplitCountInterval(1000)
                 .setSnapshotMaxRetries(10)
                 .setSnapshotRetryTimeout(new Duration(10, TimeUnit.MINUTES))
-                .setSnapshotUseKryoSerialization(false));
+                .setSnapshotUseKryoSerialization(false)
+                .setSnapshotCaptureDisabled(false));
     }
 
     @Test
@@ -52,6 +53,7 @@ public class TestSnapshotConfig
                 .put("hetu.snapshot.maxRetries", "20")
                 .put("hetu.snapshot.retryTimeout", "5m")
                 .put("hetu.snapshot.useKryoSerialization", "true")
+                .put("hetu.snapshot.disable.capture", "true")
                 .build();
 
         SnapshotConfig expected = new SnapshotConfig()
@@ -63,7 +65,8 @@ public class TestSnapshotConfig
                 .setSnapshotSplitCountInterval(1000000)
                 .setSnapshotMaxRetries(20)
                 .setSnapshotRetryTimeout(new Duration(5, TimeUnit.MINUTES))
-                .setSnapshotUseKryoSerialization(true);
+                .setSnapshotUseKryoSerialization(true)
+                .setSnapshotCaptureDisabled(true);
 
         ConfigAssertions.assertFullMapping(properties, expected);
     }

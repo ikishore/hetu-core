@@ -20,25 +20,19 @@ import io.prestosql.operator.LocalPlannerAware;
 import io.prestosql.operator.Operator;
 import io.prestosql.operator.OperatorContext;
 import io.prestosql.operator.OperatorFactory;
-import io.prestosql.operator.SinkOperator;
 import io.prestosql.operator.exchange.LocalExchange.LocalExchangeFactory;
 import io.prestosql.operator.exchange.LocalExchange.LocalExchangeSinkFactory;
 import io.prestosql.operator.exchange.LocalExchange.LocalExchangeSinkFactoryId;
-import io.prestosql.snapshot.SingleInputSnapshotState;
 import io.prestosql.spi.Page;
 import io.prestosql.spi.plan.PlanNodeId;
-import io.prestosql.spi.snapshot.BlockEncodingSerdeProvider;
-import io.prestosql.spi.snapshot.MarkerPage;
-import io.prestosql.spi.snapshot.RestorableConfig;
 
 import java.util.function.Function;
 
 import static com.google.common.base.Preconditions.checkState;
 import static java.util.Objects.requireNonNull;
 
-@RestorableConfig(uncapturedFields = {"sink", "pagePreprocessor", "snapshotState"})
 public class LocalExchangeSinkOperator
-        implements SinkOperator
+        implements Operator
 {
     public static class LocalExchangeSinkOperatorFactory
             implements OperatorFactory, LocalPlannerAware
@@ -67,15 +61,11 @@ public class LocalExchangeSinkOperator
         public Operator createOperator(DriverContext driverContext)
         {
             checkState(!closed, "Factory is already closed");
-            OperatorContext context = driverContext.addOperatorContext(operatorId, planNodeId, LocalExchangeSinkOperator.class.getSimpleName());
+            OperatorContext operatorContext = driverContext.addOperatorContext(operatorId, planNodeId, LocalExchangeSinkOperator.class.getSimpleName());
 
-            LocalExchangeSinkFactory localExchangeSinkFactory = localExchangeFactory.getLocalExchange(driverContext.getLifespan(),
-                    driverContext.getPipelineContext().getTaskContext(),
-                    planNodeId.toString(),
-                    context.isSnapshotEnabled()).getSinkFactory(sinkFactoryId);
+            LocalExchangeSinkFactory localExchangeSinkFactory = localExchangeFactory.getLocalExchange(driverContext.getLifespan()).getSinkFactory(sinkFactoryId);
 
-            String sinkId = context.getUniqueId();
-            return new LocalExchangeSinkOperator(sinkId, context, localExchangeSinkFactory.createSink(sinkId), pagePreprocessor);
+            return new LocalExchangeSinkOperator(operatorContext, localExchangeSinkFactory.createSink(), pagePreprocessor);
         }
 
         @Override
@@ -104,26 +94,17 @@ public class LocalExchangeSinkOperator
         {
             localExchangeFactory.noMoreSinkFactories();
         }
-
-        public void broadcastMarker(Lifespan lifespan, MarkerPage markerPage, String origin)
-        {
-            localExchangeFactory.getLocalExchange(lifespan).broadcastMarker(markerPage, origin);
-        }
     }
 
-    private final String id;
     private final OperatorContext operatorContext;
     private final LocalExchangeSink sink;
     private final Function<Page, Page> pagePreprocessor;
-    private final SingleInputSnapshotState snapshotState;
 
-    public LocalExchangeSinkOperator(String id, OperatorContext operatorContext, LocalExchangeSink sink, Function<Page, Page> pagePreprocessor)
+    LocalExchangeSinkOperator(OperatorContext operatorContext, LocalExchangeSink sink, Function<Page, Page> pagePreprocessor)
     {
-        this.id = id;
         this.operatorContext = requireNonNull(operatorContext, "operatorContext is null");
         this.sink = requireNonNull(sink, "sink is null");
         this.pagePreprocessor = requireNonNull(pagePreprocessor, "pagePreprocessor is null");
-        this.snapshotState = operatorContext.isSnapshotEnabled() ? SingleInputSnapshotState.forOperator(this, operatorContext) : null;
     }
 
     @Override
@@ -160,39 +141,20 @@ public class LocalExchangeSinkOperator
     public void addInput(Page page)
     {
         requireNonNull(page, "page is null");
+        page = pagePreprocessor.apply(page);
+        sink.addPage(page);
+        operatorContext.recordOutput(page.getSizeInBytes(), page.getPositionCount());
+    }
 
-        Page inputPage = page;
-        if (snapshotState != null) {
-            if (snapshotState.processPage(inputPage)) {
-                inputPage = snapshotState.nextMarker();
-            }
-        }
-
-        if (!(inputPage instanceof MarkerPage)) {
-            inputPage = pagePreprocessor.apply(inputPage);
-        }
-        sink.addPage(inputPage, id);
-        operatorContext.recordOutput(inputPage.getSizeInBytes(), inputPage.getPositionCount());
+    @Override
+    public Page getOutput()
+    {
+        return null;
     }
 
     @Override
     public void close()
     {
-        if (snapshotState != null) {
-            snapshotState.close();
-        }
         finish();
-    }
-
-    @Override
-    public Object capture(BlockEncodingSerdeProvider serdeProvider)
-    {
-        return operatorContext.capture(serdeProvider);
-    }
-
-    @Override
-    public void restore(Object state, BlockEncodingSerdeProvider serdeProvider)
-    {
-        operatorContext.restore(state, serdeProvider);
     }
 }

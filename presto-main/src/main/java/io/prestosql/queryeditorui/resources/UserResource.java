@@ -18,7 +18,6 @@ import io.prestosql.queryeditorui.protocol.UserInfo;
 import io.prestosql.security.AccessControl;
 import io.prestosql.security.AccessControlUtil;
 import io.prestosql.server.HttpRequestSessionContext;
-import io.prestosql.spi.security.GroupProvider;
 
 import javax.servlet.http.HttpServletRequest;
 import javax.ws.rs.GET;
@@ -33,13 +32,11 @@ import javax.ws.rs.core.SecurityContext;
 public class UserResource
 {
     private final AccessControl accessControl;
-    private final GroupProvider groupProvider;
 
     @Inject
-    public UserResource(AccessControl accessControl, GroupProvider groupProvider)
+    public UserResource(AccessControl accessControl)
     {
         this.accessControl = accessControl;
-        this.groupProvider = groupProvider;
     }
 
     @GET
@@ -48,7 +45,7 @@ public class UserResource
     public Response getCurrentUser(@Context HttpServletRequest request,
             @Context SecurityContext securityContext)
     {
-        String user = AccessControlUtil.getUser(accessControl, new HttpRequestSessionContext(request, groupProvider));
+        String user = AccessControlUtil.getUser(accessControl, new HttpRequestSessionContext(request));
         return Response.ok(new UserInfo(user, securityContext.isSecure())).build();
     }
 }

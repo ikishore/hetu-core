@@ -35,11 +35,11 @@ public class IntArrayBlock
 {
     private static final int INSTANCE_SIZE = ClassLayout.parseClass(IntArrayBlock.class).instanceSize();
 
-    protected final int arrayOffset;
+    private final int arrayOffset;
     private final int positionCount;
     @Nullable
-    protected final boolean[] valueIsNull;
-    protected final int[] values;
+    private final boolean[] valueIsNull;
+    private final int[] values;
 
     private final long sizeInBytes;
     private final long retainedSizeInBytes;
@@ -118,24 +118,6 @@ public class IntArrayBlock
     public int getPositionCount()
     {
         return positionCount;
-    }
-
-    @Override
-    public int[] getValues()
-    {
-        return values;
-    }
-
-    @Override
-    public int getBlockOffset()
-    {
-        return arrayOffset;
-    }
-
-    @Override
-    public boolean[] getValueNulls()
-    {
-        return valueIsNull;
     }
 
     @Override
@@ -220,9 +202,9 @@ public class IntArrayBlock
     {
         checkValidRegion(getPositionCount(), positionOffset, length);
 
-        int finalPositionOffset = positionOffset + arrayOffset;
-        boolean[] newValueIsNull = valueIsNull == null ? null : compactArray(valueIsNull, finalPositionOffset, length);
-        int[] newValues = compactArray(values, finalPositionOffset, length);
+        positionOffset += arrayOffset;
+        boolean[] newValueIsNull = valueIsNull == null ? null : compactArray(valueIsNull, positionOffset, length);
+        int[] newValues = compactArray(values, positionOffset, length);
 
         if (newValueIsNull == valueIsNull && newValues == values) {
             return this;
@@ -255,13 +237,8 @@ public class IntArrayBlock
     @Override
     public boolean[] filter(BloomFilter filter, boolean[] validPositions)
     {
-        for (int i = 0; i < positionCount; i++) {
-            if (valueIsNull != null && valueIsNull[i + arrayOffset]) {
-                validPositions[i] = validPositions[i] && filter.test((byte[]) null);
-            }
-            else {
-                validPositions[i] = validPositions[i] && filter.test(values[i + arrayOffset]);
-            }
+        for (int i = 0; i < values.length; i++) {
+            validPositions[i] = validPositions[i] && filter.test(values[i]);
         }
         return validPositions;
     }

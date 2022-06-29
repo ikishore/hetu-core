@@ -1,5 +1,5 @@
 /*
- * Copyright (C) 2018-2021. Huawei Technologies Co., Ltd. All rights reserved.
+ * Copyright (C) 2018-2020. Huawei Technologies Co., Ltd. All rights reserved.
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
  * You may obtain a copy of the License at
@@ -25,7 +25,6 @@ import io.prestosql.sql.planner.iterative.Rule;
 import java.util.Optional;
 
 import static io.prestosql.SystemSessionProperties.isCTEReuseEnabled;
-import static io.prestosql.SystemSessionProperties.isSnapshotEnabled;
 import static io.prestosql.sql.planner.plan.ExchangeNode.Scope.REMOTE;
 import static io.prestosql.sql.planner.plan.ExchangeNode.partitionedExchange;
 import static io.prestosql.sql.planner.plan.Patterns.cteScan;
@@ -41,7 +40,7 @@ public class AddExchangeAboveCTENode
     @Override
     public boolean isEnabled(Session session)
     {
-        return isCTEReuseEnabled(session) && !isSnapshotEnabled(session);
+        return isCTEReuseEnabled(session);
     }
 
     @Override

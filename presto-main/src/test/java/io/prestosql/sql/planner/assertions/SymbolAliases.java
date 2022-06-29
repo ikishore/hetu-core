@@ -39,7 +39,7 @@ public final class SymbolAliases
 
     public SymbolAliases()
     {
-        this(new HashMap<>());
+        this.map = ImmutableMap.of();
     }
 
     private SymbolAliases(Map<String, SymbolReference> aliases)
@@ -85,9 +85,8 @@ public final class SymbolAliases
         return getOptional(alias).orElseThrow(() -> new IllegalStateException(format("missing expression for alias %s", alias)));
     }
 
-    public Optional<SymbolReference> getOptional(String inputAlias)
+    public Optional<SymbolReference> getOptional(String alias)
     {
-        String alias = inputAlias;
         alias = toKey(alias);
         SymbolReference result = map.get(alias);
         return Optional.ofNullable(result);
@@ -214,19 +213,18 @@ public final class SymbolAliases
 
         public Builder put(String alias, SymbolReference symbolReference)
         {
-            String newAlias = alias;
-            requireNonNull(newAlias, "alias is null");
+            requireNonNull(alias, "alias is null");
             requireNonNull(symbolReference, "symbolReference is null");
 
-            newAlias = toKey(newAlias);
+            alias = toKey(alias);
 
             // Special case to allow identity binding (i.e. "ALIAS" -> expression("ALIAS"))
-            if (bindings.containsKey(newAlias) && bindings.get(newAlias).equals(symbolReference)) {
+            if (bindings.containsKey(alias) && bindings.get(alias).equals(symbolReference)) {
                 return this;
             }
 
-            checkState(!bindings.containsKey(newAlias), "Alias '%s' already bound to expression '%s'. Tried to rebind to '%s'", newAlias, bindings.get(newAlias), symbolReference);
-            bindings.put(newAlias, symbolReference);
+            checkState(!bindings.containsKey(alias), "Alias '%s' already bound to expression '%s'. Tried to rebind to '%s'", alias, bindings.get(alias), symbolReference);
+            bindings.put(alias, symbolReference);
             return this;
         }
 

@@ -131,7 +131,6 @@ public class MongoMetadata
             }
             catch (NotFoundException e) {
                 // table disappeared during listing operation
-                log.debug("table disappeared during listing operation");
             }
         }
         return columns.build();

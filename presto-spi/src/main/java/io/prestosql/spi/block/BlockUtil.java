@@ -22,7 +22,7 @@ import static java.lang.Math.ceil;
 import static java.lang.String.format;
 import static java.util.Objects.requireNonNull;
 
-public final class BlockUtil
+final class BlockUtil
 {
     private static final double BLOCK_RESET_SKEW = 1.25;
 
@@ -34,7 +34,7 @@ public final class BlockUtil
     {
     }
 
-    public static void checkArrayRange(int[] array, int offset, int length)
+    static void checkArrayRange(int[] array, int offset, int length)
     {
         requireNonNull(array, "array is null");
         if (offset < 0 || length < 0 || offset + length > array.length) {
@@ -42,28 +42,28 @@ public final class BlockUtil
         }
     }
 
-    public static void checkValidRegion(int positionCount, int positionOffset, int length)
+    static void checkValidRegion(int positionCount, int positionOffset, int length)
     {
         if (positionOffset < 0 || length < 0 || positionOffset + length > positionCount) {
             throw new IndexOutOfBoundsException(format("Invalid position %s and length %s in block with %s positions", positionOffset, length, positionCount));
         }
     }
 
-    public static void checkValidPositions(boolean[] positions, int positionCount)
+    static void checkValidPositions(boolean[] positions, int positionCount)
     {
         if (positions.length != positionCount) {
             throw new IllegalArgumentException(format("Invalid positions array size %d, actual position count is %d", positions.length, positionCount));
         }
     }
 
-    public static void checkValidPosition(int position, int positionCount)
+    static void checkValidPosition(int position, int positionCount)
     {
         if (position < 0 || position >= positionCount) {
             throw new IllegalArgumentException(format("Invalid position %s in block with %s positions", position, positionCount));
         }
     }
 
-    public static int calculateNewArraySize(int currentSize)
+    static int calculateNewArraySize(int currentSize)
     {
         // grow array by 50%
         long newSize = (long) currentSize + (currentSize >> 1);
@@ -81,7 +81,7 @@ public final class BlockUtil
         return (int) newSize;
     }
 
-    public static int calculateBlockResetSize(int currentSize)
+    static int calculateBlockResetSize(int currentSize)
     {
         long newSize = (long) ceil(currentSize * BLOCK_RESET_SKEW);
 
@@ -95,7 +95,7 @@ public final class BlockUtil
         return (int) newSize;
     }
 
-    public static int calculateBlockResetBytes(int currentBytes)
+    static int calculateBlockResetBytes(int currentBytes)
     {
         long newBytes = (long) ceil(currentBytes * BLOCK_RESET_SKEW);
         if (newBytes > MAX_ARRAY_SIZE) {
@@ -110,7 +110,7 @@ public final class BlockUtil
      * with the first value set to 0.
      * If the range matches the entire <code>offsets</code> array,  the input array will be returned.
      */
-    public static int[] compactOffsets(int[] offsets, int index, int length)
+    static int[] compactOffsets(int[] offsets, int index, int length)
     {
         if (index == 0 && offsets.length == length + 1) {
             return offsets;
@@ -128,7 +128,7 @@ public final class BlockUtil
      * If the range matches the entire slice, the input slice will be returned.
      * Otherwise, a copy will be returned.
      */
-    public static Slice compactSlice(Slice slice, int index, int length)
+    static Slice compactSlice(Slice slice, int index, int length)
     {
         if (slice.isCompact() && index == 0 && length == slice.length()) {
             return slice;
@@ -141,7 +141,7 @@ public final class BlockUtil
      * If the range matches the entire array, the input array will be returned.
      * Otherwise, a copy will be returned.
      */
-    public static boolean[] compactArray(boolean[] array, int index, int length)
+    static boolean[] compactArray(boolean[] array, int index, int length)
     {
         if (index == 0 && length == array.length) {
             return array;
@@ -149,7 +149,7 @@ public final class BlockUtil
         return Arrays.copyOfRange(array, index, index + length);
     }
 
-    public static byte[] compactArray(byte[] array, int index, int length)
+    static byte[] compactArray(byte[] array, int index, int length)
     {
         if (index == 0 && length == array.length) {
             return array;
@@ -157,7 +157,7 @@ public final class BlockUtil
         return Arrays.copyOfRange(array, index, index + length);
     }
 
-    public static short[] compactArray(short[] array, int index, int length)
+    static short[] compactArray(short[] array, int index, int length)
     {
         if (index == 0 && length == array.length) {
             return array;
@@ -165,7 +165,7 @@ public final class BlockUtil
         return Arrays.copyOfRange(array, index, index + length);
     }
 
-    public static int[] compactArray(int[] array, int index, int length)
+    static int[] compactArray(int[] array, int index, int length)
     {
         if (index == 0 && length == array.length) {
             return array;
@@ -173,7 +173,7 @@ public final class BlockUtil
         return Arrays.copyOfRange(array, index, index + length);
     }
 
-    public static long[] compactArray(long[] array, int index, int length)
+    static long[] compactArray(long[] array, int index, int length)
     {
         if (index == 0 && length == array.length) {
             return array;
@@ -181,7 +181,7 @@ public final class BlockUtil
         return Arrays.copyOfRange(array, index, index + length);
     }
 
-    public static int countUsedPositions(boolean[] positions)
+    static int countUsedPositions(boolean[] positions)
     {
         int used = 0;
         for (boolean position : positions) {
@@ -196,7 +196,7 @@ public final class BlockUtil
      * Returns <tt>true</tt> if the two specified arrays contain the same object in every position.
      * Unlike the {@link Arrays#equals(Object[], Object[])} method, this method compares using reference equals.
      */
-    public static boolean arraySame(Object[] array1, Object[] array2)
+    static boolean arraySame(Object[] array1, Object[] array2)
     {
         if (array1 == null || array2 == null || array1.length != array2.length) {
             throw new IllegalArgumentException("array1 and array2 cannot be null and should have same length");

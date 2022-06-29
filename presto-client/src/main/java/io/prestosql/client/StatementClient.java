@@ -74,8 +74,6 @@ public interface StatementClient
 
     void cancelLeafStage();
 
-    boolean isTimeInMilliseconds();
-
     @Override
     void close();
 

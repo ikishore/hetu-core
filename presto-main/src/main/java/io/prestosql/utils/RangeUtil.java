@@ -62,10 +62,12 @@ public class RangeUtil
             return -1;
         }
 
-      // get the index of middle element of arr[low..high]
-        mid = (low + high) / 2;
+      /* get the index of middle element
+         of arr[low..high]*/
+        mid = (low + high) / 2;  /* low + (high - low)/2 */
 
-      // If x is same as middle element, then return mid
+      /* If x is same as middle element,
+         then return mid */
         if (getOrder(arr.get(mid)) == x) {
             return mid;
         }
@@ -95,7 +97,8 @@ public class RangeUtil
         }
     }
 
-    // Function to get index of floor of x in arr[low..high]
+    /* Function to get index of floor of x in
+    arr[low..high] */
     public static int floorSearch(List<IndexMetadata> arr, int low, int high, long x)
             throws Exception
     {

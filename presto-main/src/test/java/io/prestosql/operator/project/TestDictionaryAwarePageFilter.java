@@ -179,9 +179,8 @@ public class TestDictionaryAwarePageFilter
         return new DictionaryAwarePageFilter(new TestDictionaryFilter(filterRange, expectedType));
     }
 
-    private static void testFilter(DictionaryAwarePageFilter filter, Block inputBlock, boolean filterRange)
+    private static void testFilter(DictionaryAwarePageFilter filter, Block block, boolean filterRange)
     {
-        Block block = inputBlock;
         IntSet actualSelectedPositions = toSet(filter.filter(null, new Page(block)));
 
         block = block.getLoadedBlock();
@@ -237,7 +236,7 @@ public class TestDictionaryAwarePageFilter
 
         public TestDictionaryFilter(boolean filterRange)
         {
-            this(filterRange, null);
+            this.filterRange = filterRange;
         }
 
         public TestDictionaryFilter(boolean filterRange, Class<? extends Block> expectedType)

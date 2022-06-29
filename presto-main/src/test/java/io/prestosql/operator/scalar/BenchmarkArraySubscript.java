@@ -23,8 +23,6 @@ import io.prestosql.spi.block.ArrayBlock;
 import io.prestosql.spi.block.Block;
 import io.prestosql.spi.block.BlockBuilder;
 import io.prestosql.spi.block.DictionaryBlock;
-import io.prestosql.spi.connector.QualifiedObjectName;
-import io.prestosql.spi.function.BuiltInFunctionHandle;
 import io.prestosql.spi.function.FunctionKind;
 import io.prestosql.spi.function.Signature;
 import io.prestosql.spi.relation.CallExpression;
@@ -139,14 +137,14 @@ public class BenchmarkArraySubscript
             ImmutableList.Builder<RowExpression> projectionsBuilder = ImmutableList.builder();
 
             Signature signature = new Signature(
-                    QualifiedObjectName.valueOfDefaultFunction("$operator$" + SUBSCRIPT.name()),
+                    "$operator$" + SUBSCRIPT.name(),
                     FunctionKind.SCALAR,
                     arrayType.getElementType().getTypeSignature(),
                     arrayType.getTypeSignature(),
                     BIGINT.getTypeSignature());
             for (int i = 0; i < arraySize; i++) {
                 projectionsBuilder.add(new CallExpression(
-                        signature.getName().getObjectName(), new BuiltInFunctionHandle(signature),
+                        signature,
                         arrayType.getElementType(),
                         ImmutableList.of(field(0, arrayType), constant((long) i + 1, BIGINT)), Optional.empty()));
             }
@@ -169,9 +167,9 @@ public class BenchmarkArraySubscript
         private static Block createArrayBlock(int positionCount, Block elementsBlock)
         {
             int[] offsets = new int[positionCount + 1];
-            int blockArraySize = elementsBlock.getPositionCount() / positionCount;
+            int arraySize = elementsBlock.getPositionCount() / positionCount;
             for (int i = 0; i < offsets.length; i++) {
-                offsets[i] = blockArraySize * i;
+                offsets[i] = arraySize * i;
             }
             return ArrayBlock.fromElementBlock(positionCount, Optional.empty(), offsets, elementsBlock);
         }

@@ -20,14 +20,12 @@ public class ScalarHeader
     private final Optional<String> description;
     private final boolean hidden;
     private final boolean deterministic;
-    private final boolean calledOnNullInput;
 
-    public ScalarHeader(Optional<String> description, boolean hidden, boolean deterministic, boolean calledOnNullInput)
+    public ScalarHeader(Optional<String> description, boolean hidden, boolean deterministic)
     {
         this.description = description;
         this.hidden = hidden;
         this.deterministic = deterministic;
-        this.calledOnNullInput = calledOnNullInput;
     }
 
     public Optional<String> getDescription()
@@ -43,10 +41,5 @@ public class ScalarHeader
     public boolean isDeterministic()
     {
         return deterministic;
-    }
-
-    public boolean isCalledOnNullInput()
-    {
-        return calledOnNullInput;
     }
 }

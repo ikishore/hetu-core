@@ -14,7 +14,6 @@
 package io.prestosql.operator;
 
 import io.prestosql.metadata.Split;
-import io.prestosql.spi.Page;
 import io.prestosql.spi.connector.UpdatablePageSource;
 import io.prestosql.spi.plan.PlanNodeId;
 
@@ -24,18 +23,6 @@ import java.util.function.Supplier;
 public interface SourceOperator
         extends Operator
 {
-    @Override
-    default void addInput(Page page)
-    {
-        throw new UnsupportedOperationException(getClass().getName() + " can not take input");
-    }
-
-    @Override
-    default boolean needsInput()
-    {
-        return false;
-    }
-
     PlanNodeId getSourceId();
 
     Supplier<Optional<UpdatablePageSource>> addSplit(Split split);

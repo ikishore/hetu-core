@@ -1,5 +1,5 @@
 /*
- * Copyright (C) 2018-2021. Huawei Technologies Co., Ltd. All rights reserved.
+ * Copyright (C) 2018-2020. Huawei Technologies Co., Ltd. All rights reserved.
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
  * You may obtain a copy of the License at
@@ -76,32 +76,32 @@ public class TestCachedSqlQueryExecution
             .setSchema("tiny")
             .setIdentity(new Identity("test_current_user", Optional.empty()))
             .setPath(new SqlPath(Optional.of("testPath")))
+            .setSystemProperty("legacy_timestamp", String.valueOf(true))
             .setSystemProperty("enable_execution_plan_cache", String.valueOf(true))
-            .setSystemProperty("skip_attaching_stats_with_plan", String.valueOf(false))
             .setTimeZoneKey(getTimeZoneKey("+06:09"))
             .build();
     private static final Session DEFAULT_SESSION = testSessionBuilder()
             .setCatalog("test")
             .setSchema("default")
+            .setSystemProperty("legacy_timestamp", String.valueOf(true))
             .setSystemProperty("enable_execution_plan_cache", String.valueOf(true))
-            .setSystemProperty("skip_attaching_stats_with_plan", String.valueOf(false))
             .setTimeZoneKey(getTimeZoneKey("+06:09"))
             .build();
 
     private static final Session CACHING_DISABLED_SESSION = testSessionBuilder()
             .setCatalog("tpch")
             .setSchema("tiny")
+            .setSystemProperty("legacy_timestamp", String.valueOf(true))
             .setTimeZoneKey(getTimeZoneKey("+06:09"))
             .setSystemProperty("enable_execution_plan_cache", String.valueOf(false))
-            .setSystemProperty("skip_attaching_stats_with_plan", String.valueOf(false))
             .build();
 
     private static final Session DEFAULT_SESSION_WITH_CHANGED_PROPERTY = testSessionBuilder()
             .setCatalog("tpch")
             .setSchema("tiny")
+            .setSystemProperty("legacy_timestamp", String.valueOf(true))
             .setTimeZoneKey(getTimeZoneKey("+06:09"))
             .setSystemProperty("enable_execution_plan_cache", String.valueOf(true))
-            .setSystemProperty("skip_attaching_stats_with_plan", String.valueOf(false))
             .setSystemProperty(SystemSessionProperties.JOIN_DISTRIBUTION_TYPE, FeaturesConfig.JoinDistributionType.AUTOMATIC.toString())
             .build();
 

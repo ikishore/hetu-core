@@ -1,5 +1,5 @@
 /*
- * Copyright (C) 2018-2021. Huawei Technologies Co., Ltd. All rights reserved.
+ * Copyright (C) 2018-2020. Huawei Technologies Co., Ltd. All rights reserved.
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
  * You may obtain a copy of the License at
@@ -18,7 +18,6 @@ package io.hetu.core.seedstore.filebased;
 import io.hetu.core.filesystem.HetuLocalFileSystemClient;
 import io.hetu.core.filesystem.LocalConfig;
 import io.prestosql.spi.seedstore.Seed;
-import io.prestosql.spi.seedstore.SeedStoreSubType;
 import org.testng.annotations.AfterMethod;
 import org.testng.annotations.BeforeMethod;
 import org.testng.annotations.Test;
@@ -57,7 +56,7 @@ public class TestFileBasedSeedStore
         Map<String, String> config = new HashMap<>(0);
         config.put(FileBasedSeedConstants.SEED_STORE_FILESYSTEM_DIR, rootDir);
         filebasedSeedStoreFactory = new FileBasedSeedStoreFactory();
-        seedStore = (FileBasedSeedStore) filebasedSeedStoreFactory.create("filebased", SeedStoreSubType.HAZELCAST,
+        seedStore = (FileBasedSeedStore) filebasedSeedStoreFactory.create("filebased",
                 new HetuLocalFileSystemClient(new LocalConfig(new Properties()), Paths.get(rootDir)), config);
         seedStore.setName(clusterName);
     }
@@ -86,8 +85,8 @@ public class TestFileBasedSeedStore
         String ip2 = "10.0.0.2";
         final long timestamp2 = 2000L;
         final int resultSize = 2;
-        Seed seed1 = new FileBasedSeed(ip1, timestamp1);
-        Seed seed2 = new FileBasedSeed(ip2, timestamp2);
+        Seed seed1 = new FileBasedSeed.FileBasedSeedBuilder(ip1).setTimestamp(timestamp1).build();
+        Seed seed2 = new FileBasedSeed.FileBasedSeedBuilder(ip2).setTimestamp(timestamp2).build();
 
         // add operation
         seedStore.add(Lists.newArrayList(seed1, seed2));
@@ -111,7 +110,7 @@ public class TestFileBasedSeedStore
 
         // overwrite operation
         final long updateTimestamp2 = 3000L;
-        Seed seed2Update = new FileBasedSeed(ip2, updateTimestamp2);
+        Seed seed2Update = new FileBasedSeed.FileBasedSeedBuilder(ip2).setTimestamp(updateTimestamp2).build();
         seedStore.add(Lists.newArrayList(seed2Update));
         results = seedStore.get();
         assertEquals(results.size(), 1);

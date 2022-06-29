@@ -40,7 +40,7 @@ public class TestWindowFilterPushDown
                 "%s() OVER (PARTITION BY suppkey ORDER BY orderkey) partition_number FROM lineitem LIMIT 10";
 
         for (RankingFunction rankingFunction : RankingFunction.values()) {
-            @Language("SQL") String sql = format(sqlFormat, rankingFunction.getName().getObjectName());
+            @Language("SQL") String sql = format(sqlFormat, rankingFunction.getValue().getName());
 
             assertPlanWithSession(
                     sql,
@@ -72,7 +72,7 @@ public class TestWindowFilterPushDown
                 "WHERE partition_row_number < 10";
 
         for (RankingFunction rankingFunction : RankingFunction.values()) {
-            @Language("SQL") String sql = format(sqlFormat, rankingFunction.getName().getObjectName());
+            @Language("SQL") String sql = format(sqlFormat, rankingFunction.getValue().getName());
             assertPlanWithSession(
                     sql,
                     optimizeTopNRankingNumber(true),

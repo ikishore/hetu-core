@@ -18,7 +18,7 @@ import com.google.common.collect.ImmutableMap;
 import io.prestosql.matching.Captures;
 import io.prestosql.matching.Pattern;
 import io.prestosql.metadata.Metadata;
-import io.prestosql.spi.function.StandardFunctionResolution;
+import io.prestosql.spi.function.Signature;
 import io.prestosql.spi.plan.AggregationNode;
 import io.prestosql.spi.plan.AggregationNode.Aggregation;
 import io.prestosql.spi.plan.Assignments;
@@ -26,13 +26,11 @@ import io.prestosql.spi.plan.LimitNode;
 import io.prestosql.spi.plan.PlanNode;
 import io.prestosql.spi.plan.ProjectNode;
 import io.prestosql.spi.plan.Symbol;
-import io.prestosql.spi.relation.CallExpression;
 import io.prestosql.sql.planner.iterative.Rule;
 import io.prestosql.sql.planner.optimizations.PlanNodeDecorrelator;
 import io.prestosql.sql.planner.plan.ApplyNode;
 import io.prestosql.sql.planner.plan.AssignmentUtils;
 import io.prestosql.sql.planner.plan.LateralJoinNode;
-import io.prestosql.sql.relational.FunctionResolution;
 import io.prestosql.sql.tree.BooleanLiteral;
 import io.prestosql.sql.tree.Cast;
 import io.prestosql.sql.tree.CoalesceExpression;
@@ -85,12 +83,12 @@ public class TransformExistsApplyToLateralNode
     private static final Pattern<ApplyNode> PATTERN = applyNode();
 
     private static final QualifiedName COUNT = QualifiedName.of("count");
-    private final StandardFunctionResolution functionResolution;
+    private final Signature countSignature;
 
     public TransformExistsApplyToLateralNode(Metadata metadata)
     {
         requireNonNull(metadata, "metadata is null");
-        this.functionResolution = new FunctionResolution(metadata.getFunctionAndTypeManager());
+        countSignature = metadata.resolveFunction(COUNT, ImmutableList.of());
     }
 
     @Override
@@ -168,12 +166,7 @@ public class TransformExistsApplyToLateralNode
                                 context.getIdAllocator().getNextId(),
                                 parent.getSubquery(),
                                 ImmutableMap.of(count, new Aggregation(
-                                        new CallExpression(
-                                                "count",
-                                                functionResolution.countFunction(),
-                                                BIGINT,
-                                                ImmutableList.of(),
-                                                Optional.empty()),
+                                        countSignature,
                                         ImmutableList.of(),
                                         false,
                                         Optional.empty(),
@@ -183,8 +176,6 @@ public class TransformExistsApplyToLateralNode
                                 ImmutableList.of(),
                                 AggregationNode.Step.SINGLE,
                                 Optional.empty(),
-                                Optional.empty(),
-                                AggregationNode.AggregationType.HASH,
                                 Optional.empty()),
                         Assignments.of(exists, castToRowExpression(new ComparisonExpression(GREATER_THAN, toSymbolReference(count), new Cast(new LongLiteral("0"), BIGINT.toString()))))),
                 parent.getCorrelation(),

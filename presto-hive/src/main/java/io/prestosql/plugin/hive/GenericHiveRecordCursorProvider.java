@@ -22,12 +22,12 @@ import org.apache.hadoop.conf.Configuration;
 import org.apache.hadoop.fs.Path;
 import org.apache.hadoop.io.Writable;
 import org.apache.hadoop.mapred.RecordReader;
+import org.joda.time.DateTimeZone;
 
 import javax.inject.Inject;
 
 import java.io.IOException;
 import java.util.List;
-import java.util.Map;
 import java.util.Optional;
 import java.util.Properties;
 
@@ -56,9 +56,9 @@ public class GenericHiveRecordCursorProvider
             Properties schema,
             List<HiveColumnHandle> columns,
             TupleDomain<HiveColumnHandle> effectivePredicate,
+            DateTimeZone hiveStorageTimeZone,
             TypeManager typeManager,
-            boolean s3SelectPushdownEnabled,
-            Map<String, String> customSplitInfo)
+            boolean s3SelectPushdownEnabled)
     {
         // make sure the FileSystem is created with the proper Configuration object
         try {
@@ -69,7 +69,7 @@ public class GenericHiveRecordCursorProvider
         }
 
         return hdfsEnvironment.doAs(session.getUser(), () -> {
-            RecordReader<?, ?> recordReader = HiveUtil.createRecordReader(configuration, path, start, length, schema, columns, customSplitInfo);
+            RecordReader<?, ?> recordReader = HiveUtil.createRecordReader(configuration, path, start, length, schema, columns);
 
             return Optional.of(new GenericHiveRecordCursor<>(
                     configuration,
@@ -78,6 +78,7 @@ public class GenericHiveRecordCursorProvider
                     length,
                     schema,
                     columns,
+                    hiveStorageTimeZone,
                     typeManager));
         });
     }

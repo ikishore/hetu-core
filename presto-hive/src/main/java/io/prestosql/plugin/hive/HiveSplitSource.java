@@ -81,7 +81,7 @@ import static java.util.Objects.requireNonNull;
 class HiveSplitSource
         implements ConnectorSplitSource
 {
-    private static final Logger log = Logger.get(HiveSplitSource.class);
+    private static final Logger log = Logger.get(HiveSplit.class);
 
     private final String queryId;
     private final String databaseName;
@@ -102,7 +102,7 @@ class HiveSplitSource
     private final CounterStat highMemorySplitSourceCounter;
     private final AtomicBoolean loggedHighMemoryWarning = new AtomicBoolean();
 
-    private final Supplier<List<Set<DynamicFilter>>> dynamicFilterSupplier;
+    private final Supplier<Set<DynamicFilter>> dynamicFilterSupplier;
     private final Set<TupleDomain<ColumnMetadata>> userDefinedCachePredicates;
     private final boolean isSplitFilteringEnabled;
 
@@ -121,7 +121,7 @@ class HiveSplitSource
             HiveSplitLoader splitLoader,
             AtomicReference<State> stateReference,
             CounterStat highMemorySplitSourceCounter,
-            Supplier<List<Set<DynamicFilter>>> dynamicFilterSupplier,
+            Supplier<Set<DynamicFilter>> dynamicFilterSupplier,
             Set<TupleDomain<ColumnMetadata>> userDefinedCachedPredicates,
             TypeManager typeManager,
             HiveConfig hiveConfig,
@@ -160,13 +160,13 @@ class HiveSplitSource
             HiveSplitLoader splitLoader,
             Executor executor,
             CounterStat highMemorySplitSourceCounter,
-            Supplier<List<Set<DynamicFilter>>> dynamicFilterSupplier,
+            Supplier<Set<DynamicFilter>> dynamicFilterSupplier,
             Set<TupleDomain<ColumnMetadata>> userDefinedCachePredicates,
             TypeManager typeManager,
             HiveConfig hiveConfig,
             HiveStorageFormat hiveStorageFormat)
     {
-        AtomicReference<State> localStateReference = new AtomicReference<>(State.initial());
+        AtomicReference<State> stateReference = new AtomicReference<>(State.initial());
         return new HiveSplitSource(
                 session,
                 databaseName,
@@ -205,7 +205,7 @@ class HiveSplitSource
                 maxInitialSplits,
                 maxOutstandingSplitsSize,
                 splitLoader,
-                localStateReference,
+                stateReference,
                 highMemorySplitSourceCounter,
                 dynamicFilterSupplier,
                 userDefinedCachePredicates,
@@ -225,13 +225,13 @@ class HiveSplitSource
             HiveSplitLoader splitLoader,
             Executor executor,
             CounterStat highMemorySplitSourceCounter,
-            Supplier<List<Set<DynamicFilter>>> dynamicFilterSupplier,
+            Supplier<Set<DynamicFilter>> dynamicFilterSupplier,
             Set<TupleDomain<ColumnMetadata>> userDefinedCachePredicates,
             TypeManager typeManager,
             HiveConfig hiveConfig,
             HiveStorageFormat hiveStorageFormat)
     {
-        AtomicReference<State> localStateReference = new AtomicReference<>(State.initial());
+        AtomicReference<State> stateReference = new AtomicReference<>(State.initial());
         return new HiveSplitSource(
                 session,
                 databaseName,
@@ -290,7 +290,7 @@ class HiveSplitSource
                 maxInitialSplits,
                 maxOutstandingSplitsSize,
                 splitLoader,
-                localStateReference,
+                stateReference,
                 highMemorySplitSourceCounter,
                 dynamicFilterSupplier,
                 userDefinedCachePredicates,
@@ -387,6 +387,7 @@ class HiveSplitSource
         }
 
         OptionalInt bucketNumber = toBucketNumber(partitionHandle);
+        System.out.println(bucketNumber + " " + partitionHandle.toString());
         ListenableFuture<List<ConnectorSplit>> future = queues.borrowBatchAsync(bucketNumber, maxSize, internalSplits -> {
             ImmutableList.Builder<InternalHiveSplit> splitsToInsertBuilder = ImmutableList.builder();
             ImmutableList.Builder<ConnectorSplit> resultBuilder = ImmutableList.builder();
@@ -403,6 +404,8 @@ class HiveSplitSource
                     splitBytes = internalSplit.getEnd() - internalSplit.getStart();
                 }
                 boolean splitCacheable = matchesUserDefinedCachedPredicates(internalSplit.getPartitionKeys());
+
+                System.out.println("Hive split: " + internalSplit.getBucketNumber());
 
                 resultBuilder.add(HiveSplitWrapper.wrap(new HiveSplit(
                         databaseName,
@@ -423,8 +426,7 @@ class HiveSplitSource
                         internalSplit.isS3SelectPushdownEnabled(),
                         internalSplit.getDeleteDeltaLocations(),
                         internalSplit.getStartRowOffsetOfFile(),
-                        splitCacheable,
-                        internalSplit.getCustomSplitInfo())));
+                        splitCacheable)));
 
                 internalSplit.increaseStart(splitBytes);
 
@@ -510,7 +512,7 @@ class HiveSplitSource
                         nullableValue = NullableValue.asNull(columnMetadata.getType());
                     }
                     else {
-                        nullableValue = HiveUtil.parsePartitionValue(columnMetadata.getName(), partitionStringValue, columnMetadata.getType());
+                        nullableValue = HiveUtil.parsePartitionValue(columnMetadata.getName(), partitionStringValue, columnMetadata.getType(), hiveConfig.getDateTimeZone());
                     }
                     return domain.includesNullableValue(nullableValue.getValue());
                 });
@@ -652,13 +654,13 @@ class HiveSplitSource
     }
 
     @Override
-    public List<ConnectorSplit> groupSmallSplits(List<ConnectorSplit> splitList, int maxGroupSize)
+    public List<ConnectorSplit> groupSmallSplits(List<ConnectorSplit> splitList)
     {
         if (splitList.isEmpty()) {
             return splitList;
         }
 
-        int maxSmallSplitsCanBeGrouped = Math.max(hiveConfig.getMaxSplitsToGroup(), maxGroupSize);
+        int maxSmallSplitsCanBeGrouped = hiveConfig.getMaxSplitsToGroup();
         if (maxSmallSplitsCanBeGrouped < 2) {
             return splitList;
         }
@@ -708,12 +710,13 @@ class HiveSplitSource
                 List<HiveSplit> locationBaseHiveSplits = new ArrayList<>();
                 hostAddressHiveSplits.get(hostAddressText).forEach(split1 -> locationBaseHiveSplits.add(split1));
 
-                // sort in descending order by file size
+                //4> sort in descending order by file size
+                //locationBaseHiveSplits.sort(new HiveSplitSortBySize());
                 locationBaseHiveSplits.sort((split1, split2) -> ((int) (split2.getFileSize() - split1.getFileSize())));
 
                 int numberOfSplitsPerLocation = locationBaseHiveSplits.size();
 
-                // when number of flies are less than number of replication factor,splits are grouped in to single group.
+                //when number of flies are less than number of replication factor,splits are grouped in to single group.
                 int avgSplitsPerNode = ((replicationFactor != 0) && (numberOfSplitsPerLocation >= replicationFactor)) ? numberOfSplitsPerLocation / replicationFactor : numberOfSplitsPerLocation;
 
                 List<HiveSplit> groupedHiveSplit = new ArrayList<>();

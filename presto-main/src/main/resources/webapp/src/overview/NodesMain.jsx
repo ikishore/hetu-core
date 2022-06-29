@@ -1,5 +1,5 @@
 /*
- * Copyright (C) 2018-2021. Huawei Technologies Co., Ltd. All rights reserved.
+ * Copyright (C) 2018-2020. Huawei Technologies Co., Ltd. All rights reserved.
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
  * You may obtain a copy of the License at
@@ -16,7 +16,7 @@ import React from "react";
 import Header from '../queryeditor/components/Header';
 import Footer from "../queryeditor/components/Footer";
 import StatusFooter from "../queryeditor/components/StatusFooter";
-import {formatDataSizeBytes} from "../utils";
+import { formatDataSizeBytes } from "../utils";
 import NavigationMenu from "../NavigationMenu";
 import OverviewStore from "../overview/OverviewStore";
 import OverviewActions from "./OverviewActions";
@@ -30,7 +30,6 @@ class NodesMain extends React.Component {
         this._onChange = this._onChange.bind(this);
         this.lineDatas = this.lineDatas.bind(this);
     }
-
     componentDidMount() {
         OverviewStore.listen(this._onChange);
         this.lineDatas();
@@ -54,23 +53,14 @@ class NodesMain extends React.Component {
         if (data.memoryData) {
             Object.keys(data.memoryData).map(key => {
                 let obj = {};
-                obj.id = data.memoryData[key].id;
-                obj.ip = key;
-                obj.role = data.memoryData[key].role;
+                obj.id = key.slice(0, key.indexOf(" "));
+                obj.ip = key.slice(key.indexOf("[") + 1, key.indexOf("]"))
+                obj.role = key.slice(key.indexOf("]") + 2);
                 obj.count = data.memoryData[key].availableProcessors;
                 let totalMemory = data.memoryData[key].totalNodeMemory.slice(0, -1);
-                obj.nodeMemory = Number(totalMemory);
-                obj.freeMemory = Number(totalMemory);
-                obj.usedMemory = 0;
-                if (typeof (data.memoryData[key].pools.general) != "undefined"){
-                    obj.freeMemory = 0;
-                    obj.freeMemory += data.memoryData[key].pools.general.freeBytes;
-                    obj.usedMemory += data.memoryData[key].pools.general.reservedBytes;
-                    if (typeof (data.memoryData[key].pools.reserved) != "undefined"){
-                        obj.freeMemory += data.memoryData[key].pools.reserved.freeBytes;
-                        obj.usedMemory += data.memoryData[key].pools.reserved.reservedBytes;
-                    }
-                }
+                obj.nodeMemory = totalMemory;
+                obj.freeMemory = data.memoryData[key].pools.general.freeBytes + (data.memoryData[key].pools.reserved ? data.memoryData[key].pools.reserved.freeBytes : 0);
+                obj.usedMemory = data.memoryData[key].pools.general.reservedBytes + (data.memoryData[key].pools.reserved ? data.memoryData[key].pools.reserved.reservedBytes : 0);
                 obj.state = data.memoryData[key].state;
                 table.push(obj);
             })
@@ -84,40 +74,40 @@ class NodesMain extends React.Component {
         return (
             <div>
                 <div className='flex flex-row flex-initial header'>
-                    <Header/>
+                    <Header />
                 </div>
                 <div className='nodes'>
-                    <NavigationMenu active={"nodes"}/>
+                    <NavigationMenu active={"nodes"} />
                     <div className="line-right">
                         <div className="line-show">
                             <div className="summary-table">
                                 <h3>Cluster Nodes</h3>
                                 <table className="table">
                                     <thead>
-                                    <tr>
-                                        <th>ID</th>
-                                        <th>IP</th>
-                                        <th>Role</th>
-                                        <th>CPU Count</th>
-                                        <th>Usable Node Memory</th>
-                                        <th>Used Memory</th>
-                                        <th>Free Memory</th>
-                                        <th>State</th>
-                                    </tr>
+                                        <tr>
+                                            <th>ID</th>
+                                            <th>IP</th>
+                                            <th>Role</th>
+                                            <th>CPU Count</th>
+                                            <th>Usable Node Memory</th>
+                                            <th>Used Memory</th>
+                                            <th>Free Memory</th>
+                                            <th>State</th>
+                                        </tr>
                                     </thead>
                                     <tbody>
-                                    {this.state.tableData.map((ele, index) => (
-                                        <tr key={index}>
-                                            <td>{ele.id}</td>
-                                            <td>{ele.ip}</td>
-                                            <td>{ele.role}</td>
-                                            <td>{ele.count}</td>
-                                            <td>{formatDataSizeBytes(ele.nodeMemory)}</td>
-                                            <td>{formatDataSizeBytes(ele.usedMemory)}</td>
-                                            <td>{formatDataSizeBytes(ele.freeMemory)}</td>
-                                            <td>{ele.state}</td>
-                                        </tr>
-                                    ))}
+                                        {this.state.tableData.map((ele, index) => (
+                                            <tr key={index}>
+                                                <td>{ele.id}</td>
+                                                <td>{ele.ip}</td>
+                                                <td>{ele.role}</td>
+                                                <td>{ele.count}</td>
+                                                <td>{formatDataSizeBytes(ele.nodeMemory)}</td>
+                                                <td>{formatDataSizeBytes(ele.usedMemory)}</td>
+                                                <td>{formatDataSizeBytes(ele.freeMemory)}</td>
+                                                <td>{ele.state}</td>
+                                            </tr>
+                                        ))}
                                     </tbody>
                                 </table>
                             </div>
@@ -125,10 +115,10 @@ class NodesMain extends React.Component {
                     </div>
                 </div>
                 <div className='flex flex-row flex-initial statusFooter'>
-                    <StatusFooter/>
+                    <StatusFooter />
                 </div>
                 <div className='flex flex-row flex-initial footer'>
-                    <Footer/>
+                    <Footer />
                 </div>
             </div>
         )

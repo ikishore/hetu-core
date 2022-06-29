@@ -28,7 +28,6 @@ import io.prestosql.spi.block.Block;
 import io.prestosql.spi.block.LazyBlock;
 import io.prestosql.spi.block.VariableWidthBlock;
 import io.prestosql.spi.connector.ConnectorSession;
-import io.prestosql.spi.function.BuiltInFunctionHandle;
 import io.prestosql.spi.relation.CallExpression;
 import io.prestosql.spi.type.Type;
 import io.prestosql.sql.gen.ExpressionProfiler;
@@ -391,8 +390,8 @@ public class TestPageProcessor
     @Test
     public void testExpressionProfiler()
     {
-        CallExpression add10Expression = call(ADD.getFunctionName().toString(),
-                new BuiltInFunctionHandle(internalOperator(ADD, BIGINT.getTypeSignature(), ImmutableList.of(BIGINT.getTypeSignature(), BIGINT.getTypeSignature()))),
+        CallExpression add10Expression = call(
+                internalOperator(ADD, BIGINT.getTypeSignature(), ImmutableList.of(BIGINT.getTypeSignature(), BIGINT.getTypeSignature())),
                 BIGINT,
                 field(0, BIGINT),
                 constant(10L, BIGINT));

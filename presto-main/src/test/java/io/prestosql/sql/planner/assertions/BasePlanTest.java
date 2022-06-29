@@ -35,7 +35,6 @@ import org.intellij.lang.annotations.Language;
 import org.testng.annotations.AfterClass;
 import org.testng.annotations.BeforeClass;
 
-import java.io.IOException;
 import java.util.List;
 import java.util.Map;
 import java.util.function.Consumer;
@@ -75,17 +74,16 @@ public class BasePlanTest
 
         sessionProperties.entrySet().forEach(entry -> sessionBuilder.setSystemProperty(entry.getKey(), entry.getValue()));
 
-        LocalQueryRunner localQueryRunner = new LocalQueryRunner(sessionBuilder.build());
+        LocalQueryRunner queryRunner = new LocalQueryRunner(sessionBuilder.build());
 
-        localQueryRunner.createCatalog(localQueryRunner.getDefaultSession().getCatalog().get(),
+        queryRunner.createCatalog(queryRunner.getDefaultSession().getCatalog().get(),
                 new TpchConnectorFactory(1),
                 ImmutableMap.of());
-        return localQueryRunner;
+        return queryRunner;
     }
 
     @BeforeClass
     public final void initPlanTest()
-            throws IOException
     {
         queryRunner = queryRunnerSupplier.get();
     }
@@ -243,8 +241,7 @@ public class BasePlanTest
 
     public interface LocalQueryRunnerSupplier
     {
-        LocalQueryRunner get()
-                throws IOException;
+        LocalQueryRunner get();
     }
 
     protected Metadata getMetadata()

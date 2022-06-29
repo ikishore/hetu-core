@@ -35,8 +35,6 @@ import org.apache.hadoop.hive.serde2.typeinfo.PrimitiveTypeInfo;
 import org.apache.hadoop.hive.serde2.typeinfo.TypeInfo;
 import org.apache.hadoop.hive.serde2.typeinfo.VarcharTypeInfo;
 
-import java.util.Locale;
-
 import static io.prestosql.spi.StandardErrorCode.NOT_SUPPORTED;
 import static io.prestosql.spi.type.BigintType.BIGINT;
 import static io.prestosql.spi.type.BooleanType.BOOLEAN;
@@ -188,7 +186,7 @@ public class HiveTypeTranslator
                 return getVarcharTypeInfo(varcharType.getBoundedLength());
             }
             throw new PrestoException(NOT_SUPPORTED,
-                    String.format(Locale.ROOT, "Unsupported Hive type: %s. Supported VARCHAR types: VARCHAR(<=%d), VARCHAR.",
+                    String.format("Unsupported Hive type: %s. Supported VARCHAR types: VARCHAR(<=%d), VARCHAR.",
                             type, HiveVarchar.MAX_VARCHAR_LENGTH));
         }
         if (type instanceof CharType) {

@@ -304,9 +304,6 @@ public class SliceDictionarySelectiveColumnReader
 
         if (nullsAllowed) {
             outputPositionCount = positionCount;
-            if (outputPositions != positions) {
-                System.arraycopy(positions, 0, outputPositions, 0, outputPositionCount);
-            }
         }
         else {
             outputPositionCount = 0;
@@ -319,25 +316,18 @@ public class SliceDictionarySelectiveColumnReader
     private void skip(int items)
             throws IOException
     {
-        if (dataStream == null) {
-            if (presentStream != null) {
-                presentStream.skip(items);
+        if (presentStream != null) {
+            int dataToSkip = presentStream.countBitsSet(items);
+            if (inDictionaryStream != null) {
+                inDictionaryStream.skip(dataToSkip);
             }
+            dataStream.skip(dataToSkip);
         }
         else {
-            if (presentStream != null) {
-                int dataToSkip = presentStream.countBitsSet(items);
-                if (inDictionaryStream != null) {
-                    inDictionaryStream.skip(dataToSkip);
-                }
-                dataStream.skip(dataToSkip);
+            if (inDictionaryStream != null) {
+                inDictionaryStream.skip(items);
             }
-            else {
-                if (inDictionaryStream != null) {
-                    inDictionaryStream.skip(items);
-                }
-                dataStream.skip(items);
-            }
+            dataStream.skip(items);
         }
     }
 
@@ -472,7 +462,7 @@ public class SliceDictionarySelectiveColumnReader
     }
 
     @Override
-    public void startStripe(ZoneId fileTimeZone, InputStreamSources dictionaryStreamSources, ColumnMetadata<ColumnEncoding> encoding)
+    public void startStripe(ZoneId fileTimeZone, ZoneId storageTimeZone, InputStreamSources dictionaryStreamSources, ColumnMetadata<ColumnEncoding> encoding)
     {
         stripeDictionaryDataStreamSource = dictionaryStreamSources.getInputStreamSource(streamDescriptor, DICTIONARY_DATA, ByteArrayInputStream.class);
         stripeDictionaryLengthStreamSource = dictionaryStreamSources.getInputStreamSource(streamDescriptor, LENGTH, LongInputStream.class);

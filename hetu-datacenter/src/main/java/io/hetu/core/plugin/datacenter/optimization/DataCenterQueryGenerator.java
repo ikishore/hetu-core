@@ -1,5 +1,5 @@
 /*
- * Copyright (C) 2018-2021. Huawei Technologies Co., Ltd. All rights reserved.
+ * Copyright (C) 2018-2020. Huawei Technologies Co., Ltd. All rights reserved.
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
  * You may obtain a copy of the License at
@@ -26,14 +26,11 @@ import io.prestosql.plugin.jdbc.optimization.JdbcQueryGeneratorContext;
 import io.prestosql.spi.PrestoException;
 import io.prestosql.spi.connector.ColumnHandle;
 import io.prestosql.spi.connector.SchemaTableName;
-import io.prestosql.spi.function.FunctionMetadataManager;
-import io.prestosql.spi.function.StandardFunctionResolution;
 import io.prestosql.spi.metadata.TableHandle;
 import io.prestosql.spi.plan.PlanNode;
 import io.prestosql.spi.plan.PlanVisitor;
 import io.prestosql.spi.plan.TableScanNode;
 import io.prestosql.spi.predicate.TupleDomain;
-import io.prestosql.spi.relation.DeterminismEvaluator;
 import io.prestosql.spi.relation.RowExpressionService;
 import io.prestosql.spi.sql.expression.Selection;
 import io.prestosql.spi.type.TypeManager;
@@ -52,11 +49,11 @@ public class DataCenterQueryGenerator
         extends BaseJdbcQueryGenerator
 {
     @Inject
-    public DataCenterQueryGenerator(DataCenterConfig config, RowExpressionService rowExpressionService, FunctionMetadataManager functionManager, StandardFunctionResolution functionResolution, DeterminismEvaluator determinismEvaluator)
+    public DataCenterQueryGenerator(DataCenterConfig config, RowExpressionService rowExpressionService)
     {
-        super(new JdbcPushDownParameter("\"", false, config.getQueryPushDownModule(), functionResolution),
-                new BaseJdbcRowExpressionConverter(functionManager, functionResolution, rowExpressionService, determinismEvaluator),
-                new BaseJdbcSqlStatementWriter(new JdbcPushDownParameter("\"", false, config.getQueryPushDownModule(), functionResolution)));
+        super(new JdbcPushDownParameter("\"", false, config.getQueryPushDownModule()),
+                new BaseJdbcRowExpressionConverter(rowExpressionService),
+                new BaseJdbcSqlStatementWriter(new JdbcPushDownParameter("\"", false, config.getQueryPushDownModule())));
     }
 
     @Override
@@ -116,20 +113,6 @@ public class DataCenterQueryGenerator
                     .setSchemaTableName(Optional.of(new SchemaTableName(dcTableHandle.getSchemaName(), dcTableHandle.getTableName())))
                     .setSelections(selections)
                     .setFrom(Optional.of(table.toString()));
-
-            String catalogName = dcTableHandle.getCatalogName();
-            if (catalogName != null) {
-                contextBuilder.setRemoteCatalogName(catalogName);
-            }
-            String schemaName = dcTableHandle.getSchemaName();
-            if (schemaName != null) {
-                contextBuilder.setRemoteSchemaName(schemaName);
-            }
-            String tableName = dcTableHandle.getTableName();
-            if (tableName != null) {
-                contextBuilder.setRemoteTablename(tableName);
-            }
-
             // If LIMIT has been push down, add it to context
             if (dcTableHandle.getLimit().isPresent()) {
                 contextBuilder.setLimit(dcTableHandle.getLimit());

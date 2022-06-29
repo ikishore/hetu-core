@@ -36,16 +36,16 @@ public class HetuInMemoryStore
     @Override
     public void put(Entry entry)
     {
-        Long entryMaxAgeInMs = entry.getMaxAgeInMs();
+        Long maxAgeInMs = entry.getMaxAgeInMs();
         if (entry.getMaxAgeInMs() == null) {
             // when put entity, set the default max time.
             // the entity from remote, the max age time is null, so the entity can't be expired when the node of entity is disconnected.
             // then the max age time is reached, the entity will be expired.
             // default max age time is 30s.
-            entryMaxAgeInMs = this.maxAgeInMs;
+            maxAgeInMs = this.maxAgeInMs;
         }
 
-        Entry newEntry = new Entry(entry.getKey(), entry.getValue(), entry.getVersion(), entry.getTimestamp(), entryMaxAgeInMs);
+        Entry newEntry = new Entry(entry.getKey(), entry.getValue(), entry.getVersion(), entry.getTimestamp(), maxAgeInMs);
         super.put(newEntry);
     }
 }

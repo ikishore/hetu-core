@@ -136,9 +136,7 @@ public class SetFlatteningOptimizer
                     ImmutableList.of(),
                     node.getStep(),
                     node.getHashSymbol(),
-                    node.getGroupIdSymbol(),
-                    node.getAggregationType(),
-                    node.getFinalizeSymbol());
+                    node.getGroupIdSymbol());
         }
 
         private static boolean isDistinctOperator(AggregationNode node)

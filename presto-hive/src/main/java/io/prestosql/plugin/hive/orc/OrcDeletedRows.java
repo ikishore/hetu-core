@@ -146,7 +146,7 @@ public class OrcDeletedRows
                 return;
             }
 
-            int[] localValidPositions = new int[sourcePage.getPositionCount()];
+            int[] validPositions = new int[sourcePage.getPositionCount()];
             OrcAcidRowId sourcePageRowId = new OrcAcidRowId(0, 0, 0);
             int validPositionsIndex = 0;
             for (int pagePosition = 0; pagePosition < sourcePage.getPositionCount(); pagePosition++) {
@@ -159,12 +159,12 @@ public class OrcDeletedRows
                 }
                 boolean deleted = isDeleted(sourcePageRowId);
                 if (!deleted) {
-                    localValidPositions[validPositionsIndex] = pagePosition;
+                    validPositions[validPositionsIndex] = pagePosition;
                     validPositionsIndex++;
                 }
             }
             this.positionCount = validPositionsIndex;
-            this.validPositions = localValidPositions;
+            this.validPositions = validPositions;
             this.sourcePage = null;
         }
     }
@@ -178,7 +178,7 @@ public class OrcDeletedRows
                     FileSystem fileSystem = hdfsEnvironment.getFileSystem(sessionUser, path, configuration);
                     FileStatus fileStatus = hdfsEnvironment.doAs(sessionUser, () -> fileSystem.getFileStatus(path));
 
-                    pageSources.add(pageSourceFactory.createPageSource(fileStatus.getPath(), fileStatus.getLen(), fileStatus.getModificationTime()));
+                    pageSources.add(pageSourceFactory.createPageSource(fileStatus.getPath(), fileStatus.getLen()));
                 }
                 catch (FileNotFoundException ignored) {
                     // source file does not have a delta delete file in this location

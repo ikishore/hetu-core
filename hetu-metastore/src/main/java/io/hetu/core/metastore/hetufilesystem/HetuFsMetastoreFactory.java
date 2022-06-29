@@ -1,5 +1,5 @@
 /*
- * Copyright (C) 2018-2021. Huawei Technologies Co., Ltd. All rights reserved.
+ * Copyright (C) 2018-2020. Huawei Technologies Co., Ltd. All rights reserved.
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
  * You may obtain a copy of the License at
@@ -20,7 +20,6 @@ import io.prestosql.spi.classloader.ThreadContextClassLoader;
 import io.prestosql.spi.filesystem.HetuFileSystemClient;
 import io.prestosql.spi.metastore.HetuMetaStoreFactory;
 import io.prestosql.spi.metastore.HetuMetastore;
-import io.prestosql.spi.statestore.StateStore;
 
 import java.util.Map;
 
@@ -31,7 +30,6 @@ public class HetuFsMetastoreFactory
         implements HetuMetaStoreFactory
 {
     private static final String FACTORY_TYPE = "hetufilesystem";
-    private static final String HETU_METASTORE_CACHE_TYPE_DEFAULT = "local";
     private final ClassLoader classLoader;
 
     @Override
@@ -46,21 +44,14 @@ public class HetuFsMetastoreFactory
     }
 
     @Override
-    public HetuMetastore create(String name, Map<String, String> config, HetuFileSystemClient client, StateStore stateStore, String type)
+    public HetuMetastore create(String name, Map<String, String> config, HetuFileSystemClient client)
     {
         requireNonNull(config, "config is null");
-        Bootstrap app;
-        String newType = type;
         try (ThreadContextClassLoader ignored = new ThreadContextClassLoader(classLoader)) {
-            if (stateStore == null) {
-                newType = HETU_METASTORE_CACHE_TYPE_DEFAULT;
-                app = new Bootstrap(new HetuFsMetastoreModule(client, newType));
-            }
-            else {
-                app = new Bootstrap(new HetuFsMetastoreModule(client, stateStore, newType));
-            }
+            Bootstrap app = new Bootstrap(new HetuFsMetastoreModule(client));
             Injector injector =
                     app.strictConfig().doNotInitializeLogging().setRequiredConfigurationProperties(config).initialize();
+
             return injector.getInstance(HetuMetastore.class);
         }
         catch (Exception e) {

@@ -114,10 +114,10 @@ final class DescribeInputRewrite
             Analysis analysis = analyzer.analyze(statement, true);
 
             // get all parameters in query
-            List<Parameter> parameterList = getParameters(statement);
+            List<Parameter> parameters = getParameters(statement);
 
             // return the positions and types of all parameters
-            Row[] rows = parameterList.stream().map(parameter -> createDescribeInputRow(parameter, analysis)).toArray(Row[]::new);
+            Row[] rows = parameters.stream().map(parameter -> createDescribeInputRow(parameter, analysis)).toArray(Row[]::new);
             Optional<Node> limit = Optional.empty();
             if (rows.length == 0) {
                 rows = new Row[] {row(new NullLiteral(), new NullLiteral())};

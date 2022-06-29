@@ -78,17 +78,17 @@ public class AggregationTestInput
 
     private Page[] getPages()
     {
-        Page[] localPages = this.pages;
+        Page[] pages = this.pages;
 
         if (isReversed) {
-            localPages = AggregationTestUtils.reverseColumns(localPages);
+            pages = AggregationTestUtils.reverseColumns(pages);
         }
 
         if (offset > 0) {
-            localPages = AggregationTestUtils.offsetColumns(localPages, offset);
+            pages = AggregationTestUtils.offsetColumns(pages, offset);
         }
 
-        return localPages;
+        return pages;
     }
 
     public GroupedAccumulator createGroupedAccumulator()

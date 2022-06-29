@@ -156,18 +156,16 @@ public final class LongDecode
         return (value >>> 1) ^ -(value & 1);
     }
 
-    public static void writeVLong(SliceOutput buffer, long inputValue, boolean signed)
+    public static void writeVLong(SliceOutput buffer, long value, boolean signed)
     {
-        long value = inputValue;
         if (signed) {
             value = zigzagEncode(value);
         }
         writeVLongUnsigned(buffer, value);
     }
 
-    private static void writeVLongUnsigned(SliceOutput output, long inputValue)
+    private static void writeVLongUnsigned(SliceOutput output, long value)
     {
-        long value = inputValue;
         while (true) {
             // if there are less than 7 bits left, we are done
             if ((value & ~0b111_1111) == 0) {

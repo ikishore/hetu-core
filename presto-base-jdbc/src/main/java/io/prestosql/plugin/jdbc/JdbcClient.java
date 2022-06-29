@@ -13,25 +13,14 @@
  */
 package io.prestosql.plugin.jdbc;
 
-import io.airlift.slice.Slice;
-import io.prestosql.plugin.jdbc.optimization.JdbcConverterContext;
 import io.prestosql.plugin.jdbc.optimization.JdbcQueryGeneratorResult;
-import io.prestosql.plugin.splitmanager.SplitStatLog;
-import io.prestosql.plugin.splitmanager.TableSplitConfig;
-import io.prestosql.spi.PrestoException;
-import io.prestosql.spi.block.Block;
 import io.prestosql.spi.connector.ColumnHandle;
 import io.prestosql.spi.connector.ColumnMetadata;
 import io.prestosql.spi.connector.ConnectorSession;
 import io.prestosql.spi.connector.ConnectorSplitSource;
-import io.prestosql.spi.connector.ConnectorTableHandle;
 import io.prestosql.spi.connector.ConnectorTableMetadata;
 import io.prestosql.spi.connector.SchemaTableName;
-import io.prestosql.spi.function.ExternalFunctionHub;
-import io.prestosql.spi.function.FunctionMetadataManager;
-import io.prestosql.spi.function.StandardFunctionResolution;
 import io.prestosql.spi.predicate.TupleDomain;
-import io.prestosql.spi.relation.DeterminismEvaluator;
 import io.prestosql.spi.relation.RowExpressionService;
 import io.prestosql.spi.sql.QueryGenerator;
 import io.prestosql.spi.statistics.TableStatistics;
@@ -45,10 +34,7 @@ import java.util.Collections;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
-import java.util.OptionalLong;
 import java.util.Set;
-
-import static io.prestosql.spi.StandardErrorCode.NOT_SUPPORTED;
 
 public interface JdbcClient
 {
@@ -121,10 +107,6 @@ public interface JdbcClient
 
     TableStatistics getTableStatistics(ConnectorSession session, JdbcTableHandle handle, TupleDomain<ColumnHandle> tupleDomain);
 
-    void createSchema(ConnectorSession session, String schemaName);
-
-    void dropSchema(ConnectorSession session, String schemaName);
-
     /**
      * Hetu requires catalog names to create dynamic catalogs.
      *
@@ -156,10 +138,9 @@ public interface JdbcClient
     /**
      * Hetu's query push down expects the JDBC connectors to provide a {@link QueryGenerator}
      * to write SQL queries for the respective databases.
-     *
      * @return the optional SQL query writer which can write database specific SQL Queries
      */
-    default Optional<QueryGenerator<JdbcQueryGeneratorResult, JdbcConverterContext>> getQueryGenerator(DeterminismEvaluator determinismEvaluator, RowExpressionService rowExpressionService, FunctionMetadataManager functionManager, StandardFunctionResolution functionResolution)
+    default Optional<QueryGenerator<JdbcQueryGeneratorResult>> getQueryGenerator(RowExpressionService rowExpressionService)
     {
         return Optional.empty();
     }
@@ -167,107 +148,10 @@ public interface JdbcClient
     /**
      * Hetu can only cache execution plans for supported connectors.
      * By default, most JDBC connectors will be able to support to execution plan caching
+     *
      */
     default boolean isExecutionPlanCacheSupported()
     {
         return true;
-    }
-
-    /**
-     * return external function hub
-     */
-    default Optional<ExternalFunctionHub> getExternalFunctionHub()
-    {
-        return Optional.empty();
-    }
-
-    default ColumnHandle getDeleteRowIdColumnHandle(ConnectorSession session, ConnectorTableHandle tableHandle)
-    {
-        throw new PrestoException(NOT_SUPPORTED, "This connector does not support updates or deletes");
-    }
-
-    default Optional<ConnectorTableHandle> applyDelete(ConnectorSession session, ConnectorTableHandle handle)
-    {
-        return Optional.empty();
-    }
-
-    default OptionalLong executeDelete(ConnectorSession session, ConnectorTableHandle handle)
-    {
-        return OptionalLong.empty();
-    }
-
-    default OptionalLong executeUpdate(ConnectorSession session, ConnectorTableHandle handle)
-    {
-        return OptionalLong.empty();
-    }
-
-    default OptionalLong deleteTable(ConnectorSession session, ConnectorTableHandle handle)
-    {
-        return OptionalLong.empty();
-    }
-
-    default ConnectorTableHandle beginDelete(ConnectorSession session, ConnectorTableHandle tableHandle)
-    {
-        throw new PrestoException(NOT_SUPPORTED, "This connector does not support beginDelete");
-    }
-
-    default void finishDelete(ConnectorSession session, ConnectorTableHandle tableHandle, Collection<Slice> fragments)
-    {
-        throw new PrestoException(NOT_SUPPORTED, "This connector does not support finishDelete");
-    }
-
-    default ConnectorTableHandle beginUpdate(ConnectorSession session, ConnectorTableHandle tableHandle, List<Type> updatedColumnTypes)
-    {
-        throw new PrestoException(NOT_SUPPORTED, "This connector does not support beginDelete");
-    }
-
-    default void finishUpdate(ConnectorSession session, ConnectorTableHandle tableHandle, Collection<Slice> fragments)
-    {
-        throw new PrestoException(NOT_SUPPORTED, "This connector does not support finishUpdate");
-    }
-
-    default String buildDeleteSql(ConnectorTableHandle handle)
-    {
-        throw new PrestoException(NOT_SUPPORTED, "This connector does not support buildDeleteSql");
-    }
-
-    default String buildUpdateSql(ConnectorSession session, ConnectorTableHandle handle, int setNum, List<String> updatedColumns)
-    {
-        throw new PrestoException(NOT_SUPPORTED, "This connector does not support buildUpdateSql");
-    }
-
-    default void setDeleteSql(PreparedStatement statement, Block rowIds, int position)
-    {
-        throw new PrestoException(NOT_SUPPORTED, "This connector does not support setDeleteSql");
-    }
-
-    default void setUpdateSql(ConnectorSession session, ConnectorTableHandle tableHandle, PreparedStatement statement, List<Block> columnValueAndRowIdBlock, int position, List<String> updatedColumns)
-    {
-        throw new PrestoException(NOT_SUPPORTED, "This connector does not support setUpdateSql");
-    }
-
-    default ColumnHandle getUpdateRowIdColumnHandle(ConnectorSession session, ConnectorTableHandle tableHandle, List<ColumnHandle> updatedColumns)
-    {
-        throw new PrestoException(NOT_SUPPORTED, "This connector does not support updates or deletes");
-    }
-
-    default List<SplitStatLog> getSplitStatic(JdbcIdentity identity, List<JdbcSplit> jdbcSplitList)
-    {
-        return Collections.emptyList();
-    }
-
-    default Long[] getSplitFieldMinAndMaxValue(TableSplitConfig conf, Connection connection, JdbcTableHandle tableHandle)
-    {
-        return null;
-    }
-
-    default long getTableModificationTime(ConnectorSession session, JdbcTableHandle tableHandle)
-    {
-        throw new PrestoException(NOT_SUPPORTED, "this connector does not support table modification times");
-    }
-
-    default boolean isPreAggregationSupported(ConnectorSession session)
-    {
-        return false;
     }
 }

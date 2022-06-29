@@ -1,5 +1,5 @@
 /*
- * Copyright (C) 2018-2021. Huawei Technologies Co., Ltd. All rights reserved.
+ * Copyright (C) 2018-2020. Huawei Technologies Co., Ltd. All rights reserved.
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
  * You may obtain a copy of the License at
@@ -30,16 +30,14 @@ public class CubeRewriteResult
     private final Set<DimensionSource> dimensionColumns;
     private final Set<AggregatorSource> aggregationColumns;
     private final Set<AverageAggregatorSource> avgAggregationColumns;
-    private final boolean computeAvgDividingSumByCount;
 
-    public CubeRewriteResult(TableScanNode tableScanNode, Map<Symbol, ColumnMetadata> symbolMetadataMap, Set<DimensionSource> dimensionColumns, Set<AggregatorSource> aggregationColumns, Set<AverageAggregatorSource> avgAggregationColumns, boolean useAvgAggregationColumns)
+    public CubeRewriteResult(TableScanNode tableScanNode, Map<Symbol, ColumnMetadata> symbolMetadataMap, Set<DimensionSource> dimensionColumns, Set<AggregatorSource> aggregationColumns, Set<AverageAggregatorSource> avgAggregationColumns)
     {
         this.tableScanNode = tableScanNode;
         this.symbolMetadataMap = symbolMetadataMap;
         this.dimensionColumns = dimensionColumns;
         this.aggregationColumns = aggregationColumns;
         this.avgAggregationColumns = avgAggregationColumns;
-        this.computeAvgDividingSumByCount = useAvgAggregationColumns;
     }
 
     public TableScanNode getTableScanNode()
@@ -65,11 +63,6 @@ public class CubeRewriteResult
     public Set<AverageAggregatorSource> getAvgAggregationColumns()
     {
         return avgAggregationColumns;
-    }
-
-    public boolean getComputeAvgDividingSumByCount()
-    {
-        return computeAvgDividingSumByCount;
     }
 
     public static class DimensionSource

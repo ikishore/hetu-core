@@ -20,6 +20,7 @@ import io.prestosql.spi.connector.RecordCursor;
 import io.prestosql.spi.type.DecimalType;
 import io.prestosql.spi.type.Type;
 import io.prestosql.spi.type.TypeManager;
+import org.joda.time.DateTimeZone;
 
 import java.util.List;
 
@@ -71,11 +72,13 @@ public class HiveRecordCursor
 
     public HiveRecordCursor(
             List<HivePageSourceProvider.ColumnMapping> columnMappings,
+            DateTimeZone hiveStorageTimeZone,
             TypeManager typeManager,
             RecordCursor delegate)
     {
         requireNonNull(columnMappings, "columns is null");
         requireNonNull(typeManager, "typeManager is null");
+        requireNonNull(hiveStorageTimeZone, "hiveStorageTimeZone is null");
 
         this.delegate = requireNonNull(delegate, "delegate is null");
         this.columnMappings = columnMappings;
@@ -136,7 +139,7 @@ public class HiveRecordCursor
                     longs[columnIndex] = datePartitionKey(columnValue, name);
                 }
                 else if (TIMESTAMP.equals(type)) {
-                    longs[columnIndex] = timestampPartitionKey(columnValue, name);
+                    longs[columnIndex] = timestampPartitionKey(columnValue, hiveStorageTimeZone, name);
                 }
                 else if (isShortDecimal(type)) {
                     longs[columnIndex] = shortDecimalPartitionKey(columnValue, (DecimalType) type, name);

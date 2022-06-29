@@ -190,7 +190,7 @@ public class HiveSplitManager
             ConnectorSession session,
             ConnectorTableHandle tableHandle,
             SplitSchedulingStrategy splitSchedulingStrategy,
-            Supplier<List<Set<DynamicFilter>>> dynamicFilterSupplier,
+            Supplier<Set<DynamicFilter>> dynamicFilterSupplier,
             Optional<QueryType> queryType,
             Map<String, Object> queryInfo,
             Set<TupleDomain<ColumnMetadata>> userDefinedCachePredicates,
@@ -214,7 +214,7 @@ public class HiveSplitManager
         }
 
         // get partitions
-        List<HivePartition> partitions = partitionManager.getOrLoadPartitions(session, metastore, new HiveIdentity(session), hiveTable);
+        List<HivePartition> partitions = partitionManager.getOrLoadPartitions(metastore, new HiveIdentity(session), hiveTable);
 
         // short circuit if we don't have any partitions
         if (partitions.isEmpty()) {

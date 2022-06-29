@@ -64,7 +64,6 @@ public class TestHanaIntegrationSmokeTest
     }
 
     @Test
-    @Override
     public void testDuplicatedRowCreateTable()
     {
         String tableOrders = TestingHanaServer.getActualTable("orders");
@@ -81,7 +80,6 @@ public class TestHanaIntegrationSmokeTest
     }
 
     @Test
-    @Override
     public void testSelectInformationSchemaColumns()
     {
         String schema = getSession().getSchema().get();
@@ -89,7 +87,6 @@ public class TestHanaIntegrationSmokeTest
     }
 
     @Test
-    @Override
     public void testSelectInformationSchemaTables()
     {
         String schema = getSession().getSchema().get();
@@ -99,7 +96,6 @@ public class TestHanaIntegrationSmokeTest
     }
 
     @Test
-    @Override
     public void testShowTables()
     {
         String actualTableName = TestingHanaServer.getActualTable("orders");

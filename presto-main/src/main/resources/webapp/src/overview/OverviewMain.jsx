@@ -1,5 +1,5 @@
 /*
- * Copyright (C) 2018-2021. Huawei Technologies Co., Ltd. All rights reserved.
+ * Copyright (C) 2018-2020. Huawei Technologies Co., Ltd. All rights reserved.
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
  * You may obtain a copy of the License at
@@ -46,28 +46,19 @@ class OverviewMain extends React.Component{
                 obj.ip = key.slice(key.indexOf("[") + 1, key.indexOf("]"))
                 obj.count = data.memoryData[key].availableProcessors;
                 let totalMemory = data.memoryData[key].totalNodeMemory.slice(0, -1);
-                obj.nodeMemory = Number(totalMemory);
-                obj.freeMemory = Number(totalMemory);
-                if (typeof (data.memoryData[key].pools.general) != "undefined"){
-                    obj.freeMemory = 0;
-                    obj.freeMemory += data.memoryData[key].pools.general.freeBytes;
-                    if (typeof (data.memoryData[key].pools.reserved) != "undefined"){
-                        obj.freeMemory += data.memoryData[key].pools.reserved.freeBytes;
-                    }
-                }
+                obj.nodeMemory = totalMemory;
+                obj.freeMemory = data.memoryData[key].pools.general.freeBytes + (data.memoryData[key].pools.reserved ? data.memoryData[key].pools.reserved.freeBytes : 0);
                 table.push(obj);
             })
         }
-        if (typeof (data.memoryData) != "undefined" && typeof (data.lineData) != "undefined") {
-            this.setState({
-                totalNodes: data.memoryData ? Object.keys(data.memoryData).length : '',
-                totalMemory: data.lineData.totalMemory,
-                memoryUsed: data.lineData.reservedMemory,
-                processCpuLoad: (data.lineData.processCpuLoad * 100).toFixed(2) + '%',
-                systemCpuLoad: (data.lineData.systemCpuLoad * 100).toFixed(2) + '%',
-                tableData: table
-            })
-        }
+        this.setState({
+            totalNodes:data.memoryData ? Object.keys(data.memoryData).length : '',
+            totalMemory:data.lineData.totalMemory,
+            memoryUsed:data.lineData.reservedMemory,
+            processCpuLoad:(data.lineData.processCpuLoad*100).toFixed(2)+'%',
+            systemCpuLoad:(data.lineData.systemCpuLoad*100).toFixed(2)+'%',
+            tableData:table
+        })
     }
 
     render() {

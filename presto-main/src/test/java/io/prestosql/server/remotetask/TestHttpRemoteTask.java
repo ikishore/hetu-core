@@ -13,7 +13,6 @@
  */
 package io.prestosql.server.remotetask;
 
-import com.google.common.collect.ImmutableMap;
 import com.google.common.collect.ImmutableMultimap;
 import com.google.common.collect.ImmutableSet;
 import com.google.inject.Binder;
@@ -51,9 +50,7 @@ import io.prestosql.protocol.SmileModule;
 import io.prestosql.server.HttpRemoteTaskFactory;
 import io.prestosql.server.InternalCommunicationConfig;
 import io.prestosql.server.TaskUpdateRequest;
-import io.prestosql.snapshot.QuerySnapshotManager;
 import io.prestosql.spi.ErrorCode;
-import io.prestosql.spi.QueryId;
 import io.prestosql.spi.connector.CatalogName;
 import io.prestosql.spi.plan.PlanNodeId;
 import io.prestosql.spi.type.Type;
@@ -77,10 +74,7 @@ import javax.ws.rs.core.MediaType;
 import javax.ws.rs.core.UriInfo;
 
 import java.net.URI;
-import java.util.ArrayList;
-import java.util.Collections;
 import java.util.HashMap;
-import java.util.List;
 import java.util.Map;
 import java.util.Optional;
 import java.util.OptionalInt;
@@ -100,7 +94,7 @@ import static io.prestosql.execution.buffer.OutputBuffers.createInitialEmptyOutp
 import static io.prestosql.metadata.MetadataManager.createTestMetadataManager;
 import static io.prestosql.protocol.SmileCodecBinder.smileCodecBinder;
 import static io.prestosql.spi.StandardErrorCode.REMOTE_TASK_ERROR;
-import static io.prestosql.testing.TestingRecoveryUtils.NOOP_RECOVERY_UTILS;
+import static io.prestosql.spi.StandardErrorCode.REMOTE_TASK_MISMATCH;
 import static io.prestosql.testing.assertions.Assert.assertEquals;
 import static java.lang.Math.min;
 import static java.lang.String.format;
@@ -122,6 +116,20 @@ public class TestHttpRemoteTask
             .setInfoUpdateInterval(new Duration(IDLE_TIMEOUT.roundTo(MILLISECONDS) / 10, MILLISECONDS));
 
     private static final boolean TRACE_HTTP = false;
+
+    @Test(timeOut = 30000)
+    public void testRemoteTaskMismatch()
+            throws Exception
+    {
+        runTest(FailureScenario.TASK_MISMATCH);
+    }
+
+    @Test(timeOut = 30000)
+    public void testRejectedExecutionWhenVersionIsHigh()
+            throws Exception
+    {
+        runTest(FailureScenario.TASK_MISMATCH_WHEN_VERSION_IS_HIGH);
+    }
 
     @Test(timeOut = 30000)
     public void testRejectedExecution()
@@ -162,28 +170,6 @@ public class TestHttpRemoteTask
         httpRemoteTaskFactory.stop();
     }
 
-    @Test(timeOut = 30000)
-    public void testEmptyTaskSource()
-            throws Exception
-    {
-        AtomicLong lastActivityNanos = new AtomicLong(System.nanoTime());
-        TestingTaskResource testingTaskResource = new TestingTaskResource(lastActivityNanos, FailureScenario.NO_FAILURE);
-
-        HttpRemoteTaskFactory httpRemoteTaskFactory = createHttpRemoteTaskFactory(testingTaskResource);
-
-        RemoteTask remoteTask = createRemoteTask(httpRemoteTaskFactory);
-
-        testingTaskResource.setInitialTaskInfo(remoteTask.getTaskInfo());
-        remoteTask.start();
-
-        remoteTask.noMoreSplits(TABLE_SCAN_NODE_ID, Lifespan.taskWide());
-        poll(() -> testingTaskResource.getRequests().size() > 0);
-        assertEquals(testingTaskResource.getRequests().get(0).getSources().size(), 1);
-        assertEquals(testingTaskResource.getRequests().get(0).getSources().get(0).getSplits().size(), 0);
-
-        httpRemoteTaskFactory.stop();
-    }
-
     private void runTest(FailureScenario failureScenario)
             throws Exception
     {
@@ -203,6 +189,11 @@ public class TestHttpRemoteTask
 
         ErrorCode actualErrorCode = getOnlyElement(remoteTask.getTaskStatus().getFailures()).getErrorCode();
         switch (failureScenario) {
+            case TASK_MISMATCH:
+            case TASK_MISMATCH_WHEN_VERSION_IS_HIGH:
+                assertTrue(remoteTask.getTaskInfo().getTaskStatus().getState().isDone(), format("TaskInfo is not in a done state: %s", remoteTask.getTaskInfo()));
+                assertEquals(actualErrorCode, REMOTE_TASK_MISMATCH.toErrorCode());
+                break;
             case REJECTED_EXECUTION:
                 // for a rejection to occur, the http client must be shutdown, which means we will not be able to ge the final task info
                 assertEquals(actualErrorCode, REMOTE_TASK_ERROR.toErrorCode());
@@ -217,16 +208,13 @@ public class TestHttpRemoteTask
         return httpRemoteTaskFactory.createRemoteTask(
                 TEST_SESSION,
                 new TaskId("test", 1, 2),
-                "Testing instance id",
                 new InternalNode("node-id", URI.create("http://fake.invalid/"), new NodeVersion("version"), false),
                 TaskTestUtils.PLAN_FRAGMENT,
                 ImmutableMultimap.of(),
                 OptionalInt.empty(),
                 createInitialEmptyOutputBuffers(OutputBuffers.BufferType.BROADCAST),
                 new NodeTaskMap.PartitionedSplitCountTracker(i -> {}),
-                true,
-                Optional.empty(),
-                new QuerySnapshotManager(new QueryId("test"), NOOP_RECOVERY_UTILS, TEST_SESSION));
+                true, Optional.empty());
     }
 
     private static HttpRemoteTaskFactory createHttpRemoteTaskFactory(TestingTaskResource testingTaskResource)
@@ -327,6 +315,8 @@ public class TestHttpRemoteTask
     private enum FailureScenario
     {
         NO_FAILURE,
+        TASK_MISMATCH,
+        TASK_MISMATCH_WHEN_VERSION_IS_HIGH,
         REJECTED_EXECUTION,
     }
 
@@ -339,7 +329,7 @@ public class TestHttpRemoteTask
         private final AtomicLong lastActivityNanos;
         private final FailureScenario failureScenario;
 
-        private final AtomicReference<TestingHttpClient> httpClient = new AtomicReference<>();
+        private AtomicReference<TestingHttpClient> httpClient = new AtomicReference<>();
 
         private TaskInfo initialTaskInfo;
         private TaskStatus initialTaskStatus;
@@ -348,8 +338,6 @@ public class TestHttpRemoteTask
         private String taskInstanceId = INITIAL_TASK_INSTANCE_ID;
 
         private long statusFetchCounter;
-
-        private final List<TaskUpdateRequest> requests = Collections.synchronizedList(new ArrayList<>());
 
         public TestingTaskResource(AtomicLong lastActivityNanos, FailureScenario failureScenario)
         {
@@ -386,10 +374,6 @@ public class TestHttpRemoteTask
                 TaskUpdateRequest taskUpdateRequest,
                 @Context UriInfo uriInfo)
         {
-            if (taskUpdateRequest.getSources().size() > 0) {
-                requests.add(taskUpdateRequest);
-            }
-
             for (TaskSource source : taskUpdateRequest.getSources()) {
                 taskSourceMap.compute(source.getPlanNodeId(), (planNodeId, taskSource) -> taskSource == null ? source : taskSource.update(source));
             }
@@ -404,11 +388,6 @@ public class TestHttpRemoteTask
                 return null;
             }
             return new TaskSource(source.getPlanNodeId(), source.getSplits(), source.getNoMoreSplitsForLifespan(), source.isNoMoreSplits());
-        }
-
-        public synchronized List<TaskUpdateRequest> getRequests()
-        {
-            return requests;
         }
 
         @GET
@@ -448,6 +427,12 @@ public class TestHttpRemoteTask
             this.taskState = initialTaskStatus.getState();
             this.version = initialTaskStatus.getVersion();
             switch (failureScenario) {
+                case TASK_MISMATCH_WHEN_VERSION_IS_HIGH:
+                    // Make the initial version large enough.
+                    // This way, the version number can't be reached if it is reset to 0.
+                    version = 1_000_000;
+                    break;
+                case TASK_MISMATCH:
                 case REJECTED_EXECUTION:
                 case NO_FAILURE:
                     break; // do nothing
@@ -472,6 +457,13 @@ public class TestHttpRemoteTask
             statusFetchCounter++;
             // Change the task instance id after 10th fetch to simulate worker restart
             switch (failureScenario) {
+                case TASK_MISMATCH:
+                case TASK_MISMATCH_WHEN_VERSION_IS_HIGH:
+                    if (statusFetchCounter == 10) {
+                        taskInstanceId = NEW_TASK_INSTANCE_ID;
+                        version = 0;
+                    }
+                    break;
                 case REJECTED_EXECUTION:
                     if (statusFetchCounter >= 10) {
                         httpClient.get().close();
@@ -486,7 +478,7 @@ public class TestHttpRemoteTask
 
             return new TaskStatus(
                     initialTaskStatus.getTaskId(),
-                    initialTaskStatus.getConfirmationInstanceId(),
+                    taskInstanceId,
                     ++version,
                     taskState,
                     initialTaskStatus.getSelf(),
@@ -501,9 +493,7 @@ public class TestHttpRemoteTask
                     initialTaskStatus.getSystemMemoryReservation(),
                     initialTaskStatus.getRevocableMemoryReservation(),
                     initialTaskStatus.getFullGcCount(),
-                    initialTaskStatus.getFullGcTime(),
-                    ImmutableMap.of(),
-                    Optional.empty());
+                    initialTaskStatus.getFullGcTime());
         }
     }
 }

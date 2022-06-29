@@ -19,7 +19,6 @@ import io.prestosql.operator.aggregation.groupby.GroupByAggregationTestUtils;
 import io.prestosql.operator.aggregation.histogram.HistogramGroupImplementation;
 import io.prestosql.spi.Page;
 import io.prestosql.spi.block.Block;
-import io.prestosql.spi.connector.QualifiedObjectName;
 import io.prestosql.spi.function.Signature;
 import io.prestosql.spi.type.MapType;
 import io.prestosql.spi.type.StandardTypes;
@@ -163,8 +162,8 @@ public class BenchmarkGroupedTypedHistogram
         MapType mapType = mapType(VARCHAR, BIGINT);
         Metadata metadata = getMetadata(groupMode);
 
-        return metadata.getFunctionAndTypeManager().getAggregateFunctionImplementation(new Signature(
-                QualifiedObjectName.valueOfDefaultFunction(NAME),
+        return metadata.getAggregateFunctionImplementation(new Signature(
+                NAME,
                 AGGREGATE,
                 mapType.getTypeSignature(),
                 parseTypeSignature(StandardTypes.VARCHAR)));

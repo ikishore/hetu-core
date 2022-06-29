@@ -38,9 +38,7 @@ public class TestHetuEventListenerConfig
                 .setLogFileCount(1)
                 .setAuditFile(null)
                 .setAuditFileLimit(0)
-                .setAuditFileCount(1)
-                .setAuditLogFile(null)
-                .setAuditLogConversionPattern(null));
+                .setAuditFileCount(1));
     }
 
     @Test
@@ -57,8 +55,6 @@ public class TestHetuEventListenerConfig
                 .put("hetu.event.listener.audit.filecount", "10")
                 .put("hetu.event.listener.audit.limit", "1024")
                 .put("hetu.event.listener.audit.file", "/var/hetu-audit.log")
-                .put("hetu.auditlog.logoutput", "/var/log")
-                .put("hetu.auditlog.logconversionpattern", "yyyy-MM-dd.HH")
                 .build();
 
         HetuEventListenerConfig expected = new HetuEventListenerConfig().setType(BaseEventListener.Type.LOGGER)
@@ -70,9 +66,7 @@ public class TestHetuEventListenerConfig
                 .setLogFileLimit(1024)
                 .setAuditFile("/var/hetu-audit.log")
                 .setAuditFileLimit(1024)
-                .setAuditFileCount(10)
-                .setAuditLogFile("/var/log")
-                .setAuditLogConversionPattern("yyyy-MM-dd.HH");
+                .setAuditFileCount(10);
 
         assertFullMapping(properties, expected);
     }
@@ -91,8 +85,6 @@ public class TestHetuEventListenerConfig
                 .put("hetu.event.listener.audit.filecount", "10")
                 .put("hetu.event.listener.audit.limit", "1024")
                 .put("hetu.event.listener.audit.file", "/var/hetu-audit.log")
-                .put("hetu.auditlog.logoutput", "/var/log")
-                .put("hetu.auditlog.logconversionpattern", "yyyy-MM-dd.HH")
                 .build();
 
         HetuEventListenerConfig expected = new HetuEventListenerConfig().setType(BaseEventListener.Type.AUDIT)
@@ -104,9 +96,7 @@ public class TestHetuEventListenerConfig
                 .setLogFileLimit(1024)
                 .setAuditFile("/var/hetu-audit.log")
                 .setAuditFileLimit(1024)
-                .setAuditFileCount(10)
-                .setAuditLogFile("/var/log")
-                .setAuditLogConversionPattern("yyyy-MM-dd.HH");
+                .setAuditFileCount(10);
 
         assertFullMapping(properties, expected);
     }

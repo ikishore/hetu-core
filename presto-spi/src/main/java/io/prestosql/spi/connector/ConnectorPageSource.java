@@ -17,7 +17,6 @@ import io.prestosql.spi.Page;
 
 import java.io.Closeable;
 import java.io.IOException;
-import java.util.OptionalLong;
 import java.util.concurrent.CompletableFuture;
 
 public interface ConnectorPageSource
@@ -75,15 +74,5 @@ public interface ConnectorPageSource
     default boolean needMergingForPages()
     {
         return false;
-    }
-
-    /**
-     * Some components can push down some operators to other component for calculation.
-     * This API is used to return the number of position count before push down for statistics.
-     * If this API is not used, just return empty.
-     */
-    default OptionalLong getCompletedPositionCount()
-    {
-        return OptionalLong.empty();
     }
 }

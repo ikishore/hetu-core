@@ -42,8 +42,6 @@ export function getQueryStateColor(query: any): string
             return STATE_COLOR_MAP.QUEUED;
         case "PLANNING":
             return STATE_COLOR_MAP.PLANNING;
-        case "SUSPENDED":
-            return STATE_COLOR_MAP.BLOCKED;
         case "STARTING":
         case "FINISHING":
         case "RUNNING":
@@ -77,8 +75,6 @@ export function getStageStateColor(stage: any): string
     switch (stage.state) {
         case "PLANNED":
             return STATE_COLOR_MAP.QUEUED;
-        case "SUSPENDED":
-            return STATE_COLOR_MAP.BLOCKED;
         case "SCHEDULING":
         case "SCHEDULING_SPLITS":
         case "SCHEDULED":
@@ -239,7 +235,6 @@ export function getChildren(nodeInfo: any)
         case 'TableDeleteNode':
         case 'TableFinishNode':
         case 'GroupIdNode':
-        case 'CTEScanNode':
         case 'UnnestNode':
         case 'EnforceSingleRowNode':
             return [nodeInfo.source];

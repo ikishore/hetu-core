@@ -17,6 +17,7 @@ import io.prestosql.operator.scalar.AbstractTestFunctions;
 import org.testng.annotations.Test;
 
 import static io.prestosql.spi.StandardErrorCode.DIVISION_BY_ZERO;
+import static io.prestosql.spi.StandardErrorCode.INVALID_CAST_ARGUMENT;
 import static io.prestosql.spi.function.OperatorType.INDETERMINATE;
 import static io.prestosql.spi.type.BigintType.BIGINT;
 import static io.prestosql.spi.type.BooleanType.BOOLEAN;
@@ -26,7 +27,6 @@ import static io.prestosql.spi.type.RealType.REAL;
 import static io.prestosql.spi.type.SmallintType.SMALLINT;
 import static io.prestosql.spi.type.TinyintType.TINYINT;
 import static io.prestosql.spi.type.VarcharType.VARCHAR;
-import static io.prestosql.sql.analyzer.SemanticErrorCode.INVALID_LITERAL;
 import static java.lang.String.format;
 
 public class TestSmallintOperators
@@ -37,7 +37,7 @@ public class TestSmallintOperators
     {
         assertFunction("SMALLINT'37'", SMALLINT, (short) 37);
         assertFunction("SMALLINT'17'", SMALLINT, (short) 17);
-        assertInvalidCastWithSemanticErrorCode("SMALLINT'" + ((long) Short.MAX_VALUE + 1L) + "'", INVALID_LITERAL);
+        assertInvalidCast("SMALLINT'" + ((long) Short.MAX_VALUE + 1L) + "'");
     }
 
     @Test
@@ -52,7 +52,7 @@ public class TestSmallintOperators
     {
         assertFunction("SMALLINT'-37'", SMALLINT, (short) -37);
         assertFunction("SMALLINT'-17'", SMALLINT, (short) -17);
-        assertInvalidFunction("SMALLINT'-" + Short.MIN_VALUE + "'", INVALID_LITERAL);
+        assertInvalidFunction("SMALLINT'-" + Short.MIN_VALUE + "'", INVALID_CAST_ARGUMENT);
     }
 
     @Test

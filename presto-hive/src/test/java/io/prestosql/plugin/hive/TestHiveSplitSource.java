@@ -169,19 +169,22 @@ public class TestHiveSplitSource
 
         // create a thread that will get a split
         final CountDownLatch started = new CountDownLatch(1);
-        Thread getterThread = new Thread(() -> {
-            try {
-                started.countDown();
-                List<ConnectorSplit> batch = getSplits(hiveSplitSource, 1);
-                assertEquals(batch.size(), 1);
-                splits.set(batch.get(0));
-            }
-            catch (Throwable e) {
-                splits.setException(e);
+        Thread getterThread = new Thread(new Runnable()
+        {
+            @Override
+            public void run()
+            {
+                try {
+                    started.countDown();
+                    List<ConnectorSplit> batch = getSplits(hiveSplitSource, 1);
+                    assertEquals(batch.size(), 1);
+                    splits.set(batch.get(0));
+                }
+                catch (Throwable e) {
+                    splits.setException(e);
+                }
             }
         });
-        getterThread.setName("testReaderWaitsForSplits");
-        getterThread.setUncaughtExceptionHandler((thread, throwable) -> System.out.println(thread.getName() + " : " + throwable.getMessage()));
         getterThread.start();
 
         try {
@@ -370,8 +373,7 @@ public class TestHiveSplitSource
                     Optional.empty(),
                     false,
                     Optional.empty(),
-                    Optional.empty(),
-                    ImmutableMap.of());
+                    Optional.empty());
         }
 
         private static Properties properties(String key, String value)
@@ -409,8 +411,7 @@ public class TestHiveSplitSource
                     Optional.empty(),
                     false,
                     Optional.empty(),
-                    Optional.empty(),
-                    ImmutableMap.of());
+                    Optional.empty());
         }
 
         private static Properties properties(String key, String value)
@@ -452,7 +453,7 @@ public class TestHiveSplitSource
         }
 
         List<ConnectorSplit> connectorSplits = getSplits(hiveSplitSource, 100);
-        List<ConnectorSplit> groupedConnectorSplits = hiveSplitSource.groupSmallSplits(connectorSplits, 1);
+        List<ConnectorSplit> groupedConnectorSplits = hiveSplitSource.groupSmallSplits(connectorSplits);
         assertEquals(groupedConnectorSplits.size(), 3);
         List<HiveSplitWrapper> hiveSplitWrappers = new ArrayList<>();
         groupedConnectorSplits.forEach(pendingSplit -> hiveSplitWrappers.add((HiveSplitWrapper) pendingSplit));
@@ -491,7 +492,7 @@ public class TestHiveSplitSource
         }
 
         List<ConnectorSplit> connectorSplits = getSplits(hiveSplitSource, 100);
-        List<ConnectorSplit> groupedConnectorSplits = hiveSplitSource.groupSmallSplits(connectorSplits, 1);
+        List<ConnectorSplit> groupedConnectorSplits = hiveSplitSource.groupSmallSplits(connectorSplits);
         assertEquals(groupedConnectorSplits.size(), 3);
         List<HiveSplitWrapper> hiveSplitWrappers = new ArrayList<>();
         groupedConnectorSplits.forEach(pendingSplit -> hiveSplitWrappers.add((HiveSplitWrapper) pendingSplit));
@@ -530,7 +531,7 @@ public class TestHiveSplitSource
         }
 
         List<ConnectorSplit> connectorSplits = getSplits(hiveSplitSource, 100);
-        List<ConnectorSplit> groupedConnectorSplits = hiveSplitSource.groupSmallSplits(connectorSplits, 1);
+        List<ConnectorSplit> groupedConnectorSplits = hiveSplitSource.groupSmallSplits(connectorSplits);
         assertEquals(groupedConnectorSplits.size(), 6);
         List<HiveSplitWrapper> hiveSplitWrappers = new ArrayList<>();
         groupedConnectorSplits.forEach(pendingSplit -> hiveSplitWrappers.add((HiveSplitWrapper) pendingSplit));
@@ -569,7 +570,7 @@ public class TestHiveSplitSource
 
         // remove 1 split
         List<ConnectorSplit> connectorSplits = getSplits(hiveSplitSource, 100);
-        List<ConnectorSplit> groupedConnectorSplits = hiveSplitSource.groupSmallSplits(connectorSplits, 1);
+        List<ConnectorSplit> groupedConnectorSplits = hiveSplitSource.groupSmallSplits(connectorSplits);
         assertEquals(groupedConnectorSplits.size(), 9);
         List<HiveSplitWrapper> hiveSplitWrappers = new ArrayList<>();
         groupedConnectorSplits.forEach(pendingSplit -> hiveSplitWrappers.add((HiveSplitWrapper) pendingSplit));
@@ -606,7 +607,7 @@ public class TestHiveSplitSource
         }
 
         List<ConnectorSplit> connectorSplits = getSplits(hiveSplitSource, 100);
-        List<ConnectorSplit> groupedConnectorSplits = hiveSplitSource.groupSmallSplits(connectorSplits, 1);
+        List<ConnectorSplit> groupedConnectorSplits = hiveSplitSource.groupSmallSplits(connectorSplits);
         assertEquals(groupedConnectorSplits.size(), 3);
         List<HiveSplitWrapper> hiveSplitWrappers = new ArrayList<>();
         groupedConnectorSplits.forEach(pendingSplit -> hiveSplitWrappers.add((HiveSplitWrapper) pendingSplit));
@@ -643,7 +644,7 @@ public class TestHiveSplitSource
         }
 
         List<ConnectorSplit> connectorSplits = getSplits(hiveSplitSource, 100);
-        List<ConnectorSplit> groupedConnectorSplits = hiveSplitSource.groupSmallSplits(connectorSplits, 1);
+        List<ConnectorSplit> groupedConnectorSplits = hiveSplitSource.groupSmallSplits(connectorSplits);
         assertEquals(groupedConnectorSplits.size(), 4);
         List<HiveSplitWrapper> hiveSplitWrappers = new ArrayList<>();
         groupedConnectorSplits.forEach(pendingSplit -> hiveSplitWrappers.add((HiveSplitWrapper) pendingSplit));
@@ -680,11 +681,13 @@ public class TestHiveSplitSource
         }
 
         List<ConnectorSplit> connectorSplits = getSplits(hiveSplitSource, 100);
-        List<ConnectorSplit> groupedConnectorSplits = hiveSplitSource.groupSmallSplits(connectorSplits, 1);
+        List<ConnectorSplit> groupedConnectorSplits = hiveSplitSource.groupSmallSplits(connectorSplits);
+        //assertEquals(groupedConnectorSplits.size(), 51);
         List<HiveSplitWrapper> hiveSplitWrappers = new ArrayList<>();
         groupedConnectorSplits.forEach(pendingSplit -> hiveSplitWrappers.add((HiveSplitWrapper) pendingSplit));
         System.out.println("hiveSplitWrappers.get(i).getSplits().size() " + groupedConnectorSplits.size());
         for (int i = 0; i < 50; i++) {
+            //System.out.println(hiveSplitWrappers.get(i).getSplits().size());
             assertEquals(hiveSplitWrappers.get(i).getSplits().size(), 1);
         }
         for (int i = 50; i < groupedConnectorSplits.size(); i++) {
@@ -721,12 +724,13 @@ public class TestHiveSplitSource
         }
 
         List<ConnectorSplit> connectorSplits = getSplits(hiveSplitSource, 100);
-        List<ConnectorSplit> groupedConnectorSplits = hiveSplitSource.groupSmallSplits(connectorSplits, 1);
+        List<ConnectorSplit> groupedConnectorSplits = hiveSplitSource.groupSmallSplits(connectorSplits);
         assertEquals(groupedConnectorSplits.size(), 100);
         List<HiveSplitWrapper> hiveSplitWrappers = new ArrayList<>();
         groupedConnectorSplits.forEach(pendingSplit -> hiveSplitWrappers.add((HiveSplitWrapper) pendingSplit));
         System.out.println("hiveSplitWrappers.get(i).getSplits().size() " + groupedConnectorSplits.size());
         for (int i = 0; i < groupedConnectorSplits.size(); i++) {
+            //System.out.println(hiveSplitWrappers.get(i).getSplits().size());
             assertEquals(hiveSplitWrappers.get(i).getSplits().size(), 1);
         }
     }
@@ -772,7 +776,8 @@ public class TestHiveSplitSource
         hiveSplitSource.addToQueue(new TestSplit(16, OptionalInt.empty(), 20000, hostAddress));
 
         List<ConnectorSplit> connectorSplits = getSplits(hiveSplitSource, 100);
-        List<ConnectorSplit> groupedConnectorSplits = hiveSplitSource.groupSmallSplits(connectorSplits, 1);
+        List<ConnectorSplit> groupedConnectorSplits = hiveSplitSource.groupSmallSplits(connectorSplits);
+        //assertEquals(groupedConnectorSplits.size(), 51);
         List<HiveSplitWrapper> hiveSplitWrappers = new ArrayList<>();
         groupedConnectorSplits.forEach(pendingSplit -> hiveSplitWrappers.add((HiveSplitWrapper) pendingSplit));
         assertEquals(groupedConnectorSplits.size(), 6);
@@ -802,7 +807,7 @@ public class TestHiveSplitSource
         }
         hiveSplitSource.noMoreSplits();
         List<ConnectorSplit> connectorSplits = getSplits(hiveSplitSource, OptionalInt.of(2), 100);
-        List<ConnectorSplit> groupedConnectorSplits = hiveSplitSource.groupSmallSplits(connectorSplits, 1);
+        List<ConnectorSplit> groupedConnectorSplits = hiveSplitSource.groupSmallSplits(connectorSplits);
         assertEquals(groupedConnectorSplits.size(), 1);
         List<HiveSplitWrapper> hiveSplitWrappers = new ArrayList<>();
         groupedConnectorSplits.forEach(pendingSplit -> hiveSplitWrappers.add((HiveSplitWrapper) pendingSplit));
@@ -835,7 +840,7 @@ public class TestHiveSplitSource
 
         for (int i = 0; i < 4; i++) {
             List<ConnectorSplit> connectorSplits = getSplits(hiveSplitSource, OptionalInt.of(i), 100);
-            List<ConnectorSplit> groupedConnectorSplits = hiveSplitSource.groupSmallSplits(connectorSplits, 1);
+            List<ConnectorSplit> groupedConnectorSplits = hiveSplitSource.groupSmallSplits(connectorSplits);
             List<HiveSplitWrapper> hiveSplitWrappers = new ArrayList<>();
             groupedConnectorSplits.forEach(pendingSplit -> hiveSplitWrappers.add((HiveSplitWrapper) pendingSplit));
             assertEquals(hiveSplitWrappers.get(0).getSplits().size(), 10);

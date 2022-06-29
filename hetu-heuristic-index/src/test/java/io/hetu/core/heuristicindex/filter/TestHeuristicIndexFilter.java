@@ -1,5 +1,5 @@
 /*
- * Copyright (C) 2018-2021. Huawei Technologies Co., Ltd. All rights reserved.
+ * Copyright (C) 2018-2020. Huawei Technologies Co., Ltd. All rights reserved.
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
  * You may obtain a copy of the License at
@@ -17,10 +17,8 @@ package io.hetu.core.heuristicindex.filter;
 
 import com.google.common.collect.ImmutableList;
 import com.google.common.collect.ImmutableMap;
-import io.hetu.core.common.filesystem.TempFolder;
 import io.hetu.core.plugin.heuristicindex.index.bloom.BloomIndex;
 import io.hetu.core.plugin.heuristicindex.index.minmax.MinMaxIndex;
-import io.prestosql.expressions.LogicalRowExpressions;
 import io.prestosql.spi.function.OperatorType;
 import io.prestosql.spi.heuristicindex.IndexMetadata;
 import io.prestosql.spi.heuristicindex.Pair;
@@ -28,16 +26,14 @@ import io.prestosql.spi.relation.ConstantExpression;
 import io.prestosql.spi.relation.RowExpression;
 import io.prestosql.spi.relation.SpecialForm;
 import io.prestosql.spi.relation.VariableReferenceExpression;
+import io.prestosql.spi.sql.RowExpressionUtils;
 import org.testng.annotations.BeforeClass;
 import org.testng.annotations.Test;
 
-import java.io.File;
-import java.io.FileInputStream;
-import java.io.FileOutputStream;
 import java.io.IOException;
 import java.util.Collections;
 
-import static io.hetu.core.HeuristicIndexTestUtils.simplePredicate;
+import static io.prestosql.spi.sql.RowExpressionUtils.simplePredicate;
 import static io.prestosql.spi.type.BigintType.BIGINT;
 import static io.prestosql.spi.type.BooleanType.BOOLEAN;
 import static io.prestosql.spi.type.VarcharType.VARCHAR;
@@ -55,60 +51,39 @@ public class TestHeuristicIndexFilter
     public void setup()
             throws IOException
     {
-        try (TempFolder folder = new TempFolder()) {
-            folder.create();
-            File testFile = folder.newFile();
+        bloomIndex1 = new BloomIndex();
+        bloomIndex1.setExpectedNumOfEntries(2);
+        bloomIndex1.addValues(Collections.singletonList(new Pair<>("testColumn", ImmutableList.of("a", "b"))));
 
-            bloomIndex1 = new BloomIndex();
-            bloomIndex1.setExpectedNumOfEntries(2);
-            bloomIndex1.addValues(Collections.singletonList(new Pair<>("testColumn", ImmutableList.of("a", "b"))));
+        bloomIndex2 = new BloomIndex();
+        bloomIndex2.setExpectedNumOfEntries(2);
+        bloomIndex2.addValues(Collections.singletonList(new Pair<>("testColumn", ImmutableList.of("c", "d"))));
 
-            try (FileOutputStream fo = new FileOutputStream(testFile)) {
-                bloomIndex1.serialize(fo);
-            }
+        minMaxIndex1 = new MinMaxIndex();
+        minMaxIndex1.addValues(Collections.singletonList(new Pair<>("testColumn", ImmutableList.of(1L, 5L, 10L))));
 
-            try (FileInputStream fi = new FileInputStream(testFile)) {
-                bloomIndex1.deserialize(fi);
-            }
-
-            bloomIndex2 = new BloomIndex();
-            bloomIndex2.setExpectedNumOfEntries(2);
-            bloomIndex2.addValues(Collections.singletonList(new Pair<>("testColumn", ImmutableList.of("c", "d"))));
-
-            try (FileOutputStream fo = new FileOutputStream(testFile)) {
-                bloomIndex2.serialize(fo);
-            }
-
-            try (FileInputStream fi = new FileInputStream(testFile)) {
-                bloomIndex2.deserialize(fi);
-            }
-
-            minMaxIndex1 = new MinMaxIndex();
-            minMaxIndex1.addValues(Collections.singletonList(new Pair<>("testColumn", ImmutableList.of(1L, 5L, 10L))));
-
-            minMaxIndex2 = new MinMaxIndex();
-            minMaxIndex2.addValues(Collections.singletonList(new Pair<>("testColumn", ImmutableList.of(50L, 80L, 100L))));
-        }
+        minMaxIndex2 = new MinMaxIndex();
+        minMaxIndex2.addValues(Collections.singletonList(new Pair<>("testColumn", ImmutableList.of(50L, 80L, 100L))));
     }
 
     @Test
     public void testFilterWithBloomIndices()
     {
-        RowExpression expression1 = LogicalRowExpressions.and(
+        RowExpression expression1 = RowExpressionUtils.and(
                 simplePredicate(OperatorType.EQUAL, "testColumn", VARCHAR, "a"),
                 simplePredicate(OperatorType.EQUAL, "testColumn", VARCHAR, "b"));
-        RowExpression expression2 = LogicalRowExpressions.and(
+        RowExpression expression2 = RowExpressionUtils.and(
                 simplePredicate(OperatorType.EQUAL, "testColumn", VARCHAR, "a"),
                 simplePredicate(OperatorType.EQUAL, "testColumn", VARCHAR, "e"));
-        RowExpression expression3 = LogicalRowExpressions.or(
+        RowExpression expression3 = RowExpressionUtils.or(
                 simplePredicate(OperatorType.EQUAL, "testColumn", VARCHAR, "e"),
                 simplePredicate(OperatorType.EQUAL, "testColumn", VARCHAR, "c"));
-        RowExpression expression4 = LogicalRowExpressions.or(
+        RowExpression expression4 = RowExpressionUtils.or(
                 simplePredicate(OperatorType.EQUAL, "testColumn", VARCHAR, "e"),
                 simplePredicate(OperatorType.EQUAL, "testColumn", VARCHAR, "f"));
-        RowExpression expression5 = LogicalRowExpressions.and(
+        RowExpression expression5 = RowExpressionUtils.and(
                 simplePredicate(OperatorType.EQUAL, "testColumn", VARCHAR, "d"),
-                LogicalRowExpressions.or(
+                RowExpressionUtils.or(
                         simplePredicate(OperatorType.EQUAL, "testColumn", VARCHAR, "e"),
                         new SpecialForm(SpecialForm.Form.IN, BOOLEAN,
                                 new VariableReferenceExpression("testColumn", VARCHAR),
@@ -129,25 +104,25 @@ public class TestHeuristicIndexFilter
     @Test
     public void testFilterWithMinMaxIndices()
     {
-        RowExpression expression1 = LogicalRowExpressions.and(
+        RowExpression expression1 = RowExpressionUtils.and(
                 simplePredicate(OperatorType.EQUAL, "testColumn", BIGINT, 8L),
                 new SpecialForm(SpecialForm.Form.IN, BOOLEAN,
                         new VariableReferenceExpression("testColumn", VARCHAR),
                         new ConstantExpression(20L, BIGINT),
                         new ConstantExpression(80L, BIGINT)));
-        RowExpression expression2 = LogicalRowExpressions.and(
+        RowExpression expression2 = RowExpressionUtils.and(
                 simplePredicate(OperatorType.EQUAL, "testColumn", BIGINT, 5L),
                 simplePredicate(OperatorType.EQUAL, "testColumn", BIGINT, 20L));
-        RowExpression expression3 = LogicalRowExpressions.and(
+        RowExpression expression3 = RowExpressionUtils.and(
                 simplePredicate(OperatorType.GREATER_THAN_OR_EQUAL, "testColumn", BIGINT, 2L),
                 simplePredicate(OperatorType.LESS_THAN_OR_EQUAL, "testColumn", BIGINT, 10L));
-        RowExpression expression4 = LogicalRowExpressions.and(
+        RowExpression expression4 = RowExpressionUtils.and(
                 simplePredicate(OperatorType.GREATER_THAN, "testColumn", BIGINT, 8L),
                 simplePredicate(OperatorType.LESS_THAN, "testColumn", BIGINT, 20L));
-        RowExpression expression5 = LogicalRowExpressions.or(
+        RowExpression expression5 = RowExpressionUtils.or(
                 simplePredicate(OperatorType.GREATER_THAN, "testColumn", BIGINT, 200L),
                 simplePredicate(OperatorType.LESS_THAN, "testColumn", BIGINT, 0L));
-        RowExpression expression6 = LogicalRowExpressions.or(
+        RowExpression expression6 = RowExpressionUtils.or(
                 simplePredicate(OperatorType.LESS_THAN, "testColumn", BIGINT, 0L),
                 new SpecialForm(SpecialForm.Form.BETWEEN, BOOLEAN,
                         new VariableReferenceExpression("testColumn", VARCHAR),

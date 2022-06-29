@@ -39,7 +39,6 @@ import io.prestosql.spi.connector.ConnectorUpdateTableHandle;
 import io.prestosql.spi.connector.ConnectorVacuumTableHandle;
 import io.prestosql.spi.type.TypeManager;
 import org.apache.hadoop.hive.ql.io.AcidUtils;
-import org.joda.time.DateTimeZone;
 
 import javax.inject.Inject;
 
@@ -75,7 +74,6 @@ public class HivePageSinkProvider
     private final HiveWriterStats hiveWriterStats;
     private final OrcFileWriterFactory orcFileWriterFactory;
     private final long perTransactionMetastoreCacheMaximumSize;
-    private final DateTimeZone parquetTimeZone;
 
     @Inject
     public HivePageSinkProvider(
@@ -113,7 +111,6 @@ public class HivePageSinkProvider
         this.hiveWriterStats = requireNonNull(hiveWriterStats, "stats is null");
         this.orcFileWriterFactory = requireNonNull(orcFileWriterFactory, "orcFileWriterFactory is null");
         this.perTransactionMetastoreCacheMaximumSize = config.getPerTransactionMetastoreCacheMaximumSize();
-        this.parquetTimeZone = config.getParquetDateTimeZone();
     }
 
     @Override
@@ -133,7 +130,6 @@ public class HivePageSinkProvider
         return createPageSink(handle, false, HiveACIDWriteType.UPDATE, session, ImmutableMap.of());
     }
 
-    @Override
     public ConnectorPageSink createPageSink(ConnectorTransactionHandle transaction, ConnectorSession session, ConnectorDeleteAsInsertTableHandle tableHandle)
     {
         HiveDeleteAsInsertTableHandle handle = (HiveDeleteAsInsertTableHandle) tableHandle;
@@ -190,7 +186,6 @@ public class HivePageSinkProvider
                 writerSortBufferSize,
                 maxOpenSortFiles,
                 immutablePartitions,
-                parquetTimeZone,
                 session,
                 nodeManager,
                 eventClient,

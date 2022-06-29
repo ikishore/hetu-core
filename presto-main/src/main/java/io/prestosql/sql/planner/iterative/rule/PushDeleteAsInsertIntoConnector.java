@@ -1,5 +1,5 @@
 /*
- * Copyright (C) 2018-2021. Huawei Technologies Co., Ltd. All rights reserved.
+ * Copyright (C) 2018-2020. Huawei Technologies Co., Ltd. All rights reserved.
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
  * You may obtain a copy of the License at
@@ -16,7 +16,6 @@ package io.prestosql.sql.planner.iterative.rule;
 
 import com.google.common.collect.ImmutableList;
 import io.prestosql.Session;
-import io.prestosql.expressions.LogicalRowExpressions;
 import io.prestosql.matching.Capture;
 import io.prestosql.matching.Captures;
 import io.prestosql.matching.Pattern;
@@ -31,6 +30,7 @@ import io.prestosql.spi.plan.ProjectNode;
 import io.prestosql.spi.plan.Symbol;
 import io.prestosql.spi.plan.TableScanNode;
 import io.prestosql.spi.relation.RowExpression;
+import io.prestosql.spi.sql.RowExpressionUtils;
 import io.prestosql.sql.ExpressionUtils;
 import io.prestosql.sql.planner.SymbolsExtractor;
 import io.prestosql.sql.planner.iterative.Lookup;
@@ -39,8 +39,6 @@ import io.prestosql.sql.planner.plan.SimplePlanRewriter;
 import io.prestosql.sql.planner.plan.TableDeleteNode;
 import io.prestosql.sql.planner.plan.TableFinishNode;
 import io.prestosql.sql.planner.plan.TableWriterNode;
-import io.prestosql.sql.relational.FunctionResolution;
-import io.prestosql.sql.relational.RowExpressionDeterminismEvaluator;
 import io.prestosql.sql.tree.ComparisonExpression;
 import io.prestosql.sql.tree.Expression;
 
@@ -92,11 +90,9 @@ public class PushDeleteAsInsertIntoConnector
 
     private final Metadata metadata;
     private final boolean withFilter;
-    private final LogicalRowExpressions logicalRowExpressions;
 
     public PushDeleteAsInsertIntoConnector(Metadata metadata, boolean withFilter)
     {
-        this.logicalRowExpressions = new LogicalRowExpressions(new RowExpressionDeterminismEvaluator(metadata), new FunctionResolution(metadata.getFunctionAndTypeManager()), metadata.getFunctionAndTypeManager());
         this.metadata = requireNonNull(metadata, "metadata is null");
         this.withFilter = withFilter;
     }
@@ -158,7 +154,7 @@ public class PushDeleteAsInsertIntoConnector
         FilterNode filterNode = captures.get(FILTER);
         List<Symbol> nonTableSymbols = allPredicateSymbols.stream().filter(symbol -> !allColumns.contains(symbol)).collect(Collectors.toList());
         PredicateContext predicateContext = new PredicateContext();
-        PlanNode rewrittenSource = SimplePlanRewriter.rewriteWith(new ReWriter(columnAssignments.keySet(), nonTableSymbols, context.getLookup(), logicalRowExpressions), filterNode, predicateContext);
+        PlanNode rewrittenSource = SimplePlanRewriter.rewriteWith(new ReWriter(columnAssignments.keySet(), nonTableSymbols, context.getLookup()), filterNode, predicateContext);
         /**
          * Create the TableDeleteNode with source to evaluate the predicate subqueries
          */
@@ -174,7 +170,7 @@ public class PushDeleteAsInsertIntoConnector
 
     private class PredicateContext
     {
-        RowExpression tablePredicate = LogicalRowExpressions.TRUE_CONSTANT;
+        RowExpression tablePredicate = RowExpressionUtils.TRUE_CONSTANT;
     }
 
     /**
@@ -187,11 +183,9 @@ public class PushDeleteAsInsertIntoConnector
         private final Set<Symbol> tableSymbols;
         private final Set<Symbol> nonTableSymbols;
         private final Lookup lookup;
-        private final LogicalRowExpressions logicalRowExpressions;
 
-        ReWriter(Set<Symbol> tableSymbols, List<Symbol> nonTableSymbols, Lookup lookup, LogicalRowExpressions logicalRowExpressions)
+        ReWriter(Set<Symbol> tableSymbols, List<Symbol> nonTableSymbols, Lookup lookup)
         {
-            this.logicalRowExpressions = requireNonNull(logicalRowExpressions, "logicalRowExpressions is null");
             this.tableSymbols = tableSymbols;
             this.nonTableSymbols = new HashSet<>(nonTableSymbols);
             this.lookup = lookup;
@@ -214,8 +208,8 @@ public class PushDeleteAsInsertIntoConnector
                 Assignments.Builder builder = Assignments.builder();
                 builder.putAll(assignments.filter(rewritten.getOutputSymbols()));
                 //Project out symbols which are part of predicate
-                List<Symbol> finalNonTableSymbols = this.nonTableSymbols.stream().filter(rewritten.getOutputSymbols()::contains).collect(Collectors.toList());
-                for (Symbol symbol : finalNonTableSymbols) {
+                List<Symbol> nonTableSymbols = this.nonTableSymbols.stream().filter(rewritten.getOutputSymbols()::contains).collect(Collectors.toList());
+                for (Symbol symbol : nonTableSymbols) {
                     builder.put(symbol, castToRowExpression(toSymbolReference(symbol)));
                 }
                 assignments = builder.build();
@@ -237,7 +231,7 @@ public class PushDeleteAsInsertIntoConnector
                  * extract the conjuncts of the filter predicate and remove the conjuncts
                  * which contains symbols which are no longer part of rewritten output symbols.
                  */
-                List<RowExpression> expressions = LogicalRowExpressions.extractConjuncts(predicate);
+                List<RowExpression> expressions = RowExpressionUtils.extractConjuncts(predicate);
                 List<RowExpression> reWrittenExpressions = expressions.stream()
                         .filter(expression -> reWrittenOutputSymbols.containsAll(SymbolsExtractor.extractUnique(expression)))
                         .collect(Collectors.toList());
@@ -248,13 +242,13 @@ public class PushDeleteAsInsertIntoConnector
                                 .build().containsAll(SymbolsExtractor.extractUnique(expression)))
                         .collect(Collectors.toList());
                 if (!tablePredicates.isEmpty()) {
-                    context.get().tablePredicate = logicalRowExpressions.combineConjuncts(context.get().tablePredicate,
-                            logicalRowExpressions.combineConjuncts(tablePredicates));
+                    context.get().tablePredicate = RowExpressionUtils.combineConjuncts(context.get().tablePredicate,
+                            RowExpressionUtils.combineConjuncts(tablePredicates));
                 }
                 if (reWrittenExpressions.isEmpty()) {
                     return reWritten;
                 }
-                predicate = logicalRowExpressions.combineConjuncts(reWrittenExpressions);
+                predicate = RowExpressionUtils.combineConjuncts(reWrittenExpressions);
             }
             return new FilterNode(node.getId(), reWritten, predicate);
         }
@@ -285,12 +279,12 @@ public class PushDeleteAsInsertIntoConnector
                         return rewrittenOutputSymbols.containsAll(symbols);
                     }).collect(Collectors.toList());
             Optional<RowExpression> rewrittenFilter = node.getFilter().map(filter -> {
-                List<RowExpression> expressions = LogicalRowExpressions.extractConjuncts(filter);
+                List<RowExpression> expressions = RowExpressionUtils.extractConjuncts(filter);
                 List<RowExpression> filteredExpressions = expressions.stream().filter(expression -> {
                     Set<Symbol> symbols = SymbolsExtractor.extractUnique(expression);
                     return rewrittenOutputSymbols.containsAll(symbols);
                 }).collect(Collectors.toList());
-                return logicalRowExpressions.combineConjuncts(filteredExpressions);
+                return RowExpressionUtils.combineConjuncts(filteredExpressions);
             });
             Optional<Symbol> leftHashSymbol = Optional.empty();
             if (leftHashSymbol.isPresent() && rewrittenOutputSymbols.contains(leftHashSymbol.get())) {

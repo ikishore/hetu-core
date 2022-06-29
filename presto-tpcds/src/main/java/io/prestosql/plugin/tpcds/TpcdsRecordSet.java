@@ -55,11 +55,11 @@ public class TpcdsRecordSet
 
         this.results = results;
         this.columns = ImmutableList.copyOf(columns);
-        ImmutableList.Builder<Type> columnTypesBuilder = ImmutableList.builder();
+        ImmutableList.Builder<Type> columnTypes = ImmutableList.builder();
         for (Column column : columns) {
-            columnTypesBuilder.add(getPrestoType(column.getType()));
+            columnTypes.add(getPrestoType(column.getType()));
         }
-        this.columnTypes = columnTypesBuilder.build();
+        this.columnTypes = columnTypes.build();
     }
 
     @Override

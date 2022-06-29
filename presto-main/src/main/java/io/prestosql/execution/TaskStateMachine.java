@@ -26,8 +26,6 @@ import java.util.concurrent.LinkedBlockingQueue;
 import static com.google.common.base.MoreObjects.toStringHelper;
 import static com.google.common.base.Preconditions.checkArgument;
 import static com.google.common.util.concurrent.Futures.immediateFuture;
-import static io.prestosql.execution.TaskState.RUNNING;
-import static io.prestosql.execution.TaskState.SUSPENDED;
 import static io.prestosql.execution.TaskState.TERMINAL_TASK_STATES;
 import static java.util.Objects.requireNonNull;
 
@@ -94,9 +92,14 @@ public class TaskStateMachine
         transitionToDoneState(TaskState.FINISHED);
     }
 
-    public void cancel(TaskState targetState)
+    public void cancel()
     {
-        transitionToDoneState(targetState);
+        transitionToDoneState(TaskState.CANCELED);
+    }
+
+    public void abort()
+    {
+        transitionToDoneState(TaskState.ABORTED);
     }
 
     public void failed(Throwable cause)
@@ -113,16 +116,6 @@ public class TaskStateMachine
         taskState.setIf(doneState, currentState -> !currentState.isDone());
     }
 
-    public void suspend()
-    {
-        taskState.set(SUSPENDED);
-    }
-
-    public void resume()
-    {
-        taskState.set(RUNNING);
-    }
-
     /**
      * Listener is always notified asynchronously using a dedicated notification thread pool so, care should
      * be taken to avoid leaking {@code this} when adding a listener in a constructor. Additionally, it is
@@ -131,15 +124,6 @@ public class TaskStateMachine
     public void addStateChangeListener(StateChangeListener<TaskState> stateChangeListener)
     {
         taskState.addStateChangeListener(stateChangeListener);
-    }
-
-    /**
-     * Add listener to the tail, this listener will be notified at last when state changed.
-     * @param stateChangeListener listener of state change.
-     */
-    public void addStateChangeListenerToTail(StateChangeListener<TaskState> stateChangeListener)
-    {
-        taskState.addStateChangeListenerToTail(stateChangeListener);
     }
 
     @Override

@@ -15,13 +15,11 @@
 package io.prestosql.operator.aggregation.histogram;
 
 import io.prestosql.spi.block.Block;
-import io.prestosql.spi.snapshot.BlockEncodingSerdeProvider;
-import io.prestosql.spi.snapshot.Restorable;
 import io.prestosql.spi.type.Type;
 import org.openjdk.jol.info.ClassLayout;
 
 public class SingleHistogramState
-        implements HistogramState, Restorable
+        implements HistogramState
 {
     private static final int INSTANCE_SIZE = ClassLayout.parseClass(SingleHistogramState.class).instanceSize();
 
@@ -58,17 +56,5 @@ public class SingleHistogramState
             estimatedSize += typedHistogram.getEstimatedSize();
         }
         return estimatedSize;
-    }
-
-    @Override
-    public Object capture(BlockEncodingSerdeProvider serdeProvider)
-    {
-        return this.typedHistogram.capture(serdeProvider);
-    }
-
-    @Override
-    public void restore(Object state, BlockEncodingSerdeProvider serdeProvider)
-    {
-        this.typedHistogram.restore(state, serdeProvider);
     }
 }

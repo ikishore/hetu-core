@@ -32,7 +32,6 @@ import org.testng.annotations.BeforeClass;
 import org.testng.annotations.Test;
 
 import java.math.BigInteger;
-import java.nio.charset.StandardCharsets;
 import java.util.ArrayList;
 import java.util.Collections;
 import java.util.Iterator;
@@ -50,8 +49,8 @@ import static com.google.common.collect.Lists.newArrayList;
 import static io.prestosql.orc.OrcTester.HIVE_STORAGE_TIME_ZONE;
 import static io.prestosql.orc.OrcTester.mapType;
 import static io.prestosql.orc.OrcTester.quickSelectiveOrcTester;
-import static io.prestosql.orc.TupleDomainFilterUtils.IS_NOT_NULL;
-import static io.prestosql.orc.TupleDomainFilterUtils.IS_NULL;
+import static io.prestosql.orc.TupleDomainFilter.IS_NOT_NULL;
+import static io.prestosql.orc.TupleDomainFilter.IS_NULL;
 import static io.prestosql.spi.type.BigintType.BIGINT;
 import static io.prestosql.spi.type.BooleanType.BOOLEAN;
 import static io.prestosql.spi.type.CharType.createCharType;
@@ -62,6 +61,7 @@ import static io.prestosql.spi.type.SmallintType.SMALLINT;
 import static io.prestosql.spi.type.TimestampType.TIMESTAMP;
 import static io.prestosql.spi.type.VarcharType.VARCHAR;
 import static io.prestosql.testing.DateTimeTestingUtils.sqlTimestampOf;
+import static io.prestosql.testing.TestingConnectorSession.SESSION;
 import static java.util.Collections.nCopies;
 import static java.util.stream.Collectors.toList;
 import static org.testng.Assert.assertEquals;
@@ -139,7 +139,7 @@ public class TestSelectiveOrcReader
                 .collect(toList());
 
         List<SqlTimestamp> timestamps = longValues.stream()
-                .map(timestamp -> sqlTimestampOf(timestamp))
+                .map(timestamp -> sqlTimestampOf(timestamp & Integer.MAX_VALUE, SESSION))
                 .collect(toList());
 
         tester.testRoundTrip(BIGINT, longValues, ImmutableList.of(ImmutableMap.of(0, filter)));
@@ -192,14 +192,12 @@ public class TestSelectiveOrcReader
 
     private static TupleDomainFilter stringBetween(boolean nullAllowed, String upper, String lower)
     {
-        return TupleDomainFilter.BytesRange.of(lower.getBytes(StandardCharsets.UTF_8), false,
-                upper.getBytes(StandardCharsets.UTF_8), false, nullAllowed);
+        return TupleDomainFilter.BytesRange.of(lower.getBytes(), false, upper.getBytes(), false, nullAllowed);
     }
 
     private static TupleDomainFilter stringEquals(boolean nullAllowed, String value)
     {
-        return TupleDomainFilter.BytesRange.of(value.getBytes(StandardCharsets.UTF_8), false, value.getBytes(StandardCharsets.UTF_8),
-                false, nullAllowed);
+        return TupleDomainFilter.BytesRange.of(value.getBytes(), false, value.getBytes(), false, nullAllowed);
     }
 
     private static String toCharValue(Object value, int minLength)

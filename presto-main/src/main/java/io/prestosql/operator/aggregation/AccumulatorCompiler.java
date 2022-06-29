@@ -34,11 +34,9 @@ import io.prestosql.spi.Page;
 import io.prestosql.spi.block.Block;
 import io.prestosql.spi.block.BlockBuilder;
 import io.prestosql.spi.block.ColumnarRow;
-import io.prestosql.spi.function.AccumulatorState;
 import io.prestosql.spi.function.AccumulatorStateFactory;
 import io.prestosql.spi.function.AccumulatorStateSerializer;
 import io.prestosql.spi.function.WindowIndex;
-import io.prestosql.spi.snapshot.BlockEncodingSerdeProvider;
 import io.prestosql.spi.type.RowType;
 import io.prestosql.spi.type.Type;
 import io.prestosql.sql.gen.Binding;
@@ -68,7 +66,6 @@ import static io.airlift.bytecode.expression.BytecodeExpressions.constantLong;
 import static io.airlift.bytecode.expression.BytecodeExpressions.constantString;
 import static io.airlift.bytecode.expression.BytecodeExpressions.invokeDynamic;
 import static io.airlift.bytecode.expression.BytecodeExpressions.invokeStatic;
-import static io.airlift.bytecode.expression.BytecodeExpressions.newInstance;
 import static io.airlift.bytecode.expression.BytecodeExpressions.not;
 import static io.prestosql.operator.aggregation.AggregationMetadata.ParameterMetadata;
 import static io.prestosql.operator.aggregation.AggregationMetadata.countInputChannels;
@@ -128,7 +125,7 @@ public class AccumulatorCompiler
                     definition.declareField(a(PRIVATE, FINAL), "state_" + i, grouped ? stateDescriptors.get(i).getFactory().getGroupedStateClass() : stateDescriptors.get(i).getFactory().getSingleStateClass()),
                     stateDescriptors.get(i)));
         }
-        List<FieldDefinition> stateFields = stateFieldAndDescriptors.stream()
+        List<FieldDefinition> stateFileds = stateFieldAndDescriptors.stream()
                 .map(StateFieldAndDescriptor::getStateField)
                 .collect(toImmutableList());
 
@@ -153,7 +150,7 @@ public class AccumulatorCompiler
         // Generate methods
         generateAddInput(
                 definition,
-                stateFields,
+                stateFileds,
                 inputChannelsField,
                 maskChannelField,
                 metadata.getValueInputMetadata(),
@@ -164,13 +161,13 @@ public class AccumulatorCompiler
                 grouped);
         generateAddInputWindowIndex(
                 definition,
-                stateFields,
+                stateFileds,
                 metadata.getValueInputMetadata(),
                 metadata.getLambdaInterfaces(),
                 lambdaProviderFields,
                 metadata.getInputFunction(),
                 callSiteBinder);
-        generateGetEstimatedSize(definition, stateFields);
+        generateGetEstimatedSize(definition, stateFileds);
 
         generateGetIntermediateType(
                 definition,
@@ -198,19 +195,15 @@ public class AccumulatorCompiler
         }
 
         if (grouped) {
-            generateGroupedEvaluateFinal(definition, stateFields, metadata.getOutputFunction(), callSiteBinder);
+            generateGroupedEvaluateFinal(definition, stateFileds, metadata.getOutputFunction(), callSiteBinder);
         }
         else {
-            generateEvaluateFinal(definition, stateFields, metadata.getOutputFunction(), callSiteBinder);
+            generateEvaluateFinal(definition, stateFileds, metadata.getOutputFunction(), callSiteBinder);
         }
 
         if (grouped) {
             generatePrepareFinal(definition);
         }
-
-        generateCapture(definition);
-        generateRestore(definition);
-
         return defineClass(definition, accumulatorInterface, callSiteBinder.getBindings(), classLoader);
     }
 
@@ -1026,74 +1019,6 @@ public class AccumulatorCompiler
     {
         return invokeStatic(Objects.class, "requireNonNull", Object.class, variable.cast(Object.class), constantString(variable.getName() + " is null"))
                 .cast(variable.getType());
-    }
-
-    private static void generateCapture(ClassDefinition definition)
-    {
-        /**
-         public Object capture(BlockEncodingSerdeProvider serdeProvider)
-         {
-         AccumulatorStateSerializer serializer;
-         AccumulatorState accumulatorState;
-         List<Object> myState = new ArrayList<>();
-
-         serializer = stateSerializer_0;
-         accumulatorState = state_0;
-         myState.add(serializer.serializeCapture(accumulatorState, serdeProvider));
-         .
-         .
-         .
-         }
-         **/
-        Parameter serdeProvider = arg("serdeProvider", BlockEncodingSerdeProvider.class);
-        MethodDefinition method = definition.declareMethod(a(PUBLIC), "capture", type(Object.class), serdeProvider);
-        Variable serializer = method.getScope().declareVariable(AccumulatorStateSerializer.class, "serializer");
-        Variable accumulatorState = method.getScope().declareVariable(AccumulatorState.class, "accumulatorState");
-        Variable myState = method.getScope().declareVariable(List.class, "myState");
-        method.getBody().append(myState.set(newInstance(ArrayList.class)));
-
-        for (int i = 0; i < definition.getFields().size(); i++) {
-            String fieldName = definition.getFields().get(i).getName();
-            if (fieldName.startsWith("stateSerializer_")) {
-                method.getBody().append(serializer.set(method.getThis().getField(definition.getFields().get(i))));
-                //State field is guaranteed to be the second field after serializer field
-                i += 2;
-                method.getBody().append(accumulatorState.set(method.getThis().getField(definition.getFields().get(i))));
-                method.getBody().append(myState.invoke("add", boolean.class, serializer.invoke("serializeCapture", Object.class, accumulatorState.cast(Object.class), serdeProvider)));
-            }
-        }
-        method.getBody().append(myState.ret());
-    }
-
-    private static void generateRestore(ClassDefinition definition)
-    {
-        /**
-         An AccumulatorStateSerializer + AccumulatorStateFactory + AccumulatorState is considered as a group.
-         Loop through all fields and look for such group and save reference to its AccumulatorStateSerializer and AccumulatorState
-         If AccumulatorState is Restorable itself, call own Restore function.
-         If AccumulatorState is not Restorable, restore by calling AccumulatorStateSerializer.deserializeRestore(Object snapshot, Object state, BlockEncodingSerdeProvider serdeProvider).
-         **/
-        Parameter state = arg("state", Object.class);
-        Parameter serdeProvider = arg("serdeProvider", BlockEncodingSerdeProvider.class);
-        MethodDefinition method = definition.declareMethod(a(PUBLIC), "restore", type(void.class), state, serdeProvider);
-        Variable serializer = method.getScope().declareVariable(AccumulatorStateSerializer.class, "serializer");
-        Variable accumulatorState = method.getScope().declareVariable(AccumulatorState.class, "accumulatorState");
-        Variable myState = method.getScope().declareVariable(List.class, "myState");
-        method.getBody().append(myState.set(state.cast(List.class)));
-
-        int currentGroupNumber = 0;
-        for (int i = 0; i < definition.getFields().size(); i++) {
-            String fieldName = definition.getFields().get(i).getName();
-            if (fieldName.startsWith("stateSerializer_")) {
-                method.getBody().append(serializer.set(method.getThis().getField(definition.getFields().get(i))));
-                //State field is guaranteed to be the second field after serializer field
-                i += 2;
-                method.getBody().append(accumulatorState.set(method.getThis().getField(definition.getFields().get(i))));
-                method.getBody().append(serializer.invoke("deserializeRestore", void.class, myState.invoke("get", Object.class, constantInt(currentGroupNumber)), accumulatorState.cast(Object.class), serdeProvider));
-                currentGroupNumber++;
-            }
-        }
-        method.getBody().ret();
     }
 
     private static class StateFieldAndDescriptor

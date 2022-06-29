@@ -1,5 +1,5 @@
 /*
- * Copyright (C) 2018-2021. Huawei Technologies Co., Ltd. All rights reserved.
+ * Copyright (C) 2018-2020. Huawei Technologies Co., Ltd. All rights reserved.
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
  * You may obtain a copy of the License at
@@ -19,7 +19,6 @@ import com.fasterxml.jackson.annotation.JsonProperty;
 import com.fasterxml.jackson.databind.DeserializationContext;
 import io.airlift.log.Logger;
 import io.prestosql.metadata.Split;
-import io.prestosql.snapshot.MarkerSplit;
 import io.prestosql.sql.tree.QualifiedName;
 
 import java.io.IOException;
@@ -35,11 +34,11 @@ public class SplitKey
     private final String catalog;
     private final String schema;
     private final String table;
-    private final long start;
-    private final long end;
-    private final long lastModifiedTime;
-    private final QualifiedName qualifiedTableName;
-    private final String path;
+    private long start;
+    private long end;
+    private long lastModifiedTime;
+    private QualifiedName qualifiedTableName;
+    private String path;
 
     public SplitKey(
             Split split,
@@ -53,19 +52,10 @@ public class SplitKey
         this.table = requireNonNull(table, "table is null");
         this.qualifiedTableName = QualifiedName.of(catalog, schema, table);
 
-        // Create split key with dummy values when it's a MarkerSplit
-        if (split.getConnectorSplit() instanceof MarkerSplit) {
-            this.start = ((MarkerSplit) split.getConnectorSplit()).getSnapshotId();
-            this.end = this.start;
-            this.path = "";
-            this.lastModifiedTime = 0;
-        }
-        else {
-            this.start = split.getConnectorSplit().getStartIndex();
-            this.end = split.getConnectorSplit().getEndIndex();
-            this.path = split.getConnectorSplit().getFilePath();
-            this.lastModifiedTime = split.getConnectorSplit().getLastModifiedTime();
-        }
+        this.start = split.getConnectorSplit().getStartIndex();
+        this.end = split.getConnectorSplit().getEndIndex();
+        this.path = split.getConnectorSplit().getFilePath();
+        this.lastModifiedTime = split.getConnectorSplit().getLastModifiedTime();
     }
 
     @JsonCreator
@@ -188,13 +178,13 @@ public class SplitKey
             throw new IOException("Cannot create SplitKey instance from serialized value");
         }
         try {
-            String localCatalog = null;
-            String localSchema = null;
-            String localTable = null;
-            String localPath = null;
-            long localStart = -1;
-            long localEnd = -1;
-            long localLastModifiedTime = 0;
+            String catalog = null;
+            String schema = null;
+            String table = null;
+            String path = null;
+            long start = -1;
+            long end = -1;
+            long lastModifiedTime = 0;
             splitKeyString = splitKeyString.replace("SplitKey{", "").replace("}", "");
             String[] variableAndValues = splitKeyString.split(",");
             for (String variableAndValue : variableAndValues) {
@@ -203,31 +193,29 @@ public class SplitKey
                 String value = tokens[1].replace("'", "").trim();
                 switch (variable) {
                     case "catalog":
-                        localCatalog = value;
+                        catalog = value;
                         break;
                     case "schema":
-                        localSchema = value;
+                        schema = value;
                         break;
                     case "table":
-                        localTable = value;
+                        table = value;
                         break;
                     case "start":
-                        localStart = Long.parseLong(value);
+                        start = Long.parseLong(value);
                         break;
                     case "end":
-                        localEnd = Long.parseLong(value);
+                        end = Long.parseLong(value);
                         break;
                     case "lastModifiedTime":
-                        localLastModifiedTime = Long.parseLong(value);
+                        lastModifiedTime = Long.parseLong(value);
                         break;
                     case "path":
-                        localPath = value;
-                        break;
-                    default:
+                        path = value;
                         break;
                 }
             }
-            return new SplitKey(localCatalog, localSchema, localTable, localPath, localStart, localEnd, localLastModifiedTime);
+            return new SplitKey(catalog, schema, table, path, start, end, lastModifiedTime);
         }
         catch (Exception ex) {
             log.error(ex, "Unable to create SplitKey from serialized value %s", key);

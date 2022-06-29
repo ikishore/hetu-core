@@ -51,19 +51,17 @@ public final class ArrayIntersectFunction
             @SqlType("array(E)") Block leftArray,
             @SqlType("array(E)") Block rightArray)
     {
-        Block inputLeftArray = leftArray;
-        Block inputRightArray = rightArray;
-        if (inputLeftArray.getPositionCount() < inputRightArray.getPositionCount()) {
-            Block tempArray = inputLeftArray;
-            inputLeftArray = inputRightArray;
-            inputRightArray = tempArray;
+        if (leftArray.getPositionCount() < rightArray.getPositionCount()) {
+            Block tempArray = leftArray;
+            leftArray = rightArray;
+            rightArray = tempArray;
         }
 
-        int leftPositionCount = inputLeftArray.getPositionCount();
-        int rightPositionCount = inputRightArray.getPositionCount();
+        int leftPositionCount = leftArray.getPositionCount();
+        int rightPositionCount = rightArray.getPositionCount();
 
         if (rightPositionCount == 0) {
-            return inputRightArray;
+            return rightArray;
         }
 
         if (pageBuilder.isFull()) {
@@ -72,7 +70,7 @@ public final class ArrayIntersectFunction
 
         TypedSet rightTypedSet = new TypedSet(type, elementIsDistinctFrom, rightPositionCount, "array_intersect");
         for (int i = 0; i < rightPositionCount; i++) {
-            rightTypedSet.add(inputRightArray, i);
+            rightTypedSet.add(rightArray, i);
         }
 
         BlockBuilder blockBuilder = pageBuilder.getBlockBuilder(0);
@@ -80,8 +78,8 @@ public final class ArrayIntersectFunction
         // The intersected set can have at most rightPositionCount elements
         TypedSet intersectTypedSet = new TypedSet(type, Optional.of(elementIsDistinctFrom), blockBuilder, rightPositionCount, "array_intersect");
         for (int i = 0; i < leftPositionCount; i++) {
-            if (rightTypedSet.contains(inputLeftArray, i)) {
-                intersectTypedSet.add(inputLeftArray, i);
+            if (rightTypedSet.contains(leftArray, i)) {
+                intersectTypedSet.add(leftArray, i);
             }
         }
 

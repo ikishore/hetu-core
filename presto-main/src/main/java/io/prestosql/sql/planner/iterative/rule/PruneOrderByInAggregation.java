@@ -60,13 +60,13 @@ public class PruneOrderByInAggregation
                 aggregations.put(entry);
             }
             // getAggregateFunctionImplementation can be expensive, so check it last.
-            else if (metadata.getFunctionAndTypeManager().getAggregateFunctionImplementation(aggregation.getFunctionHandle()).isOrderSensitive()) {
+            else if (metadata.getAggregateFunctionImplementation(aggregation.getSignature()).isOrderSensitive()) {
                 aggregations.put(entry);
             }
             else {
                 anyRewritten = true;
                 aggregations.put(entry.getKey(), new Aggregation(
-                        aggregation.getFunctionCall(),
+                        aggregation.getSignature(),
                         aggregation.getArguments(),
                         aggregation.isDistinct(),
                         aggregation.getFilter(),
@@ -86,8 +86,6 @@ public class PruneOrderByInAggregation
                 node.getPreGroupedSymbols(),
                 node.getStep(),
                 node.getHashSymbol(),
-                node.getGroupIdSymbol(),
-                node.getAggregationType(),
-                node.getFinalizeSymbol()));
+                node.getGroupIdSymbol()));
     }
 }

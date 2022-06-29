@@ -54,7 +54,8 @@ public class DockerizedMySqlServer
         }
         catch (Exception e) {
             System.out.println("## Docker environment not properly set up. Skip test. ##");
-            System.out.println("Error message: " + e.getStackTrace());
+            System.out.println("Error message:");
+            e.printStackTrace();
             throw new SkipException("Docker environment not initialized for tests");
         }
     }

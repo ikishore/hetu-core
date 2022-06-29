@@ -28,10 +28,10 @@ import io.airlift.json.JsonCodec;
 import io.airlift.log.Logger;
 import io.airlift.units.DataSize;
 import io.airlift.units.Duration;
-import io.prestosql.eventlistener.EventListenerManager;
 import io.prestosql.execution.LocationFactory;
 import io.prestosql.execution.QueryExecution;
 import io.prestosql.execution.QueryIdGenerator;
+import io.prestosql.execution.scheduler.NodeSchedulerConfig;
 import io.prestosql.memory.LowMemoryKiller.QueryMemoryInfo;
 import io.prestosql.metadata.InternalNode;
 import io.prestosql.metadata.InternalNodeManager;
@@ -43,7 +43,6 @@ import io.prestosql.server.InternalCommunicationConfig;
 import io.prestosql.server.ServerConfig;
 import io.prestosql.spi.PrestoException;
 import io.prestosql.spi.QueryId;
-import io.prestosql.spi.eventlistener.AuditLogEvent;
 import io.prestosql.spi.memory.ClusterMemoryPoolManager;
 import io.prestosql.spi.memory.MemoryPoolId;
 import io.prestosql.spi.memory.MemoryPoolInfo;
@@ -58,15 +57,14 @@ import javax.annotation.PreDestroy;
 import javax.annotation.concurrent.GuardedBy;
 import javax.inject.Inject;
 
+import java.io.BufferedReader;
 import java.io.IOException;
+import java.io.InputStreamReader;
+import java.net.URI;
 import java.util.ArrayList;
-import java.util.Comparator;
 import java.util.HashMap;
 import java.util.HashSet;
-import java.util.LinkedHashMap;
-import java.util.LinkedList;
 import java.util.List;
-import java.util.Locale;
 import java.util.Map;
 import java.util.Map.Entry;
 import java.util.Optional;
@@ -85,6 +83,7 @@ import static com.google.common.collect.ImmutableList.toImmutableList;
 import static com.google.common.collect.ImmutableSet.toImmutableSet;
 import static com.google.common.collect.MoreCollectors.toOptional;
 import static com.google.common.collect.Sets.difference;
+import static io.airlift.http.client.HttpUriBuilder.uriBuilderFrom;
 import static io.airlift.units.DataSize.succinctBytes;
 import static io.airlift.units.Duration.nanosSince;
 import static io.prestosql.ExceededMemoryLimitException.exceededGlobalTotalLimit;
@@ -114,7 +113,6 @@ public class ClusterMemoryManager
     private final ExecutorService listenerExecutor = Executors.newSingleThreadExecutor();
     private final ClusterMemoryLeakDetector memoryLeakDetector = new ClusterMemoryLeakDetector();
     private final InternalNodeManager nodeManager;
-    private final EventListenerManager eventListenerManager;
     private final LocationFactory locationFactory;
     private final HttpClient httpClient;
     private final MBeanExporter exporter;
@@ -132,18 +130,17 @@ public class ClusterMemoryManager
     private final AtomicLong clusterTotalMemoryReservation = new AtomicLong();
     private final AtomicLong clusterMemoryBytes = new AtomicLong();
     private final AtomicLong queriesKilledDueToOutOfMemory = new AtomicLong();
+    private final boolean isWorkScheduledOnCoordinator;
     // LocalStateProvider
     private final StateStoreProvider stateStoreProvider;
     private final HetuConfig hetuConfig;
     private final boolean isBinaryEncoding;
-    private final boolean isSuspendEnabled;
-    private final int maxSuspendQuery;
 
     @GuardedBy("this")
-    private final Map<String, RemoteNodeMemory> nodes = new LinkedHashMap<>();
+    private final Map<String, RemoteNodeMemory> nodes = new HashMap<>();
 
     @GuardedBy("this")
-    private final Map<String, RemoteNodeMemory> allNodes = new LinkedHashMap<>();
+    private final Map<String, RemoteNodeMemory> allNodes = new HashMap<>();
 
     @GuardedBy("this")
     private final Map<MemoryPoolId, List<Consumer<MemoryPoolInfo>>> changeListeners = new HashMap<>();
@@ -157,14 +154,10 @@ public class ClusterMemoryManager
     @GuardedBy("this")
     private QueryId lastKilledQuery;
 
-    @GuardedBy("this")
-    private List<QueryId> lastSuspendedQueries = new LinkedList<>();
-
     @Inject
     public ClusterMemoryManager(
             @ForMemoryManager HttpClient httpClient,
             InternalNodeManager nodeManager,
-            EventListenerManager eventListenerManager,
             LocationFactory locationFactory,
             MBeanExporter exporter,
             JsonCodec<MemoryInfo> memoryInfoJsonCodec,
@@ -176,6 +169,7 @@ public class ClusterMemoryManager
             ServerConfig serverConfig,
             MemoryManagerConfig config,
             NodeMemoryConfig nodeMemoryConfig,
+            NodeSchedulerConfig schedulerConfig,
             StateStoreProvider stateStoreProvider,
             HetuConfig hetuConfig,
             InternalCommunicationConfig internalCommunicationConfig)
@@ -183,8 +177,8 @@ public class ClusterMemoryManager
         requireNonNull(config, "config is null");
         requireNonNull(nodeMemoryConfig, "nodeMemoryConfig is null");
         requireNonNull(serverConfig, "serverConfig is null");
+        requireNonNull(schedulerConfig, "schedulerConfig is null");
         this.nodeManager = requireNonNull(nodeManager, "nodeManager is null");
-        this.eventListenerManager = requireNonNull(eventListenerManager, "eventListenerManager is null");
         this.locationFactory = requireNonNull(locationFactory, "locationFactory is null");
         this.httpClient = requireNonNull(httpClient, "httpClient is null");
         this.exporter = requireNonNull(exporter, "exporter is null");
@@ -194,8 +188,7 @@ public class ClusterMemoryManager
         this.coordinatorId = queryIdGenerator.getCoordinatorId();
         this.enabled = serverConfig.isCoordinator();
         this.killOnOutOfMemoryDelay = config.getKillOnOutOfMemoryDelay();
-        this.isSuspendEnabled = config.getSuspendQueryEnabled();
-        this.maxSuspendQuery = config.getMaxSuspendedQueries();
+        this.isWorkScheduledOnCoordinator = schedulerConfig.isIncludeCoordinator();
 
         verify(maxQueryMemory.toBytes() <= maxQueryTotalMemory.toBytes(),
                 "maxQueryMemory cannot be greater than maxQueryTotalMemory");
@@ -250,9 +243,7 @@ public class ClusterMemoryManager
         return pools.containsKey(poolId);
     }
 
-    public synchronized void process(Iterable<QueryExecution> runningQueries,
-                                     Iterable<QueryExecution> suspendedQueries,
-                                     Supplier<List<BasicQueryInfo>> allQueryInfoSupplier)
+    public synchronized void process(Iterable<QueryExecution> runningQueries, Supplier<List<BasicQueryInfo>> allQueryInfoSupplier)
     {
         if (!enabled) {
             return;
@@ -330,11 +321,6 @@ public class ClusterMemoryManager
                             log.debug("Last killed query is still not gone: %s", lastKilledQuery);
                         }
                     }
-
-                    if (!outOfMemory) {
-                        /* Try to resume another suspended query */
-                        wakeUpSuspendedQuery(suspendedQueries);
-                    }
                 }
             }
             catch (Exception e) {
@@ -369,19 +355,6 @@ public class ClusterMemoryManager
         updateNodes(assignmentsRequest);
     }
 
-    private synchronized void wakeUpSuspendedQuery(Iterable<QueryExecution> suspendedQuery)
-    {
-        if (!isSuspendEnabled) {
-            return;
-        }
-
-        Optional<QueryExecution> chosenQuery = Streams.stream(suspendedQuery).max(Comparator.comparing(QueryExecution::getCreateTime));
-        if (chosenQuery.isPresent()) {
-            chosenQuery.get().resumeQuery();
-            lastSuspendedQueries.removeIf(queryId -> queryId.equals(chosenQuery.get().getQueryId()));
-        }
-    }
-
     private synchronized void callOomKiller(Iterable<QueryExecution> runningQueries)
     {
         List<QueryMemoryInfo> queryMemoryInfoList = Streams.stream(runningQueries)
@@ -395,19 +368,13 @@ public class ClusterMemoryManager
         Optional<QueryId> chosenQueryId = lowMemoryKiller.chooseQueryToKill(queryMemoryInfoList, nodeMemoryInfos);
         if (chosenQueryId.isPresent()) {
             log.debug("Low memory killer chose %s", chosenQueryId.get());
-            Optional<QueryExecution> chosenQuery = Streams.stream(runningQueries).filter(query -> !lastSuspendedQueries.contains(query.getQueryId())).filter(query -> chosenQueryId.get().equals(query.getQueryId())).collect(toOptional());
+            Optional<QueryExecution> chosenQuery = Streams.stream(runningQueries).filter(query -> chosenQueryId.get().equals(query.getQueryId())).collect(toOptional());
             if (chosenQuery.isPresent()) {
-                if (lastSuspendedQueries.size() >= 10 || isSuspendEnabled == false) {
-                    // See comments in  isLastKilledQueryGone for why chosenQuery might be absent.
-                    chosenQuery.get().fail(new PrestoException(CLUSTER_OUT_OF_MEMORY, "Query killed because the cluster is out of memory. Please try again in a few minutes."));
-                    queriesKilledDueToOutOfMemory.incrementAndGet();
-                    lastKilledQuery = chosenQueryId.get();
-                    logQueryKill(chosenQueryId.get(), nodeMemoryInfos);
-                }
-                else {
-                    chosenQuery.get().suspendQuery();
-                    lastSuspendedQueries.add(chosenQueryId.get());
-                }
+                // See comments in  isLastKilledQueryGone for why chosenQuery might be absent.
+                chosenQuery.get().fail(new PrestoException(CLUSTER_OUT_OF_MEMORY, "Query killed because the cluster is out of memory. Please try again in a few minutes."));
+                queriesKilledDueToOutOfMemory.incrementAndGet();
+                lastKilledQuery = chosenQueryId.get();
+                logQueryKill(chosenQueryId.get(), nodeMemoryInfos);
             }
         }
     }
@@ -415,11 +382,6 @@ public class ClusterMemoryManager
     @GuardedBy("this")
     private boolean isLastKilledQueryGone()
     {
-        /* start killing only after Configured(10) suspended queries */
-        if (lastSuspendedQueries.size() < maxSuspendQuery && isSuspendEnabled) {
-            return true;
-        }
-
         if (lastKilledQuery == null) {
             return true;
         }
@@ -576,13 +538,6 @@ public class ClusterMemoryManager
         // Remove nodes that don't exist anymore
         // Make a copy to materialize the set difference
         Set<String> deadNodes = ImmutableSet.copyOf(difference(nodes.keySet(), aliveNodeIds));
-        for (String deadNode : deadNodes) {
-            if (nodes.get(deadNode) == null) {
-                continue;
-            }
-            InternalNode removedNode = nodes.get(deadNode).getNode();
-            eventListenerManager.eventEnhanced(new AuditLogEvent("Unknown", removedNode.getInternalUri().toString(), "Remove Node: " + removedNode.getNodeIdentifier(), "Cluster", "WARN"));
-        }
         nodes.keySet().removeAll(deadNodes);
 
         // Add new nodes
@@ -590,7 +545,6 @@ public class ClusterMemoryManager
             if (!nodes.containsKey(node.getNodeIdentifier()) && shouldIncludeNode(node)) {
                 nodes.put(node.getNodeIdentifier(), new RemoteNodeMemory(node, httpClient, memoryInfoCodec, assignmentsRequestCodec, locationFactory.createMemoryInfoLocation(node), isBinaryEncoding));
                 allNodes.put(node.getNodeIdentifier(), new RemoteNodeMemory(node, httpClient, memoryInfoCodec, assignmentsRequestCodec, locationFactory.createMemoryInfoLocation(node), isBinaryEncoding));
-                eventListenerManager.eventEnhanced(new AuditLogEvent("Unknown", node.getInternalUri().toString(), "Add Node: " + node.getNodeIdentifier(), "Cluster", "INFO"));
             }
         }
 
@@ -609,7 +563,7 @@ public class ClusterMemoryManager
     {
         // If work isn't scheduled on the coordinator (the current node) there is no point
         // in polling or updating (when moving queries to the reserved pool) its memory pools
-        return node.isWorker();
+        return isWorkScheduledOnCoordinator || !node.isCoordinator();
     }
 
     private synchronized void updatePools(Map<MemoryPoolId, Integer> queryCounts)
@@ -648,8 +602,7 @@ public class ClusterMemoryManager
         Map<String, Optional<MemoryInfo>> memoryInfo = new HashMap<>();
         for (Entry<String, RemoteNodeMemory> entry : nodes.entrySet()) {
             // workerId is of the form "node_identifier [node_host] role"
-            InternalNode node = entry.getValue().getNode();
-            String role = node.isCoordinator() ? (node.isWorker() ? "Coordinator & Worker" : "Coordinator") :
+            String role = entry.getValue().getNode().isCoordinator() ? (isWorkScheduledOnCoordinator ? "Coordinator & Worker" : "Coordinator") :
                     "Worker";
             String workerId = entry.getKey() + " [" + entry.getValue().getNode().getHost() + "] " + role;
             memoryInfo.put(workerId, entry.getValue().getInfo());
@@ -657,48 +610,32 @@ public class ClusterMemoryManager
         return memoryInfo;
     }
 
-    public synchronized Long getUsedMemory()
-    {
-        Long usedMemory = 0L;
-        for (Entry<String, RemoteNodeMemory> entry : nodes.entrySet()) {
-            MemoryInfo memoryInfo = entry.getValue().getInfo().orElse(new MemoryInfo(0, 0, 0, new DataSize(0,
-                    DataSize.Unit.BYTE), new HashMap<>()));
-            Map<MemoryPoolId, MemoryPoolInfo> memoryPools = memoryInfo.getPools();
-            MemoryPoolId general = new MemoryPoolId("general");
-            MemoryPoolId reserved = new MemoryPoolId("reserved");
-            if (memoryPools.containsKey(general)) {
-                usedMemory += memoryPools.get(general).getReservedBytes();
-            }
-            if (memoryPools.containsKey(reserved)) {
-                usedMemory += memoryPools.get(reserved).getReservedBytes();
-            }
-        }
-        return usedMemory;
-    }
-
     public synchronized Map<String, JsonNode> getWorkerMemoryAndStateInfo()
     {
-        Map<String, JsonNode> memoryInfo = new LinkedHashMap<>();
+        Map<String, JsonNode> memoryInfo = new HashMap<>();
         for (Entry<String, RemoteNodeMemory> entry : allNodes.entrySet()) {
             // workerId is of the form "node_identifier [node_host] role"
-            InternalNode node = entry.getValue().getNode();
-            StringBuilder role = new StringBuilder(node.isCoordinator() ? (node.isWorker() ? "Coordinator & Worker" : "Coordinator") :
-                    "Worker");
-            role = new StringBuilder("\"" + role + "\"");
-            String workerId = entry.getValue().getNode().getInternalUri().toString();
-            String stateTemp = "\"" + NodeState.DISCONNECTION + "\"";
-            if (nodes.containsKey(entry.getKey())) {
-                stateTemp = "\"" + ACTIVE + "\"";
+            String role = entry.getValue().getNode().isCoordinator() ? (isWorkScheduledOnCoordinator ? "Coordinator & Worker" : "Coordinator") :
+                    "Worker";
+            String workerId = entry.getKey() + " [" + entry.getValue().getNode().getHost() + "] " + role;
+            URI stateURI = uriBuilderFrom(entry.getValue().getNode().getInternalUri())
+                    .appendPath("/v1/info/state")
+                    .build();
+            String state = "\"" + NodeState.DISCONNECTION + "\"";
+            try (
+                    InputStreamReader inputStreamReader = new InputStreamReader(stateURI.toURL().openStream());
+                    BufferedReader reader = new BufferedReader(inputStreamReader)) {
+                state = reader.readLine();
             }
-            String state = stateTemp.substring(0, 2).toUpperCase(Locale.ENGLISH) + stateTemp.substring(2).toLowerCase(Locale.ENGLISH);
-            String id = "\"" + node.getNodeIdentifier() + "\"";
+            catch (IOException e) {
+                log.info("Worker disconnect");
+            }
             JsonNode jsonNode = null;
             try {
-                MemoryInfo activeInfo = new MemoryInfo(0, 0, 0, new DataSize(0,
-                        DataSize.Unit.BYTE), new HashMap<>());
-                MemoryInfo info = entry.getValue().getInfo().orElse(activeInfo);
+                MemoryInfo info = entry.getValue().getInfo().orElse(new MemoryInfo(0, 0, 0, new DataSize(0,
+                        DataSize.Unit.BYTE), new HashMap<>()));
                 String memoryInfoJson = new ObjectMapper().writeValueAsString(info);
-                StringBuilder memoryAndStateInfo = new StringBuilder(memoryInfoJson).insert(memoryInfoJson.length() - 1, ",\"state\":" + state + ",\"id\":" + id + ",\"role\":" + role);
+                StringBuilder memoryAndStateInfo = new StringBuilder(memoryInfoJson).insert(memoryInfoJson.length() - 1, ",\"state\":" + state);
                 jsonNode = new ObjectMapper().readTree(memoryAndStateInfo.toString());
             }
             catch (JsonProcessingException e) {

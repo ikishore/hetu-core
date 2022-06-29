@@ -28,7 +28,6 @@ import io.prestosql.operator.WorkProcessor.ProcessState;
 import io.prestosql.spi.Page;
 import io.prestosql.spi.connector.UpdatablePageSource;
 import io.prestosql.spi.plan.PlanNodeId;
-import io.prestosql.spi.snapshot.RestorableConfig;
 
 import javax.annotation.Nullable;
 
@@ -51,8 +50,6 @@ import static io.prestosql.operator.WorkProcessor.ProcessState.Type.FINISHED;
 import static java.util.Objects.requireNonNull;
 import static java.util.concurrent.TimeUnit.NANOSECONDS;
 
-// Table scan operators do not participate in snapshotting
-@RestorableConfig(unsupported = true)
 public class WorkProcessorPipelineSourceOperator
         implements SourceOperator
 {
@@ -134,8 +131,8 @@ public class WorkProcessorPipelineSourceOperator
                 sourceOperatorFactory.getSourceId(),
                 sourceOperatorFactory.getOperatorType(),
                 sourceOperatorMemoryTrackingContext));
-        WorkProcessor<Page> outputPages = sourceOperator.getOutputPages();
-        outputPages = outputPages
+        WorkProcessor<Page> pages = sourceOperator.getOutputPages();
+        pages = pages
                 .yielding(() -> operatorContext.getDriverContext().getYieldSignal().isSet())
                 .withProcessEntryMonitor(() -> workProcessorOperatorEntryMonitor(0))
                 .withProcessStateMonitor(state -> workProcessorOperatorStateMonitor(state, 0))
@@ -148,7 +145,7 @@ public class WorkProcessorPipelineSourceOperator
                     operatorContext.getSession(),
                     operatorMemoryTrackingContext,
                     operatorContext.getDriverContext().getYieldSignal(),
-                    outputPages);
+                    pages);
             operatorMemoryTrackingContext.initializeLocalMemoryContexts(operator.getClass().getSimpleName());
             workProcessorOperatorContexts.add(new WorkProcessorOperatorContext(
                     operator,
@@ -156,19 +153,19 @@ public class WorkProcessorPipelineSourceOperator
                     operatorFactories.get(i).getPlanNodeId(),
                     operatorFactories.get(i).getOperatorType(),
                     operatorMemoryTrackingContext));
-            outputPages = operator.getOutputPages();
-            outputPages = outputPages
+            pages = operator.getOutputPages();
+            pages = pages
                     .yielding(() -> operatorContext.getDriverContext().getYieldSignal().isSet())
                     .withProcessEntryMonitor(() -> workProcessorOperatorEntryMonitor(operatorIndex))
                     .withProcessStateMonitor(state -> workProcessorOperatorStateMonitor(state, operatorIndex));
-            outputPages = outputPages.map(page -> recordProcessedOutput(page, operatorIndex));
+            pages = pages.map(page -> recordProcessedOutput(page, operatorIndex));
         }
 
-        // materialize output outputPages as there are no semantics guarantees for non WorkProcessor operators
-        outputPages = outputPages.map(Page::getLoadedPage);
+        // materialize output pages as there are no semantics guarantees for non WorkProcessor operators
+        pages = pages.map(Page::getLoadedPage);
 
         // finish early when entire pipeline is closed
-        this.pages = outputPages.finishWhen(() -> operatorFinishing);
+        this.pages = pages.finishWhen(() -> operatorFinishing);
 
         operatorContext.setNestedOperatorStatsSupplier(this::getNestedOperatorStats);
     }
@@ -193,18 +190,18 @@ public class WorkProcessorPipelineSourceOperator
 
         if (operatorIndex == 0) {
             // update input stats for source operator
-            WorkProcessorSourceOperator workProcessorSourceOperator = (WorkProcessorSourceOperator) context.operator;
+            WorkProcessorSourceOperator sourceOperator = (WorkProcessorSourceOperator) context.operator;
 
-            long deltaPhysicalInputDataSize = deltaAndSet(context.physicalInputDataSize, workProcessorSourceOperator.getPhysicalInputDataSize().toBytes());
-            long deltaPhysicalInputPositions = deltaAndSet(context.physicalInputPositions, workProcessorSourceOperator.getPhysicalInputPositions());
+            long deltaPhysicalInputDataSize = deltaAndSet(context.physicalInputDataSize, sourceOperator.getPhysicalInputDataSize().toBytes());
+            long deltaPhysicalInputPositions = deltaAndSet(context.physicalInputPositions, sourceOperator.getPhysicalInputPositions());
 
-            long deltaInternalNetworkInputDataSize = deltaAndSet(context.internalNetworkInputDataSize, workProcessorSourceOperator.getInternalNetworkInputDataSize().toBytes());
-            long deltaInternalNetworkInputPositions = deltaAndSet(context.internalNetworkInputPositions, workProcessorSourceOperator.getInternalNetworkPositions());
+            long deltaInternalNetworkInputDataSize = deltaAndSet(context.internalNetworkInputDataSize, sourceOperator.getInternalNetworkInputDataSize().toBytes());
+            long deltaInternalNetworkInputPositions = deltaAndSet(context.internalNetworkInputPositions, sourceOperator.getInternalNetworkPositions());
 
-            long deltaInputDataSize = deltaAndSet(context.inputDataSize, workProcessorSourceOperator.getInputDataSize().toBytes());
-            long deltaInputPositions = deltaAndSet(context.inputPositions, workProcessorSourceOperator.getInputPositions());
+            long deltaInputDataSize = deltaAndSet(context.inputDataSize, sourceOperator.getInputDataSize().toBytes());
+            long deltaInputPositions = deltaAndSet(context.inputPositions, sourceOperator.getInputPositions());
 
-            long deltaReadTimeNanos = deltaAndSet(context.readTimeNanos, workProcessorSourceOperator.getReadTime().roundTo(NANOSECONDS));
+            long deltaReadTimeNanos = deltaAndSet(context.readTimeNanos, sourceOperator.getReadTime().roundTo(NANOSECONDS));
 
             operatorContext.recordPhysicalInputWithTiming(deltaPhysicalInputDataSize, deltaPhysicalInputPositions, deltaReadTimeNanos);
             operatorContext.recordNetworkInput(deltaInternalNetworkInputDataSize, deltaInternalNetworkInputPositions);
@@ -231,8 +228,8 @@ public class WorkProcessorPipelineSourceOperator
 
     private Page recordProcessedOutput(Page page, int operatorIndex)
     {
-        WorkProcessorOperatorContext workProcessorOperatorContext = workProcessorOperatorContexts.get(operatorIndex);
-        workProcessorOperatorContext.outputPositions.getAndAdd(page.getPositionCount());
+        WorkProcessorOperatorContext operatorContext = workProcessorOperatorContexts.get(operatorIndex);
+        operatorContext.outputPositions.getAndAdd(page.getPositionCount());
 
         WorkProcessorOperatorContext downstreamOperatorContext;
         if (!isLastOperator(operatorIndex)) {
@@ -245,7 +242,7 @@ public class WorkProcessorPipelineSourceOperator
 
         // account processed bytes from lazy blocks only when they are loaded
         return recordMaterializedBytes(page, sizeInBytes -> {
-            workProcessorOperatorContext.outputDataSize.getAndAdd(sizeInBytes);
+            operatorContext.outputDataSize.getAndAdd(sizeInBytes);
             if (downstreamOperatorContext != null) {
                 downstreamOperatorContext.inputDataSize.getAndAdd(sizeInBytes);
             }
@@ -323,7 +320,6 @@ public class WorkProcessorPipelineSourceOperator
                         succinctBytes(context.peakRevocableMemoryReservation.get()),
                         succinctBytes(context.peakTotalMemoryReservation.get()),
                         new DataSize(0, BYTE),
-                        ZERO_DURATION, ZERO_DURATION,
                         operatorContext.isWaitingForMemory().isDone() ? Optional.empty() : Optional.of(WAITING_FOR_MEMORY),
                         null))
                 .collect(toImmutableList());
@@ -367,6 +363,18 @@ public class WorkProcessorPipelineSourceOperator
     }
 
     @Override
+    public boolean needsInput()
+    {
+        return false;
+    }
+
+    @Override
+    public void addInput(Page page)
+    {
+        throw new UnsupportedOperationException();
+    }
+
+    @Override
     public Page getOutput()
     {
         if (!pages.process()) {
@@ -378,12 +386,6 @@ public class WorkProcessorPipelineSourceOperator
         }
 
         return pages.getResult();
-    }
-
-    @Override
-    public Page pollMarker()
-    {
-        return null; // No marker in source pipeline
     }
 
     @Override
@@ -431,8 +433,6 @@ public class WorkProcessorPipelineSourceOperator
         finish();
     }
 
-    // Table scan operators do not participate in snapshotting
-    @RestorableConfig(unsupported = true)
     private class Splits
             implements WorkProcessor.Process<Split>
     {
@@ -503,15 +503,14 @@ public class WorkProcessorPipelineSourceOperator
 
     private static Throwable handleOperatorCloseError(Throwable inFlightException, Throwable newException, String message, Object... args)
     {
-        Throwable newInFlightException = inFlightException;
         if (newException instanceof Error) {
-            if (newInFlightException == null) {
-                newInFlightException = newException;
+            if (inFlightException == null) {
+                inFlightException = newException;
             }
             else {
                 // Self-suppression not permitted
-                if (newInFlightException != newException) {
-                    newInFlightException.addSuppressed(newException);
+                if (inFlightException != newException) {
+                    inFlightException.addSuppressed(newException);
                 }
             }
         }
@@ -519,7 +518,7 @@ public class WorkProcessorPipelineSourceOperator
             // log normal exceptions instead of rethrowing them
             log.error(newException, message, args);
         }
-        return newInFlightException;
+        return inFlightException;
     }
 
     private static class InternalLocalMemoryContext

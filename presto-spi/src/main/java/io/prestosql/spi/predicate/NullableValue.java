@@ -55,9 +55,9 @@ public final class NullableValue
     @JsonCreator
     public static NullableValue fromSerializable(@JsonProperty("serializable") Serializable serializable)
     {
-        Type type1 = serializable.getType();
+        Type type = serializable.getType();
         Block block = serializable.getBlock();
-        return new NullableValue(type1, block == null ? null : Utils.blockToNativeValue(type1, block));
+        return new NullableValue(type, block == null ? null : Utils.blockToNativeValue(type, block));
     }
 
     // Jackson serialization only

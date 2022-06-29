@@ -10,44 +10,27 @@
 CREATE INDEX [ IF NOT EXISTS ] index_name
 USING [ BITMAP | BLOOM | BTREE | MINMAX ]
 ON tbl_name (col_name)
-WITH ( 'level' = ['STRIPE', 'PARTITION'], "autoload" = true, "bloom.fpp" = '0.001', "bloom.mmapEnabled" = false, [, …] )
+WITH ( "level" = ['STRIPE', 'PARTITION'], "bloom.fpp" = '0.001', [, …] )
 WHERE predicate;
 ```
 
 - `WHERE` 用于选择部分分区创建索引
 - `WITH` 用于设置索引属性。参见各个索引的文档来查看支持的配置
 - `"level"='STRIPE'` 如缺省，默认创建级别是STRIPE
-- `"autoload"` 覆盖 config.properties 中的默认值 `hetu.heuristicindex.filter.cache.autoload-default`。
-索引创建或更新后，是否自动加载到缓存中。
-如果为 false，将根据需要加载索引。这意味着，前几个查询可能不会使用索引，因为它正在加载到缓存中。
-将此设置为 true 可能会导致高内存使用率，但会提供最佳结果。
 
 如果表是分区的，可以用一个等于表达式来指定一个创建的分区，或使用IN来指定多个。
-
 ```roomsql
 CREATE INDEX index_name USING bloom ON hive.schema.table (column1);
 CREATE INDEX index_name USING bloom ON hive.schema.table (column1) WITH ("bloom.fpp"="0.01") WHERE p=part1;
 CREATE INDEX index_name USING bloom ON hive.schema.table (column1) WHERE p in (part1, part2, part3);
 ```
 
-**注意:** 如果表使用多重分区（例如被colA和colB）两列分区，BTree索引仅支持使用**第一级**分区值。Bloom、Bitmap和Minmax索引则支持在任何一个（colA 或 colB）上创建。
-
 ## SHOW
 
-显示所有索引或根据名字显示特定索引的信息。
-信息包括索引名、用户、表名、索引列、索引类型、索引状态等。
-
+显示所有索引或只根据名字显示一个索引：
 ```roomsql
 SHOW INDEX;
 SHOW INDEX index_name;
-```
-
-## UPDATE
-
-如果源表已被修改，则更新现有索引。你可以用```SHOW INDEX index_name```检查索引的状态。
-
-```roomsql
-UPDATE INDEX index_name;
 ```
 
 ## DROP
@@ -65,14 +48,18 @@ DROP INDEX index_name where p=part1;
 ```
 
 删除的索引不会立即被从服务器的缓存中清除，直到下一次刷新缓存。刷新时间与设置的缓存加载延迟有关，通常在几秒钟左右。
-如果删除源表，索引将自动删除。
 
 ## 资源使用说明
 
 ### 磁盘使用
-启发式索引使用本地临时文件夹创建和处理索引（Linux 上默认为`/tmp`）。
-因此，临时文件夹应该有足够的空间。请在 `etc/jvm.config` 中设置以下属性来指定使用的临时文件夹的路径：
+启发式索引使用本地临时文件夹存储创建的索引，然后打包上传至hdfs。因此，它需要临时文件夹（例如，linux上的`/tmp`)挂载的磁盘分区在本地有足够的可用空间。如果挂载的磁盘分区可用空间不足，用户可以在worker节点的`jvm.config`中通过`-Djava.io.tmpdir`来指定使用的临时路径：
 
 ```
 -Djava.io.tmpdir=/path/to/another/dir
 ```
+
+下面的公式给出了一个对于Bloom索引占用磁盘空间的大致估计。Bloom索引使用的空间大致与用于创建索引的表的大小成正比，同时与指定的`fpp`值的对数相反数成正比。因此，更小的fpp值和更大的数据集会使得创建的索引更大：
+
+索引大小 = -log(fpp) * 表占用空间 * C
+
+系数C还与其他许多因素相关，例如创建索引的列占表总数据的比重，但这些因素的影响应当不如fpp和表的大小重要，且变化较小。作为一个典型的拥有几个列的数据表，这个系数C在0.04左右。这就是说，为一个100GB的数据表的一列创建一个`fpp=0.001`的索引大致需要12GB磁盘空间，而创建`fpp=0.0001`的索引则需要16GB左右。

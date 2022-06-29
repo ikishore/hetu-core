@@ -36,7 +36,6 @@ public final class StatsRecordingPlanOptimizer
         stats.register(delegate);
     }
 
-    @Override
     public final PlanNode optimize(
             PlanNode plan,
             Session session,

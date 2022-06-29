@@ -13,8 +13,6 @@
  */
 package io.prestosql.spi.type;
 
-import com.esotericsoftware.kryo.io.Input;
-import com.esotericsoftware.kryo.io.Output;
 import io.airlift.slice.SliceInput;
 import io.airlift.slice.SliceOutput;
 
@@ -56,39 +54,6 @@ public final class TypeSerde
     }
 
     private static void writeLengthPrefixedString(SliceOutput output, String string)
-    {
-        byte[] bytes = string.getBytes(UTF_8);
-        output.writeInt(bytes.length);
-        output.writeBytes(bytes);
-    }
-
-    public static void writeType(Output output, Type type)
-    {
-        requireNonNull(output, "output is null");
-        requireNonNull(type, "type is null");
-        writeLengthPrefixedString(output, type.getTypeSignature().toString());
-    }
-
-    public static Type readType(TypeManager typeManager, Input sliceInput)
-    {
-        requireNonNull(sliceInput, "sliceInput is null");
-
-        String name = readLengthPrefixedString(sliceInput);
-        Type type = typeManager.getType(parseTypeSignature(name));
-        if (type == null) {
-            throw new IllegalArgumentException("Unknown type " + name);
-        }
-        return type;
-    }
-
-    private static String readLengthPrefixedString(Input input)
-    {
-        int length = input.readInt();
-        byte[] bytes = input.readBytes(length);
-        return new String(bytes, UTF_8);
-    }
-
-    private static void writeLengthPrefixedString(Output output, String string)
     {
         byte[] bytes = string.getBytes(UTF_8);
         output.writeInt(bytes.length);

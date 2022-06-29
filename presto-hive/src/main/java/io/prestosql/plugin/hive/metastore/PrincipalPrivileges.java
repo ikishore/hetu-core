@@ -40,16 +40,16 @@ public class PrincipalPrivileges
 
     public static PrincipalPrivileges fromHivePrivilegeInfos(Set<HivePrivilegeInfo> hivePrivileges)
     {
-        Multimap<String, HivePrivilegeInfo> localUserPrivileges = hivePrivileges
+        Multimap<String, HivePrivilegeInfo> userPrivileges = hivePrivileges
                 .stream()
                 .filter(privilege -> privilege.getGrantee().getType() == USER)
                 .collect(toImmutableListMultimap(privilege -> privilege.getGrantee().getName(), identity()));
 
-        Multimap<String, HivePrivilegeInfo> localRolePrivileges = hivePrivileges
+        Multimap<String, HivePrivilegeInfo> rolePrivileges = hivePrivileges
                 .stream()
                 .filter(privilege -> privilege.getGrantee().getType() == ROLE)
                 .collect(toImmutableListMultimap(privilege -> privilege.getGrantee().getName(), identity()));
-        return new PrincipalPrivileges(localUserPrivileges, localRolePrivileges);
+        return new PrincipalPrivileges(userPrivileges, rolePrivileges);
     }
 
     public SetMultimap<String, HivePrivilegeInfo> getUserPrivileges()

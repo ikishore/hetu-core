@@ -1,5 +1,5 @@
 /*
- * Copyright (C) 2018-2021. Huawei Technologies Co., Ltd. All rights reserved.
+ * Copyright (C) 2018-2020. Huawei Technologies Co., Ltd. All rights reserved.
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
  * You may obtain a copy of the License at
@@ -39,7 +39,6 @@ public class TestHetuConfig
                 .setIndexCacheLoadingThreads(10L)
                 .setIndexCacheLoadingDelay(new Duration(10, TimeUnit.SECONDS))
                 .setIndexCacheSoftReferenceEnabled(true)
-                .setIndexAutoload(true)
                 .setExecutionPlanCacheEnabled(false)
                 .setExecutionPlanCacheTimeout(86400000L)
                 .setExecutionPlanCacheMaxItems(10000L)
@@ -48,16 +47,13 @@ public class TestHetuConfig
                 .setStateFetchInterval(new Duration(100, TimeUnit.MILLISECONDS))
                 .setStateUpdateInterval(new Duration(100, TimeUnit.MILLISECONDS))
                 .setQuerySubmitTimeout(new Duration(10, TimeUnit.SECONDS))
-                .setStateExpireTime(new Duration(60, TimeUnit.SECONDS))
+                .setStateExpireTime(new Duration(10, TimeUnit.SECONDS))
                 .setDataCenterSplits(5)
                 .setDataCenterConsumerTimeout(new Duration(10, TimeUnit.MINUTES))
                 .setSplitCacheMapEnabled(false)
                 .setSplitCacheStateUpdateInterval(new Duration(2, TimeUnit.SECONDS))
                 .setTraceStackVisible(false)
-                .setIndexToPreload("")
-                .setExtensionExecutionPlannerEnabled(false)
-                .setExtensionExecutionPlannerJarPath(null)
-                .setExtensionExecutionPlannerClassPath(null));
+                .setIndexToPreload(""));
     }
 
     @Test
@@ -69,7 +65,6 @@ public class TestHetuConfig
                 .put("hetu.heuristicindex.indexstore.filesystem.profile", "index-test")
                 .put("hetu.heuristicindex.filter.cache.max-memory", "2GB")
                 .put("hetu.heuristicindex.filter.cache.loading-threads", "5")
-                .put("hetu.heuristicindex.filter.cache.autoload-default", "false")
                 .put("hetu.heuristicindex.filter.cache.loading-delay", "1000ms")
                 .put("hetu.heuristicindex.filter.cache.ttl", "20m")
                 .put("hetu.heuristicindex.filter.cache.soft-reference", "false")
@@ -88,9 +83,6 @@ public class TestHetuConfig
                 .put("hetu.split-cache-map.state-update-interval", "5s")
                 .put("stack-trace-visible", "true")
                 .put("hetu.heuristicindex.filter.cache.preload-indices", "idx1,idx2")
-                .put("extension_execution_planner_enabled", "true")
-                .put("extension_execution_planner_jar_path", "")
-                .put("extension_execution_planner_class_path", "")
                 .build();
 
         HetuConfig expected = new HetuConfig()
@@ -102,7 +94,6 @@ public class TestHetuConfig
                 .setIndexCacheLoadingThreads(5L)
                 .setIndexCacheLoadingDelay(new Duration(1000, TimeUnit.MILLISECONDS))
                 .setIndexCacheSoftReferenceEnabled(false)
-                .setIndexAutoload(false)
                 .setExecutionPlanCacheEnabled(true)
                 .setExecutionPlanCacheTimeout(6000L)
                 .setExecutionPlanCacheMaxItems(20000L)
@@ -117,10 +108,7 @@ public class TestHetuConfig
                 .setSplitCacheMapEnabled(true)
                 .setSplitCacheStateUpdateInterval(new Duration(5, TimeUnit.SECONDS))
                 .setTraceStackVisible(true)
-                .setIndexToPreload("idx1,idx2")
-                .setExtensionExecutionPlannerEnabled(true)
-                .setExtensionExecutionPlannerJarPath("")
-                .setExtensionExecutionPlannerClassPath("");
+                .setIndexToPreload("idx1,idx2");
 
         ConfigAssertions.assertFullMapping(properties, expected);
     }

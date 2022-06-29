@@ -401,7 +401,6 @@ public class PrestoS3FileSystem
             throws IOException
     {
         boolean srcDirectory;
-        Path dstPath = null;
         try {
             srcDirectory = directory(src);
         }
@@ -415,25 +414,24 @@ public class PrestoS3FileSystem
                 return false;
             }
             // move source under destination directory
-            dstPath = new Path(dst, src.getName());
+            dst = new Path(dst, src.getName());
         }
         catch (FileNotFoundException e) {
             // destination does not exist
-            LOG.debug("destination does not exist");
         }
 
-        if (keysEqual(src, dstPath)) {
+        if (keysEqual(src, dst)) {
             return false;
         }
 
         if (srcDirectory) {
             for (FileStatus file : listStatus(src)) {
-                rename(file.getPath(), new Path(dstPath, file.getPath().getName()));
+                rename(file.getPath(), new Path(dst, file.getPath().getName()));
             }
             deleteObject(keyFromPath(src) + DIRECTORY_SUFFIX);
         }
         else {
-            s3.copyObject(getBucketName(uri), keyFromPath(src), getBucketName(uri), keyFromPath(dstPath));
+            s3.copyObject(getBucketName(uri), keyFromPath(src), getBucketName(uri), keyFromPath(dst));
             delete(src, true);
         }
 

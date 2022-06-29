@@ -1764,9 +1764,9 @@ public class PrestoResultSet
             throws SQLException
     {
         while (client.isRunning()) {
-            QueryStatusInfo tmpResults = client.currentStatusInfo();
-            progressCallback.accept(QueryStats.create(tmpResults.getId(), tmpResults.getStats()));
-            List<Column> columns = tmpResults.getColumns();
+            QueryStatusInfo results = client.currentStatusInfo();
+            progressCallback.accept(QueryStats.create(results.getId(), results.getStats()));
+            List<Column> columns = results.getColumns();
             if (columns != null) {
                 return columns;
             }
@@ -1774,11 +1774,11 @@ public class PrestoResultSet
         }
 
         verify(client.isFinished());
-        QueryStatusInfo tmpResults = client.finalStatusInfo();
-        if (tmpResults.getError() == null) {
-            throw new SQLException(format("Query has no columns (#%s)", tmpResults.getId()));
+        QueryStatusInfo results = client.finalStatusInfo();
+        if (results.getError() == null) {
+            throw new SQLException(format("Query has no columns (#%s)", results.getId()));
         }
-        throw resultsException(tmpResults);
+        throw resultsException(results);
     }
 
     private static <T> Iterator<T> flatten(Iterator<Iterable<T>> iterator, long maxRows)
@@ -1825,9 +1825,9 @@ public class PrestoResultSet
             while (client.isRunning()) {
                 checkInterruption(null);
 
-                QueryStatusInfo tmpResults = client.currentStatusInfo();
-                progressCallback.accept(QueryStats.create(tmpResults.getId(), tmpResults.getStats()));
-                warningsManager.addWarnings(tmpResults.getWarnings());
+                QueryStatusInfo results = client.currentStatusInfo();
+                progressCallback.accept(QueryStats.create(results.getId(), results.getStats()));
+                warningsManager.addWarnings(results.getWarnings());
                 Iterable<List<Object>> data = client.currentData().getData();
 
                 try {
@@ -1844,11 +1844,11 @@ public class PrestoResultSet
             }
 
             verify(client.isFinished());
-            QueryStatusInfo tmpResults = client.finalStatusInfo();
-            progressCallback.accept(QueryStats.create(tmpResults.getId(), tmpResults.getStats()));
-            warningsManager.addWarnings(tmpResults.getWarnings());
-            if (tmpResults.getError() != null) {
-                throw new RuntimeException(resultsException(tmpResults));
+            QueryStatusInfo results = client.finalStatusInfo();
+            progressCallback.accept(QueryStats.create(results.getId(), results.getStats()));
+            warningsManager.addWarnings(results.getWarnings());
+            if (results.getError() != null) {
+                throw new RuntimeException(resultsException(results));
             }
 
             return endOfData();

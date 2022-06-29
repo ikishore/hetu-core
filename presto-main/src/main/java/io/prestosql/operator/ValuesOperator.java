@@ -13,21 +13,17 @@
  */
 package io.prestosql.operator;
 
-import com.google.common.annotations.VisibleForTesting;
 import com.google.common.collect.ImmutableList;
-import io.prestosql.snapshot.SingleInputSnapshotState;
+import com.google.common.collect.Iterators;
 import io.prestosql.spi.Page;
 import io.prestosql.spi.plan.PlanNodeId;
-import io.prestosql.spi.snapshot.BlockEncodingSerdeProvider;
-import io.prestosql.spi.snapshot.MarkerPage;
-import io.prestosql.spi.snapshot.RestorableConfig;
 
+import java.util.Iterator;
 import java.util.List;
 
 import static com.google.common.base.Preconditions.checkState;
 import static java.util.Objects.requireNonNull;
 
-@RestorableConfig(uncapturedFields = {"pages", "position", "snapshotState"})
 public class ValuesOperator
         implements Operator
 {
@@ -37,31 +33,21 @@ public class ValuesOperator
         private final int operatorId;
         private final PlanNodeId planNodeId;
         private final List<Page> pages;
-        // Snapshot: after resume, indicate which pages to send
-        private final int fromPosition;
         private boolean closed;
 
-        @VisibleForTesting
         public ValuesOperatorFactory(int operatorId, PlanNodeId planNodeId, List<Page> pages)
-        {
-            this(operatorId, planNodeId, pages, 0);
-        }
-
-        @VisibleForTesting
-        public ValuesOperatorFactory(int operatorId, PlanNodeId planNodeId, List<Page> pages, int fromPosition)
         {
             this.operatorId = operatorId;
             this.planNodeId = requireNonNull(planNodeId, "planNodeId is null");
             this.pages = ImmutableList.copyOf(requireNonNull(pages, "pages is null"));
-            this.fromPosition = fromPosition;
         }
 
         @Override
         public Operator createOperator(DriverContext driverContext)
         {
             checkState(!closed, "Factory is already closed");
-            OperatorContext addOperatorContext = driverContext.addOperatorContext(operatorId, planNodeId, ValuesOperator.class.getSimpleName());
-            return new ValuesOperator(addOperatorContext, pages, fromPosition);
+            OperatorContext operatorContext = driverContext.addOperatorContext(operatorId, planNodeId, ValuesOperator.class.getSimpleName());
+            return new ValuesOperator(operatorContext, pages);
         }
 
         @Override
@@ -73,24 +59,20 @@ public class ValuesOperator
         @Override
         public OperatorFactory duplicate()
         {
-            return new ValuesOperatorFactory(operatorId, planNodeId, pages, fromPosition);
+            return new ValuesOperatorFactory(operatorId, planNodeId, pages);
         }
     }
 
     private final OperatorContext operatorContext;
-    private final List<Page> pages;
-    private int position;
-    private final SingleInputSnapshotState snapshotState;
+    private final Iterator<Page> pages;
 
-    public ValuesOperator(OperatorContext operatorContext, List<Page> pages, int fromPosition)
+    public ValuesOperator(OperatorContext operatorContext, List<Page> pages)
     {
         this.operatorContext = requireNonNull(operatorContext, "operatorContext is null");
 
         requireNonNull(pages, "pages is null");
 
-        this.pages = ImmutableList.copyOf(pages);
-        this.position = fromPosition;
-        this.snapshotState = operatorContext.isSnapshotEnabled() ? SingleInputSnapshotState.forOperator(this, operatorContext) : null;
+        this.pages = ImmutableList.copyOf(pages).iterator();
     }
 
     @Override
@@ -102,13 +84,13 @@ public class ValuesOperator
     @Override
     public void finish()
     {
-        position = pages.size();
+        Iterators.size(pages);
     }
 
     @Override
     public boolean isFinished()
     {
-        return position == pages.size();
+        return !pages.hasNext();
     }
 
     @Override
@@ -126,52 +108,13 @@ public class ValuesOperator
     @Override
     public Page getOutput()
     {
-        Page page = null;
-        if (position < pages.size()) {
-            page = pages.get(position);
-            position++;
-            if (page != null) {
-                operatorContext.recordProcessedInput(page.getSizeInBytes(), page.getPositionCount());
-                if (snapshotState != null) {
-                    snapshotState.processPage(page);
-                }
-            }
+        if (!pages.hasNext()) {
+            return null;
+        }
+        Page page = pages.next();
+        if (page != null) {
+            operatorContext.recordProcessedInput(page.getSizeInBytes(), page.getPositionCount());
         }
         return page;
-    }
-
-    @Override
-    public Page pollMarker()
-    {
-        Page marker = null;
-        if (position < pages.size()) {
-            Page page = pages.get(position);
-            if (page instanceof MarkerPage) {
-                position++;
-                marker = page;
-                snapshotState.processPage(page);
-            }
-        }
-        return marker;
-    }
-
-    @Override
-    public void close()
-    {
-        if (snapshotState != null) {
-            snapshotState.close();
-        }
-    }
-
-    @Override
-    public Object capture(BlockEncodingSerdeProvider serdeProvider)
-    {
-        return operatorContext.capture(serdeProvider);
-    }
-
-    @Override
-    public void restore(Object state, BlockEncodingSerdeProvider serdeProvider)
-    {
-        operatorContext.restore(state, serdeProvider);
     }
 }

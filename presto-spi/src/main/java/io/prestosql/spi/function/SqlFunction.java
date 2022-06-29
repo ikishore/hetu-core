@@ -21,7 +21,5 @@ public interface SqlFunction
 
     boolean isDeterministic();
 
-    boolean isCalledOnNullInput();
-
     String getDescription();
 }

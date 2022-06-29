@@ -13,8 +13,6 @@
  */
 package io.prestosql.operator;
 
-import com.google.common.util.concurrent.ListenableFuture;
-
 import java.util.function.Supplier;
 
 import static java.util.Objects.requireNonNull;
@@ -24,20 +22,6 @@ public interface TrackingLookupSourceSupplier
     LookupSource getLookupSource();
 
     OuterPositionIterator getOuterPositionIterator();
-
-    default ListenableFuture<?> setOuterPartitionReady(int partition)
-    {
-        throw new UnsupportedOperationException();
-    }
-
-    default void setUnspilledLookupSource(int partition, LookupSource lookupSource)
-    {
-        /* do nothing */
-    }
-
-    Object captureJoinPositions();
-
-    void restoreJoinPositions(Object state);
 
     static TrackingLookupSourceSupplier nonTracking(Supplier<LookupSource> lookupSourceSupplier)
     {
@@ -54,19 +38,6 @@ public interface TrackingLookupSourceSupplier
             public OuterPositionIterator getOuterPositionIterator()
             {
                 throw new UnsupportedOperationException();
-            }
-
-            @Override
-            public Object captureJoinPositions()
-            {
-                /* do nothing */
-                return null;
-            }
-
-            @Override
-            public void restoreJoinPositions(Object state)
-            {
-                /* do nothing*/
             }
         };
     }

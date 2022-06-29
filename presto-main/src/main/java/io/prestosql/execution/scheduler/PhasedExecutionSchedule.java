@@ -20,6 +20,7 @@ import io.prestosql.execution.SqlStageExecution;
 import io.prestosql.execution.StageState;
 import io.prestosql.spi.plan.JoinNode;
 import io.prestosql.spi.plan.PlanNode;
+import io.prestosql.spi.plan.RouterNode;
 import io.prestosql.spi.plan.UnionNode;
 import io.prestosql.sql.planner.PlanFragment;
 import io.prestosql.sql.planner.plan.ExchangeNode;
@@ -165,7 +166,8 @@ public class PhasedExecutionSchedule
             }
         }
 
-        return ImmutableList.copyOf(new TopologicalOrderIterator<>(componentGraph));
+        List<Set<PlanFragmentId>> schedulePhases = ImmutableList.copyOf(new TopologicalOrderIterator<>(componentGraph));
+        return schedulePhases;
     }
 
     private static class Visitor
@@ -301,6 +303,18 @@ public class PhasedExecutionSchedule
                 previousSources = currentSources;
             }
 
+            return allSources.build();
+        }
+
+        @Override
+        public Set<PlanFragmentId> visitRouter(RouterNode node, PlanFragmentId currentFragmentId)
+        {
+            if (fragments.get(currentFragmentId).getProducerCTEId().isPresent()) {
+                return visitPlan(node, currentFragmentId);
+            }
+
+            ImmutableSet.Builder<PlanFragmentId> allSources = ImmutableSet.builder();
+            allSources.add(currentFragmentId);
             return allSources.build();
         }
 

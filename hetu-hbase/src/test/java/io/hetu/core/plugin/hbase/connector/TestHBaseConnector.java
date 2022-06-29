@@ -1,5 +1,5 @@
 /*
- * Copyright (C) 2018-2021. Huawei Technologies Co., Ltd. All rights reserved.
+ * Copyright (C) 2018-2020. Huawei Technologies Co., Ltd. All rights reserved.
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
  * You may obtain a copy of the License at
@@ -92,7 +92,7 @@ public class TestHBaseConnector
         hetuMetastore = new TestingHetuMetastore();
         schemaTableName = new SchemaTableName("hbase", "test_table");
         hconn = new TestHBaseClientConnection(hCConf, hetuMetastore.getHetuMetastore());
-        hconn.createConnection();
+        hconn.getConn();
         session = new TestingConnectorSession("root");
         hcm = new HBaseConnectorMetadata(hconn);
         hConnector =
@@ -100,7 +100,7 @@ public class TestHBaseConnector
                         new HBaseConnectorMetadataFactory(hconn, hCConf),
                         new HBaseSplitManager(hconn),
                         new HBasePageSinkProvider(hconn),
-                        new HBasePageSourceProvider(new HBaseRecordSetProvider(hconn), hconn),
+                        new HBasePageSourceProvider(new HBaseRecordSetProvider(hconn)),
                         Optional.empty(),
                         new HBaseTableProperties());
     }
@@ -215,18 +215,18 @@ public class TestHBaseConnector
     @Test
     public void testHBaseColumnHandle()
     {
-        // test getDeleteRowIdColumnHandle
-        if (hcm.getDeleteRowIdColumnHandle(session, TestUtils.createHBaseTableHandle()) instanceof HBaseColumnHandle) {
+        // test GetUpdateRowIdColumnHandle
+        if (hcm.getUpdateRowIdColumnHandle(session, TestUtils.createHBaseTableHandle()) instanceof HBaseColumnHandle) {
             HBaseColumnHandle hBaseColumnHandle =
-                    (HBaseColumnHandle) hcm.getDeleteRowIdColumnHandle(session, TestUtils.createHBaseTableHandle());
-            assertEquals("$rowId", hBaseColumnHandle.getName());
+                    (HBaseColumnHandle) hcm.getUpdateRowIdColumnHandle(session, TestUtils.createHBaseTableHandle());
+            assertEquals("rowkey", hBaseColumnHandle.getName());
 
             // test HBaseColumnHandle Equals
             assertEquals(true, hBaseColumnHandle.equals(hBaseColumnHandle));
             assertEquals(false, hBaseColumnHandle.equals(null));
             HBaseColumnHandle hbCH =
                     new HBaseColumnHandle(
-                            "$rowId",
+                            "rowkey",
                             Optional.ofNullable("name"),
                             Optional.ofNullable("nick_name"),
                             VARCHAR,
@@ -235,7 +235,7 @@ public class TestHBaseConnector
                             true);
             HBaseColumnHandle hBCH =
                     new HBaseColumnHandle(
-                            "$rowId",
+                            "rowkey",
                             Optional.ofNullable("name"),
                             Optional.ofNullable("nick_name"),
                             VARCHAR,
@@ -341,7 +341,13 @@ public class TestHBaseConnector
         hCnnConf.setRetryNumber(1);
         HBaseConnection hConn = new TestHBaseClientConnection(hCnnConf, null);
 
-        hConn.createSchema("schema");
+        try {
+            hConn.createSchema("schema", null);
+            throw new NullPointerException("testAuthenticate : failed");
+        }
+        catch (NullPointerException e) {
+            assertEquals(e.toString(), "java.lang.NullPointerException");
+        }
     }
 
     /**
@@ -390,8 +396,8 @@ public class TestHBaseConnector
     public void testhBaseConnectorIdGetConnectorId()
     {
         HBaseConnectorId hBCnnId = new HBaseConnectorId();
-        HBaseConnectorId.setConnectorId("hbase");
-        assertEquals("hbase", HBaseConnectorId.getConnectorId());
+        hBCnnId.setConnectorId("hbase");
+        assertEquals("hbase", hBCnnId.getConnectorId());
     }
 
     /**
@@ -401,7 +407,7 @@ public class TestHBaseConnector
     public void testHBaseConnectorIdEquals()
     {
         HBaseConnectorId hBCnnId = new HBaseConnectorId();
-        HBaseConnectorId.setConnectorId("hbase");
+        hBCnnId.setConnectorId("hbase");
         assertEquals(true, hBCnnId.equals(hBCnnId));
         assertEquals(false, hBCnnId.equals(null));
     }

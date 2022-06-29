@@ -64,13 +64,13 @@ import org.apache.hadoop.mapred.JobConf;
 import org.apache.parquet.column.ParquetProperties.WriterVersion;
 import org.apache.parquet.hadoop.metadata.CompressionCodecName;
 import org.apache.parquet.schema.MessageType;
+import org.joda.time.DateTimeZone;
 
 import java.io.Closeable;
 import java.io.File;
 import java.io.IOException;
 import java.io.UncheckedIOException;
 import java.math.BigInteger;
-import java.nio.charset.StandardCharsets;
 import java.util.ArrayList;
 import java.util.Collections;
 import java.util.HashMap;
@@ -90,6 +90,7 @@ import static io.prestosql.plugin.hive.HiveUtil.isArrayType;
 import static io.prestosql.plugin.hive.HiveUtil.isMapType;
 import static io.prestosql.plugin.hive.HiveUtil.isRowType;
 import static io.prestosql.plugin.hive.HiveUtil.isStructuralType;
+import static io.prestosql.spi.type.TimeZoneKey.UTC_KEY;
 import static io.prestosql.spi.type.VarbinaryType.VARBINARY;
 import static io.prestosql.spi.type.Varchars.isVarcharType;
 import static java.util.Arrays.stream;
@@ -112,6 +113,7 @@ import static org.testng.Assert.assertTrue;
 
 public class ParquetTester
 {
+    public static final DateTimeZone HIVE_STORAGE_TIME_ZONE = DateTimeZone.forID("America/Bahia_Banderas");
     private static final boolean OPTIMIZED = true;
     private static final HiveConfig HIVE_CLIENT_CONFIG = createHiveConfig(false);
     private static final HdfsEnvironment HDFS_ENVIRONMENT = HiveTestUtils.createTestHdfsEnvironment(HIVE_CLIENT_CONFIG);
@@ -463,7 +465,7 @@ public class ParquetTester
             return new SqlDecimal((BigInteger) fieldFromCursor, decimalType.getPrecision(), decimalType.getScale());
         }
         if (isVarcharType(type)) {
-            return new String(((Slice) fieldFromCursor).getBytes(), StandardCharsets.UTF_8);
+            return new String(((Slice) fieldFromCursor).getBytes());
         }
         if (VARBINARY.equals(type)) {
             return new SqlVarbinary(((Slice) fieldFromCursor).getBytes());
@@ -472,7 +474,7 @@ public class ParquetTester
             return new SqlDate(((Long) fieldFromCursor).intValue());
         }
         if (TimestampType.TIMESTAMP.equals(type)) {
-            return new SqlTimestamp((long) fieldFromCursor);
+            return new SqlTimestamp((long) fieldFromCursor, UTC_KEY);
         }
         return fieldFromCursor;
     }

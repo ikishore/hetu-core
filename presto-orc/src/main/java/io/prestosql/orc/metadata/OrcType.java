@@ -225,41 +225,39 @@ public class OrcType
             return createOrcMapType(nextFieldTypeIndex, type.getTypeParameters().get(0), type.getTypeParameters().get(1));
         }
         if (type.getTypeSignature().getBase().equals(ROW)) {
-            List<String> fieldNames1 = new ArrayList<>();
+            List<String> fieldNames = new ArrayList<>();
             for (int i = 0; i < type.getTypeSignature().getParameters().size(); i++) {
                 TypeSignatureParameter parameter = type.getTypeSignature().getParameters().get(i);
-                fieldNames1.add(parameter.getNamedTypeSignature().getName().orElse("field" + i));
+                fieldNames.add(parameter.getNamedTypeSignature().getName().orElse("field" + i));
             }
             List<Type> fieldTypes = type.getTypeParameters();
 
-            return createOrcRowType(nextFieldTypeIndex, fieldNames1, fieldTypes);
+            return createOrcRowType(nextFieldTypeIndex, fieldNames, fieldTypes);
         }
         throw new PrestoException(NOT_SUPPORTED, format("Unsupported Hive type: %s", type));
     }
 
     private static List<OrcType> createOrcArrayType(int nextFieldTypeIndex, Type itemType)
     {
-        int tmpNextFieldTypeIndex = nextFieldTypeIndex;
-        tmpNextFieldTypeIndex++;
-        List<OrcType> itemTypes = toOrcType(tmpNextFieldTypeIndex, itemType);
+        nextFieldTypeIndex++;
+        List<OrcType> itemTypes = toOrcType(nextFieldTypeIndex, itemType);
 
         List<OrcType> orcTypes = new ArrayList<>();
-        orcTypes.add(new OrcType(OrcTypeKind.LIST, ImmutableList.of(new OrcColumnId(tmpNextFieldTypeIndex)), ImmutableList.of("item")));
+        orcTypes.add(new OrcType(OrcTypeKind.LIST, ImmutableList.of(new OrcColumnId(nextFieldTypeIndex)), ImmutableList.of("item")));
         orcTypes.addAll(itemTypes);
         return orcTypes;
     }
 
     private static List<OrcType> createOrcMapType(int nextFieldTypeIndex, Type keyType, Type valueType)
     {
-        int tmpNextFieldTypeIndex = nextFieldTypeIndex;
-        tmpNextFieldTypeIndex++;
-        List<OrcType> keyTypes = toOrcType(tmpNextFieldTypeIndex, keyType);
-        List<OrcType> valueTypes = toOrcType(tmpNextFieldTypeIndex + keyTypes.size(), valueType);
+        nextFieldTypeIndex++;
+        List<OrcType> keyTypes = toOrcType(nextFieldTypeIndex, keyType);
+        List<OrcType> valueTypes = toOrcType(nextFieldTypeIndex + keyTypes.size(), valueType);
 
         List<OrcType> orcTypes = new ArrayList<>();
         orcTypes.add(new OrcType(
                 OrcTypeKind.MAP,
-                ImmutableList.of(new OrcColumnId(tmpNextFieldTypeIndex), new OrcColumnId(tmpNextFieldTypeIndex + keyTypes.size())),
+                ImmutableList.of(new OrcColumnId(nextFieldTypeIndex), new OrcColumnId(nextFieldTypeIndex + keyTypes.size())),
                 ImmutableList.of("key", "value")));
         orcTypes.addAll(keyTypes);
         orcTypes.addAll(valueTypes);
@@ -273,21 +271,20 @@ public class OrcType
 
     private static List<OrcType> createOrcRowType(int nextFieldTypeIndex, List<String> fieldNames, List<Type> fieldTypes)
     {
-        int tmpNextFieldTypeIndex = nextFieldTypeIndex;
-        tmpNextFieldTypeIndex++;
-        List<OrcColumnId> fieldTypeIndexes1 = new ArrayList<>();
+        nextFieldTypeIndex++;
+        List<OrcColumnId> fieldTypeIndexes = new ArrayList<>();
         List<List<OrcType>> fieldTypesList = new ArrayList<>();
         for (Type fieldType : fieldTypes) {
-            fieldTypeIndexes1.add(new OrcColumnId(tmpNextFieldTypeIndex));
-            List<OrcType> fieldOrcTypes = toOrcType(tmpNextFieldTypeIndex, fieldType);
+            fieldTypeIndexes.add(new OrcColumnId(nextFieldTypeIndex));
+            List<OrcType> fieldOrcTypes = toOrcType(nextFieldTypeIndex, fieldType);
             fieldTypesList.add(fieldOrcTypes);
-            tmpNextFieldTypeIndex += fieldOrcTypes.size();
+            nextFieldTypeIndex += fieldOrcTypes.size();
         }
 
         ImmutableList.Builder<OrcType> orcTypes = ImmutableList.builder();
         orcTypes.add(new OrcType(
                 OrcTypeKind.STRUCT,
-                fieldTypeIndexes1,
+                fieldTypeIndexes,
                 fieldNames));
         fieldTypesList.forEach(orcTypes::addAll);
 

@@ -149,9 +149,8 @@ abstract class AbstractConnectionProperty<T>
                 return true;
             case "false":
                 return false;
-            default:
-                throw new IllegalArgumentException("value must be 'true' or 'false'");
         }
+        throw new IllegalArgumentException("value must be 'true' or 'false'");
     };
 
     protected interface CheckedPredicate<T>

@@ -76,14 +76,6 @@ public final class VarcharType
         return Optional.of(length);
     }
 
-    public int getLengthSafe()
-    {
-        if (isUnbounded()) {
-            throw new IllegalStateException("Cannot get size of unbounded VARCHAR.");
-        }
-        return length;
-    }
-
     public int getBoundedLength()
     {
         if (isUnbounded()) {
@@ -186,12 +178,6 @@ public final class VarcharType
     public void writeString(BlockBuilder blockBuilder, String value)
     {
         writeSlice(blockBuilder, Slices.utf8Slice(value));
-    }
-
-    @Override
-    public void writeLong(BlockBuilder blockBuilder, long value)
-    {
-        writeSlice(blockBuilder, Slices.utf8Slice(String.valueOf(value)));
     }
 
     @Override

@@ -19,10 +19,10 @@ import com.google.common.collect.ImmutableMap;
 import com.google.common.collect.ImmutableSet;
 import com.google.common.collect.ListMultimap;
 import io.prestosql.execution.warnings.WarningCollector;
-import io.prestosql.metadata.FunctionAndTypeManager;
 import io.prestosql.metadata.Metadata;
 import io.prestosql.spi.connector.ColumnHandle;
-import io.prestosql.spi.function.FunctionHandle;
+import io.prestosql.spi.function.FunctionKind;
+import io.prestosql.spi.function.Signature;
 import io.prestosql.spi.operator.ReuseExchangeOperator;
 import io.prestosql.spi.plan.AggregationNode;
 import io.prestosql.spi.plan.AggregationNode.Aggregation;
@@ -35,7 +35,6 @@ import io.prestosql.spi.plan.TableScanNode;
 import io.prestosql.spi.plan.UnionNode;
 import io.prestosql.spi.plan.WindowNode;
 import io.prestosql.spi.predicate.TupleDomain;
-import io.prestosql.spi.relation.CallExpression;
 import io.prestosql.spi.sql.expression.Types.FrameBoundType;
 import io.prestosql.spi.sql.expression.Types.WindowFrameType;
 import io.prestosql.spi.type.StandardTypes;
@@ -61,9 +60,7 @@ import static io.prestosql.spi.type.DateType.DATE;
 import static io.prestosql.spi.type.DoubleType.DOUBLE;
 import static io.prestosql.spi.type.IntegerType.INTEGER;
 import static io.prestosql.spi.type.VarcharType.VARCHAR;
-import static io.prestosql.sql.analyzer.TypeSignatureProvider.fromTypes;
 import static io.prestosql.sql.planner.SymbolUtils.toSymbolReference;
-import static io.prestosql.sql.relational.Expressions.call;
 import static io.prestosql.sql.relational.OriginalExpressionUtils.castToRowExpression;
 import static io.prestosql.testing.TestingHandles.TEST_TABLE_HANDLE;
 
@@ -72,8 +69,6 @@ public class TestTypeValidator
 {
     private static final SqlParser SQL_PARSER = new SqlParser();
     private static final TypeValidator TYPE_VALIDATOR = new TypeValidator();
-    private static final FunctionAndTypeManager FUNCTION_MANAGER = createTestMetadataManager().getFunctionAndTypeManager();
-    private static final FunctionHandle SUM = FUNCTION_MANAGER.lookupFunction("sum", fromTypes(DOUBLE));
 
     private PlanSymbolAllocator planSymbolAllocator;
     private TableScanNode baseTableScan;
@@ -153,7 +148,14 @@ public class TestTypeValidator
     public void testValidWindow()
     {
         Symbol windowSymbol = planSymbolAllocator.newSymbol("sum", DOUBLE);
-        FunctionHandle functionHandle = FUNCTION_MANAGER.lookupFunction("sum", fromTypes(DOUBLE));
+        Signature signature = new Signature(
+                "sum",
+                FunctionKind.WINDOW,
+                ImmutableList.of(),
+                ImmutableList.of(),
+                DOUBLE.getTypeSignature(),
+                ImmutableList.of(DOUBLE.getTypeSignature()),
+                false);
 
         WindowNode.Frame frame = new WindowNode.Frame(
                 WindowFrameType.RANGE,
@@ -164,10 +166,7 @@ public class TestTypeValidator
                 Optional.empty(),
                 Optional.empty());
 
-        WindowNode.Function function = new WindowNode.Function(
-                call("sum", functionHandle, DOUBLE, ImmutableList.of(VariableReferenceSymbolConverter.toVariableReference(columnC, DOUBLE))),
-                ImmutableList.of(VariableReferenceSymbolConverter.toVariableReference(columnC, DOUBLE)),
-                frame);
+        WindowNode.Function function = new WindowNode.Function(signature, ImmutableList.of(VariableReferenceSymbolConverter.toVariableReference(columnC, DOUBLE)), frame);
 
         WindowNode.Specification specification = new WindowNode.Specification(ImmutableList.of(), Optional.empty());
 
@@ -192,10 +191,14 @@ public class TestTypeValidator
                 newId(),
                 baseTableScan,
                 ImmutableMap.of(aggregationSymbol, new Aggregation(
-                        new CallExpression("sum",
-                                SUM,
-                                DOUBLE,
-                                ImmutableList.of(castToRowExpression(toSymbolReference(columnC)))),
+                        new Signature(
+                                "sum",
+                                FunctionKind.AGGREGATE,
+                                ImmutableList.of(),
+                                ImmutableList.of(),
+                                DOUBLE.getTypeSignature(),
+                                ImmutableList.of(DOUBLE.getTypeSignature()),
+                                false),
                         ImmutableList.of(castToRowExpression(toSymbolReference(columnC))),
                         false,
                         Optional.empty(),
@@ -205,8 +208,6 @@ public class TestTypeValidator
                 ImmutableList.of(),
                 SINGLE,
                 Optional.empty(),
-                Optional.empty(),
-                AggregationNode.AggregationType.HASH,
                 Optional.empty());
 
         assertTypesValid(node);
@@ -251,11 +252,14 @@ public class TestTypeValidator
                 newId(),
                 baseTableScan,
                 ImmutableMap.of(aggregationSymbol, new Aggregation(
-                        new CallExpression(
+                        new Signature(
                                 "sum",
-                                SUM,
-                                DOUBLE,
-                                ImmutableList.of(castToRowExpression(toSymbolReference(columnA)))),
+                                FunctionKind.AGGREGATE,
+                                ImmutableList.of(),
+                                ImmutableList.of(),
+                                DOUBLE.getTypeSignature(),
+                                ImmutableList.of(DOUBLE.getTypeSignature()),
+                                false),
                         ImmutableList.of(castToRowExpression(toSymbolReference(columnA))),
                         false,
                         Optional.empty(),
@@ -265,8 +269,6 @@ public class TestTypeValidator
                 ImmutableList.of(),
                 SINGLE,
                 Optional.empty(),
-                Optional.empty(),
-                AggregationNode.AggregationType.HASH,
                 Optional.empty());
 
         assertTypesValid(node);
@@ -281,11 +283,14 @@ public class TestTypeValidator
                 newId(),
                 baseTableScan,
                 ImmutableMap.of(aggregationSymbol, new Aggregation(
-                        new CallExpression(
+                        new Signature(
                                 "sum",
-                                FUNCTION_MANAGER.lookupFunction("sum", fromTypes(BIGINT)), // should be DOUBLE
-                                DOUBLE,
-                                ImmutableList.of(castToRowExpression(toSymbolReference(columnC)))),
+                                FunctionKind.AGGREGATE,
+                                ImmutableList.of(),
+                                ImmutableList.of(),
+                                BIGINT.getTypeSignature(), // should be DOUBLE
+                                ImmutableList.of(DOUBLE.getTypeSignature()),
+                                false),
                         ImmutableList.of(castToRowExpression(toSymbolReference(columnC))),
                         false,
                         Optional.empty(),
@@ -295,8 +300,6 @@ public class TestTypeValidator
                 ImmutableList.of(),
                 SINGLE,
                 Optional.empty(),
-                Optional.empty(),
-                AggregationNode.AggregationType.HASH,
                 Optional.empty());
 
         assertTypesValid(node);
@@ -306,7 +309,14 @@ public class TestTypeValidator
     public void testInvalidWindowFunctionCall()
     {
         Symbol windowSymbol = planSymbolAllocator.newSymbol("sum", DOUBLE);
-        FunctionHandle functionHandle = FUNCTION_MANAGER.lookupFunction("sum", fromTypes(DOUBLE));
+        Signature signature = new Signature(
+                "sum",
+                FunctionKind.WINDOW,
+                ImmutableList.of(),
+                ImmutableList.of(),
+                DOUBLE.getTypeSignature(),
+                ImmutableList.of(DOUBLE.getTypeSignature()),
+                false);
 
         WindowNode.Frame frame = new WindowNode.Frame(
                 WindowFrameType.RANGE,
@@ -317,10 +327,7 @@ public class TestTypeValidator
                 Optional.empty(),
                 Optional.empty());
 
-        WindowNode.Function function = new WindowNode.Function(
-                call("sum", functionHandle, BIGINT, ImmutableList.of(VariableReferenceSymbolConverter.toVariableReference(columnA, BIGINT))),
-                ImmutableList.of(VariableReferenceSymbolConverter.toVariableReference(columnA, BIGINT)),
-                frame);
+        WindowNode.Function function = new WindowNode.Function(signature, ImmutableList.of(VariableReferenceSymbolConverter.toVariableReference(columnA, BIGINT)), frame);
 
         WindowNode.Specification specification = new WindowNode.Specification(ImmutableList.of(), Optional.empty());
 
@@ -340,7 +347,14 @@ public class TestTypeValidator
     public void testInvalidWindowFunctionSignature()
     {
         Symbol windowSymbol = planSymbolAllocator.newSymbol("sum", DOUBLE);
-        FunctionHandle functionHandle = FUNCTION_MANAGER.lookupFunction("sum", fromTypes(BIGINT)); // should be DOUBLE
+        Signature signature = new Signature(
+                "sum",
+                FunctionKind.WINDOW,
+                ImmutableList.of(),
+                ImmutableList.of(),
+                BIGINT.getTypeSignature(), // should be DOUBLE
+                ImmutableList.of(DOUBLE.getTypeSignature()),
+                false);
 
         WindowNode.Frame frame = new WindowNode.Frame(
                 WindowFrameType.RANGE,
@@ -351,10 +365,7 @@ public class TestTypeValidator
                 Optional.empty(),
                 Optional.empty());
 
-        WindowNode.Function function = new WindowNode.Function(
-                call("sum", functionHandle, BIGINT, ImmutableList.of(VariableReferenceSymbolConverter.toVariableReference(columnC, DOUBLE))),
-                ImmutableList.of(VariableReferenceSymbolConverter.toVariableReference(columnC, DOUBLE)),
-                frame);
+        WindowNode.Function function = new WindowNode.Function(signature, ImmutableList.of(VariableReferenceSymbolConverter.toVariableReference(columnC, DOUBLE)), frame);
 
         WindowNode.Specification specification = new WindowNode.Specification(ImmutableList.of(), Optional.empty());
 

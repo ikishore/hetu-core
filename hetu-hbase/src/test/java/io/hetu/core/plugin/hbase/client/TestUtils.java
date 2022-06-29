@@ -1,5 +1,5 @@
 /*
- * Copyright (C) 2018-2021. Huawei Technologies Co., Ltd. All rights reserved.
+ * Copyright (C) 2018-2020. Huawei Technologies Co., Ltd. All rights reserved.
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
  * You may obtain a copy of the License at
@@ -14,7 +14,6 @@
  */
 package io.hetu.core.plugin.hbase.client;
 
-import io.airlift.log.Logger;
 import io.hetu.core.plugin.hbase.connector.HBaseColumnHandle;
 import io.hetu.core.plugin.hbase.connector.HBaseTableHandle;
 import io.hetu.core.plugin.hbase.metadata.HBaseTable;
@@ -48,8 +47,6 @@ import static io.prestosql.spi.type.VarcharType.VARCHAR;
  */
 public class TestUtils
 {
-    private static final Logger LOG = Logger.get(TestUtils.class);
-
     private TestUtils() {}
 
     /**
@@ -269,7 +266,7 @@ public class TestUtils
             }
         }
         catch (NullPointerException | JSONException e) {
-            LOG.info("Error message: " + e.getStackTrace());
+            e.printStackTrace();
         }
         return hTableMetaMemory;
     }
@@ -292,7 +289,7 @@ public class TestUtils
             }
         }
         catch (ClassNotFoundException | IllegalArgumentException | IllegalAccessException e) {
-            LOG.info("Error message: " + e.getStackTrace());
+            e.printStackTrace();
         }
 
         Type typeNull = null;

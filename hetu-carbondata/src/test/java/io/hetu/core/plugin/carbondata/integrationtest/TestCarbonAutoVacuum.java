@@ -40,7 +40,6 @@ import java.util.List;
 import java.util.Map;
 
 import static org.testng.Assert.assertTrue;
-import static org.testng.AssertJUnit.assertNotNull;
 
 public class TestCarbonAutoVacuum
 {
@@ -100,6 +99,7 @@ public class TestCarbonAutoVacuum
     @AfterClass
     public void tearDown() throws SQLException, IOException, InterruptedException
     {
+        //hetuServer.execute("drop table if exists hive.default.demotable");
         logger.info("TearDown begin: " + this.getClass().getSimpleName());
         hetuServer.stopServer();
         CarbonUtil.deleteFoldersAndFiles(FileFactory.getCarbonFile(storePath));
@@ -145,12 +145,11 @@ public class TestCarbonAutoVacuum
 
         try {
             CarbondataAutoVacuumThread.enableTracingVacuumTask(true);
-            assertNotNull(catalog);
             connector = catalog.getConnector(catalog.getConnectorCatalogName());
             connectorMetadata = connector.getConnectorMetadata();
             connectorMetadata.getTablesForVacuum();
         } catch (Exception e) {
-            logger.debug(e.getMessage());
+
         }
 
         CarbondataAutoVacuumThread.waitForSubmittedVacuumTasksFinish();
@@ -216,7 +215,7 @@ public class TestCarbonAutoVacuum
             connectorMetadata = connector.getConnectorMetadata();
             connectorMetadata.getTablesForVacuum();
         } catch (Exception e) {
-            logger.debug(e.getMessage());
+
         }
 
         CarbondataAutoVacuumThread.waitForSubmittedVacuumTasksFinish();

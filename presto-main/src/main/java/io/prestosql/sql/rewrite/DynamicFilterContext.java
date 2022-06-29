@@ -1,5 +1,5 @@
 /*
- * Copyright (C) 2018-2021. Huawei Technologies Co., Ltd. All rights reserved.
+ * Copyright (C) 2018-2020. Huawei Technologies Co., Ltd. All rights reserved.
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
  * You may obtain a copy of the License at
@@ -23,7 +23,6 @@ import io.prestosql.spi.relation.VariableReferenceExpression;
 import io.prestosql.sql.DynamicFilters;
 import io.prestosql.sql.planner.SymbolsExtractor;
 
-import java.util.ArrayList;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
@@ -35,11 +34,11 @@ import java.util.Set;
  */
 public class DynamicFilterContext
 {
-    private final List<List<DynamicFilters.Descriptor>> descriptors;
-    private List<ListMultimap<String, String>> filterIdsList = new ArrayList<>();
-    private List<Map<String, Optional<RowExpression>>> filtersList = new ArrayList<>();
+    private final List<DynamicFilters.Descriptor> descriptors;
+    private ListMultimap<String, String> filterIds = ArrayListMultimap.create();
+    private Map<String, Optional<RowExpression>> filters = new HashMap<>();
 
-    public DynamicFilterContext(List<List<DynamicFilters.Descriptor>> descriptors, Map<Integer, Symbol> layOut)
+    public DynamicFilterContext(List<DynamicFilters.Descriptor> descriptors, Map<Integer, Symbol> layOut)
     {
         this.descriptors = descriptors;
 
@@ -47,36 +46,19 @@ public class DynamicFilterContext
     }
 
     /**
-     * @return size of the disjuncts list
-     */
-    public int getDisjunctSize()
-    {
-        return descriptors.size();
-    }
-
-    /**
-     * @return List of Ids of dynamic filters for all dynamic filters
-     */
-    public List<ListMultimap<String, String>> getFilterIdsList()
-    {
-        return filterIdsList;
-    }
-
-    /**
      * For a specific set of descriptor, the id for a column is unique
      *
      * @param column column symbol
-     * @param index index of the disjunct
-     * @return List pf Id of dynamic filter for the column
+     * @return Id of dynamic filter for the column
      */
-    public List<String> getId(Symbol column, int index)
+    public List<String> getId(Symbol column)
     {
-        return filterIdsList.get(index).get(column.getName());
+        return filterIds.get(column.getName());
     }
 
-    public Optional<RowExpression> getFilter(String id, int index)
+    public Optional<RowExpression> getFilter(String id)
     {
-        return filtersList.get(index).getOrDefault(id, Optional.empty());
+        return filters.getOrDefault(id, Optional.empty());
     }
 
     /**
@@ -84,34 +66,28 @@ public class DynamicFilterContext
      *
      * @return Set of dynamic filter ids
      */
-    public Set<String> getFilterIds(int index)
+    public Set<String> getFilterIds()
     {
-        return ImmutableSet.copyOf(filterIdsList.get(index).values());
+        return ImmutableSet.copyOf(filterIds.values());
     }
 
     private void initFilterIds(Map<Integer, Symbol> layOut)
     {
-        for (List<DynamicFilters.Descriptor> descriptorList : descriptors) {
-            ListMultimap<String, String> filterIds = ArrayListMultimap.create();
-            Map<String, Optional<RowExpression>> filters = new HashMap<>();
-            for (DynamicFilters.Descriptor dynamicFilter : descriptorList) {
-                if (dynamicFilter.getInput() instanceof VariableReferenceExpression) {
-                    String colName = ((VariableReferenceExpression) dynamicFilter.getInput()).getName();
-                    filterIds.put(colName, dynamicFilter.getId());
-                }
-                else {
-                    List<Symbol> symbolList = SymbolsExtractor.extractAll(dynamicFilter.getInput(), layOut);
-                    for (Symbol symbol : symbolList) {
-                        //FIXME: KEN: is it possible to override?
-                        filterIds.put(symbol.getName(), dynamicFilter.getId());
-                    }
-                }
-                if (dynamicFilter.getFilter().isPresent()) {
-                    filters.put(dynamicFilter.getId(), dynamicFilter.getFilter());
+        for (DynamicFilters.Descriptor dynamicFilter : descriptors) {
+            if (dynamicFilter.getInput() instanceof VariableReferenceExpression) {
+                String colName = ((VariableReferenceExpression) dynamicFilter.getInput()).getName();
+                filterIds.put(colName, dynamicFilter.getId());
+            }
+            else {
+                List<Symbol> symbolList = SymbolsExtractor.extractAll(dynamicFilter.getInput(), layOut);
+                for (Symbol symbol : symbolList) {
+                    //FIXME: KEN: is it possible to override?
+                    filterIds.put(symbol.getName(), dynamicFilter.getId());
                 }
             }
-            filterIdsList.add(filterIds);
-            filtersList.add(filters);
+            if (dynamicFilter.getFilter().isPresent()) {
+                filters.put(dynamicFilter.getId(), dynamicFilter.getFilter());
+            }
         }
     }
 }

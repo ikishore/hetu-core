@@ -1,5 +1,5 @@
 /*
- * Copyright (C) 2018-2021. Huawei Technologies Co., Ltd. All rights reserved.
+ * Copyright (C) 2018-2020. Huawei Technologies Co., Ltd. All rights reserved.
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
  * You may obtain a copy of the License at
@@ -75,7 +75,6 @@ public interface Index
      * @param pairs an ordered list of KeyValues to add to index, sorted ascending on Keys
      */
     default void addKeyValues(List<Pair<String, List<Pair<Comparable<? extends Comparable<?>>, String>>>> pairs)
-            throws IOException
     {
         throw new UnsupportedOperationException("This index does not support adding Key-Value pairs.");
     }
@@ -98,13 +97,12 @@ public interface Index
      *
      * @param expression the expression to apply
      * @return the Iterator of positions that matches the expression result
-     * @throws IndexLookUpException if lookUp operation cannot be completed.
-     * In this case the caller should treat it as "universe" iterator (contain everything) and not perform any filtering
+     * {@code null} if the index does not support lookUp operation
      */
     default <T extends Comparable<T>> Iterator<T> lookUp(Object expression)
-            throws UnsupportedOperationException, IndexLookUpException
+            throws UnsupportedOperationException
     {
-        throw new IndexLookUpException();
+        return null;
     }
 
     /**

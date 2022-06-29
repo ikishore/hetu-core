@@ -1,5 +1,5 @@
 /*
- * Copyright (C) 2018-2021. Huawei Technologies Co., Ltd. All rights reserved.
+ * Copyright (C) 2018-2020. Huawei Technologies Co., Ltd. All rights reserved.
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
  * You may obtain a copy of the License at
@@ -23,7 +23,6 @@ import io.prestosql.spi.Page;
 import io.prestosql.spi.connector.ColumnHandle;
 import io.prestosql.spi.connector.ConnectorPageSource;
 import io.prestosql.spi.dynamicfilter.BloomFilterDynamicFilter;
-import io.prestosql.spi.dynamicfilter.CombinedDynamicFilter;
 import io.prestosql.spi.dynamicfilter.DynamicFilter;
 import io.prestosql.spi.dynamicfilter.DynamicFilterSupplier;
 import io.prestosql.spi.dynamicfilter.HashSetDynamicFilter;
@@ -102,10 +101,8 @@ public class DataCenterPageSource
     @Override
     public Page getNextPage()
     {
-        if (dynamicFilterSupplier.isPresent() && !dynamicFilterSupplier.get().getDynamicFilters().isEmpty()) {
-            /*  applying only for the first map in the dynamic filter since we do not have
-                more than one element as we do not expect disjuncts in this connector   */
-            applyDynamicFilters(dynamicFilterSupplier.get().getDynamicFilters().get(0));
+        if (dynamicFilterSupplier.isPresent()) {
+            applyDynamicFilters(dynamicFilterSupplier.get().getDynamicFilters());
         }
 
         if (!this.pages.isEmpty()) {
@@ -134,17 +131,8 @@ public class DataCenterPageSource
                     BloomFilterDynamicFilter bloomFilterDynamicFilter = BloomFilterDynamicFilter.fromHashSetDynamicFilter((HashSetDynamicFilter) df);
                     builder.put(columnName, bloomFilterDynamicFilter.createSerializedBloomFilter());
                 }
-                else if (df instanceof CombinedDynamicFilter) {
-                    BloomFilterDynamicFilter bloomFilterDynamicFilter = BloomFilterDynamicFilter.fromCombinedDynamicFilter((CombinedDynamicFilter) df);
-                    if (bloomFilterDynamicFilter != null) {
-                        builder.put(columnName, bloomFilterDynamicFilter.createSerializedBloomFilter());
-                    }
-                }
-                else if (df instanceof BloomFilterDynamicFilter) {
-                    builder.put(columnName, ((BloomFilterDynamicFilter) df).getBloomFilterSerialized());
-                }
                 else {
-                    LOGGER.info("Dynamic Filter (type: " + df.getClass().getSimpleName() + ") skipped for DC connector");
+                    builder.put(columnName, ((BloomFilterDynamicFilter) df).getBloomFilterSerialized());
                 }
             }
         }

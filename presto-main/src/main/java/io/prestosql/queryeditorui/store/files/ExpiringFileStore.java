@@ -33,6 +33,7 @@ public class ExpiringFileStore
     private static final Logger LOG = LoggerFactory.getLogger(ExpiringFileStore.class);
 
     private LoadingCache<String, FileWithMetadata> fileWithMetadataCache;
+    private File basePath = new File(System.getProperty("java.io.tmpdir"));
 
     public ExpiringFileStore(int maxFileCount)
     {

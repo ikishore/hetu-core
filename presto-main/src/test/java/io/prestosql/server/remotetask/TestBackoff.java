@@ -95,39 +95,6 @@ public class TestBackoff
     }
 
     @Test
-    public void testMaxTries()
-    {
-        TestingTicker ticker = new TestingTicker();
-        ticker.increment(1, NANOSECONDS);
-
-        MaxRetryBackoff backoff = new MaxRetryBackoff(new Duration(30, SECONDS), 10, ticker);
-        ticker.increment(10, MICROSECONDS);
-        // verify initial state
-        assertEquals(backoff.getFailureCount(), 0);
-        assertEquals(backoff.getFailureDuration().roundTo(SECONDS), 0);
-
-        // first failure, should never fail
-        assertFalse(backoff.failure());
-        assertEquals(backoff.getFailureCount(), 1);
-        assertEquals(backoff.getFailureDuration().roundTo(SECONDS), 0);
-
-        ticker.increment(14, SECONDS);
-
-        for (int i = 2; i < 14; i++) {
-            assertFalse(backoff.failure());
-            assertEquals(backoff.getFailureCount(), i);
-            assertEquals(backoff.getFailureDuration().roundTo(SECONDS), 14 + i - 2);
-            ticker.increment(1, SECONDS);
-        }
-
-        assertTrue(backoff.maxRetryDone());
-        assertFalse(backoff.timeout()); // 30 s should not elapse
-
-        ticker.increment(5, SECONDS);
-        assertTrue(backoff.failure());
-    }
-
-    @Test
     public void testStartRequest()
     {
         TestingTicker ticker = new TestingTicker();

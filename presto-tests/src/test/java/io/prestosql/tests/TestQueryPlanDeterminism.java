@@ -71,7 +71,7 @@ public class TestQueryPlanDeterminism
                 new TpchConnectorFactory(1),
                 ImmutableMap.of());
 
-        localQueryRunner.getMetadata().getFunctionAndTypeManager().registerBuiltInFunctions(CUSTOM_FUNCTIONS);
+        localQueryRunner.getMetadata().addFunctions(CUSTOM_FUNCTIONS);
 
         SessionPropertyManager sessionPropertyManager = localQueryRunner.getMetadata().getSessionPropertyManager();
         sessionPropertyManager.addSystemSessionProperties(TEST_SYSTEM_PROPERTIES);

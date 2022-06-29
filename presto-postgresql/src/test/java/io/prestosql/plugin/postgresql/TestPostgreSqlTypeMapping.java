@@ -42,7 +42,6 @@ import java.time.ZoneOffset;
 import java.time.ZonedDateTime;
 import java.time.format.DateTimeFormatter;
 import java.util.List;
-import java.util.Properties;
 import java.util.function.Function;
 
 import static com.google.common.base.Preconditions.checkState;
@@ -83,25 +82,24 @@ public class TestPostgreSqlTypeMapping
         extends AbstractTestQueryFramework
 {
     private final TestingPostgreSqlServer postgreSqlServer;
-    private final TestPostgreSqlExtendServer extendServer;
 
-    protected LocalDateTime beforeEpoch;
-    protected LocalDateTime epoch;
-    protected LocalDateTime afterEpoch;
+    private LocalDateTime beforeEpoch;
+    private LocalDateTime epoch;
+    private LocalDateTime afterEpoch;
 
-    protected ZoneId jvmZone;
-    protected LocalDateTime timeGapInJvmZone1;
-    protected LocalDateTime timeGapInJvmZone2;
-    protected LocalDateTime timeDoubledInJvmZone;
+    private ZoneId jvmZone;
+    private LocalDateTime timeGapInJvmZone1;
+    private LocalDateTime timeGapInJvmZone2;
+    private LocalDateTime timeDoubledInJvmZone;
 
     // no DST in 1970, but has DST in later years (e.g. 2018)
-    protected ZoneId vilnius;
-    protected LocalDateTime timeGapInVilnius;
-    protected LocalDateTime timeDoubledInVilnius;
+    private ZoneId vilnius;
+    private LocalDateTime timeGapInVilnius;
+    private LocalDateTime timeDoubledInVilnius;
 
     // minutes offset change since 1970-01-01, no DST
-    protected ZoneId kathmandu;
-    protected LocalDateTime timeGapInKathmandu;
+    private ZoneId kathmandu;
+    private LocalDateTime timeGapInKathmandu;
 
     public TestPostgreSqlTypeMapping()
             throws Exception
@@ -113,26 +111,13 @@ public class TestPostgreSqlTypeMapping
     {
         super(() -> createPostgreSqlQueryRunner(postgreSqlServer, ImmutableMap.of("postgresql.experimental.array-mapping", "AS_ARRAY"), ImmutableList.of()));
         this.postgreSqlServer = postgreSqlServer;
-        this.extendServer = null;
-    }
-
-    protected TestPostgreSqlTypeMapping(QueryRunnerSupplier supplier, TestPostgreSqlExtendServer postgreSqlServer)
-    {
-        super(supplier);
-        this.postgreSqlServer = null;
-        this.extendServer = postgreSqlServer;
     }
 
     @AfterClass(alwaysRun = true)
-    public void destroy()
+    public final void destroy()
             throws IOException
     {
-        if (extendServer != null) {
-            extendServer.close();
-        }
-        else {
-            postgreSqlServer.close();
-        }
+        postgreSqlServer.close();
     }
 
     @BeforeClass
@@ -196,8 +181,8 @@ public class TestPostgreSqlTypeMapping
                 .addRoundTrip(varbinaryDataType, "Piękna łąka w 東京都".getBytes(UTF_8))
                 .addRoundTrip(varbinaryDataType, "Bag full of 💰".getBytes(UTF_16LE))
                 .addRoundTrip(varbinaryDataType, null)
-                .addRoundTrip(varbinaryDataType, new byte[]{})
-                .addRoundTrip(varbinaryDataType, new byte[]{0, 1, 2, 3, 4, 5, 6, 7, 8, 13, -7, 54, 122, -89, 0, 0, 0});
+                .addRoundTrip(varbinaryDataType, new byte[] {})
+                .addRoundTrip(varbinaryDataType, new byte[] {0, 1, 2, 3, 4, 5, 6, 7, 8, 13, -7, 54, 122, -89, 0, 0, 0});
     }
 
     @Test
@@ -252,13 +237,13 @@ public class TestPostgreSqlTypeMapping
                 .execute(getQueryRunner(), postgresCreateAndInsert("tpch.postgresql_test_parameterized_char_unicode"));
     }
 
-    protected DataTypeTest unicodeVarcharDateTypeTest()
+    private DataTypeTest unicodeVarcharDateTypeTest()
     {
         return unicodeDataTypeTest(DataType::varcharDataType)
                 .addRoundTrip(varcharDataType(), "\u041d\u0443, \u043f\u043e\u0433\u043e\u0434\u0438!");
     }
 
-    protected DataTypeTest unicodeDataTypeTest(Function<Integer, DataType<String>> dataTypeFactory)
+    private DataTypeTest unicodeDataTypeTest(Function<Integer, DataType<String>> dataTypeFactory)
     {
         String sampleUnicodeText = "\u653b\u6bbb\u6a5f\u52d5\u968a";
         String sampleFourByteUnicodeCharacter = "\uD83D\uDE02";
@@ -369,7 +354,7 @@ public class TestPostgreSqlTypeMapping
                 .execute(getQueryRunner(), prestoCreateAsSelect("test_array_empty_or_nulls"));
     }
 
-    protected DataTypeTest arrayDecimalTest(Function<DataType<BigDecimal>, DataType<List<BigDecimal>>> arrayTypeFactory)
+    private DataTypeTest arrayDecimalTest(Function<DataType<BigDecimal>, DataType<List<BigDecimal>>> arrayTypeFactory)
     {
         return DataTypeTest.create()
                 .addRoundTrip(arrayTypeFactory.apply(decimalDataType(3, 0)), asList(new BigDecimal("193"), new BigDecimal("19"), new BigDecimal("-193")))
@@ -383,7 +368,7 @@ public class TestPostgreSqlTypeMapping
                         new BigDecimal("-27182818284590452353602874713526624977")));
     }
 
-    protected DataTypeTest arrayVarcharDataTypeTest(Function<DataType<String>, DataType<List<String>>> arrayTypeFactory)
+    private DataTypeTest arrayVarcharDataTypeTest(Function<DataType<String>, DataType<List<String>>> arrayTypeFactory)
     {
         return DataTypeTest.create()
                 .addRoundTrip(arrayTypeFactory.apply(varcharDataType(10)), asList("text_a"))
@@ -393,13 +378,13 @@ public class TestPostgreSqlTypeMapping
                 .addRoundTrip(arrayTypeFactory.apply(varcharDataType()), asList("unbounded"));
     }
 
-    protected DataTypeTest arrayVarcharUnicodeDataTypeTest(Function<DataType<String>, DataType<List<String>>> arrayTypeFactory)
+    private DataTypeTest arrayVarcharUnicodeDataTypeTest(Function<DataType<String>, DataType<List<String>>> arrayTypeFactory)
     {
         return arrayUnicodeDataTypeTest(arrayTypeFactory, DataType::varcharDataType)
                 .addRoundTrip(arrayTypeFactory.apply(varcharDataType()), asList("\u041d\u0443, \u043f\u043e\u0433\u043e\u0434\u0438!"));
     }
 
-    protected DataTypeTest arrayUnicodeDataTypeTest(Function<DataType<String>, DataType<List<String>>> arrayTypeFactory, Function<Integer, DataType<String>> dataTypeFactory)
+    private DataTypeTest arrayUnicodeDataTypeTest(Function<DataType<String>, DataType<List<String>>> arrayTypeFactory, Function<Integer, DataType<String>> dataTypeFactory)
     {
         String sampleUnicodeText = "\u653b\u6bbb\u6a5f\u52d5\u968a";
         String sampleFourByteUnicodeCharacter = "\uD83D\uDE02";
@@ -411,12 +396,12 @@ public class TestPostgreSqlTypeMapping
                 .addRoundTrip(arrayTypeFactory.apply(dataTypeFactory.apply(1)), asList(sampleFourByteUnicodeCharacter));
     }
 
-    protected DataTypeTest arrayDateTest(Function<DataType<LocalDate>, DataType<List<LocalDate>>> arrayTypeFactory)
+    private DataTypeTest arrayDateTest(Function<DataType<LocalDate>, DataType<List<LocalDate>>> arrayTypeFactory)
     {
-        ZoneId localJvmZone = ZoneId.systemDefault();
-        checkState(localJvmZone.getId().equals("America/Bahia_Banderas"), "This test assumes certain JVM time zone");
+        ZoneId jvmZone = ZoneId.systemDefault();
+        checkState(jvmZone.getId().equals("America/Bahia_Banderas"), "This test assumes certain JVM time zone");
         LocalDate dateOfLocalTimeChangeForwardAtMidnightInJvmZone = LocalDate.of(1970, 1, 1);
-        checkIsGap(localJvmZone, dateOfLocalTimeChangeForwardAtMidnightInJvmZone.atStartOfDay());
+        checkIsGap(jvmZone, dateOfLocalTimeChangeForwardAtMidnightInJvmZone.atStartOfDay());
 
         ZoneId someZone = ZoneId.of("Europe/Vilnius");
         LocalDate dateOfLocalTimeChangeForwardAtMidnightInSomeZone = LocalDate.of(1983, 4, 1);
@@ -462,12 +447,12 @@ public class TestPostgreSqlTypeMapping
                 .execute(getQueryRunner(), prestoCreateAsSelect("test_array_3d"));
     }
 
-    protected static <E> DataType<List<E>> arrayDataType(DataType<E> elementType)
+    private static <E> DataType<List<E>> arrayDataType(DataType<E> elementType)
     {
         return arrayDataType(elementType, format("ARRAY(%s)", elementType.getInsertType()));
     }
 
-    protected static <E> DataType<List<E>> postgresArrayDataType(DataType<E> elementType)
+    private static <E> DataType<List<E>> postgresArrayDataType(DataType<E> elementType)
     {
         return arrayDataType(elementType, elementType.getInsertType() + "[]");
     }
@@ -486,10 +471,10 @@ public class TestPostgreSqlTypeMapping
     {
         // Note: there is identical test for MySQL
 
-        ZoneId localJvmZone = ZoneId.systemDefault();
-        checkState(localJvmZone.getId().equals("America/Bahia_Banderas"), "This test assumes certain JVM time zone");
+        ZoneId jvmZone = ZoneId.systemDefault();
+        checkState(jvmZone.getId().equals("America/Bahia_Banderas"), "This test assumes certain JVM time zone");
         LocalDate dateOfLocalTimeChangeForwardAtMidnightInJvmZone = LocalDate.of(1970, 1, 1);
-        checkIsGap(localJvmZone, dateOfLocalTimeChangeForwardAtMidnightInJvmZone.atStartOfDay());
+        checkIsGap(jvmZone, dateOfLocalTimeChangeForwardAtMidnightInJvmZone.atStartOfDay());
 
         ZoneId someZone = ZoneId.of("Europe/Vilnius");
         LocalDate dateOfLocalTimeChangeForwardAtMidnightInSomeZone = LocalDate.of(1983, 4, 1);
@@ -507,7 +492,7 @@ public class TestPostgreSqlTypeMapping
                 .addRoundTrip(dateDataType(), dateOfLocalTimeChangeForwardAtMidnightInSomeZone)
                 .addRoundTrip(dateDataType(), dateOfLocalTimeChangeBackwardAtMidnightInSomeZone);
 
-        for (String timeZoneId : ImmutableList.of(UTC_KEY.getId(), localJvmZone.getId(), someZone.getId())) {
+        for (String timeZoneId : ImmutableList.of(UTC_KEY.getId(), jvmZone.getId(), someZone.getId())) {
             Session session = Session.builder(getQueryRunner().getDefaultSession())
                     .setTimeZoneKey(TimeZoneKey.getTimeZoneKey(timeZoneId))
                     .build();
@@ -519,7 +504,7 @@ public class TestPostgreSqlTypeMapping
     @Test
     public void testEnum()
     {
-        JdbcSqlExecutor jdbcSqlExecutor = getJdbcSqlExecutor();
+        JdbcSqlExecutor jdbcSqlExecutor = new JdbcSqlExecutor(postgreSqlServer.getJdbcUrl());
         jdbcSqlExecutor.execute("CREATE TYPE enum_t AS ENUM ('a','b','c')");
         jdbcSqlExecutor.execute("CREATE TABLE tpch.test_enum(id int, enum_column enum_t)");
         jdbcSqlExecutor.execute("INSERT INTO tpch.test_enum(id,enum_column) values (1,'a'::enum_t),(2,'b'::enum_t)");
@@ -537,7 +522,7 @@ public class TestPostgreSqlTypeMapping
     }
 
     @Test(dataProvider = "testTimestampDataProvider")
-    public void testTimestamp(boolean insertWithPresto)
+    public void testTimestamp(boolean legacyTimestamp, boolean insertWithPresto)
     {
         // using two non-JVM zones so that we don't need to worry what Postgres system zone is
         for (ZoneId sessionZone : ImmutableList.of(ZoneOffset.UTC, jvmZone, vilnius, kathmandu, ZoneId.of(TestingSession.DEFAULT_TIME_ZONE_KEY.getId()))) {
@@ -550,16 +535,17 @@ public class TestPostgreSqlTypeMapping
             if (!insertWithPresto) {
                 // when writing, Postgres JDBC driver converts LocalDateTime to string representing date-time in JVM zone
                 // TODO upgrade driver or find a different way to write timestamp values
-                addTimestampTestIfSupported(tests, epoch); // epoch also is a gap in JVM zone
-                addTimestampTestIfSupported(tests, timeGapInJvmZone1);
-                addTimestampTestIfSupported(tests, timeGapInJvmZone2);
+                addTimestampTestIfSupported(tests, legacyTimestamp, sessionZone, epoch); // epoch also is a gap in JVM zone
+                addTimestampTestIfSupported(tests, legacyTimestamp, sessionZone, timeGapInJvmZone1);
+                addTimestampTestIfSupported(tests, legacyTimestamp, sessionZone, timeGapInJvmZone2);
             }
 
-            addTimestampTestIfSupported(tests, timeGapInVilnius);
-            addTimestampTestIfSupported(tests, timeGapInKathmandu);
+            addTimestampTestIfSupported(tests, legacyTimestamp, sessionZone, timeGapInVilnius);
+            addTimestampTestIfSupported(tests, legacyTimestamp, sessionZone, timeGapInKathmandu);
 
             Session session = Session.builder(getQueryRunner().getDefaultSession())
                     .setTimeZoneKey(TimeZoneKey.getTimeZoneKey(sessionZone.getId()))
+                    .setSystemProperty("legacy_timestamp", Boolean.toString(legacyTimestamp))
                     .build();
 
             if (insertWithPresto) {
@@ -571,8 +557,13 @@ public class TestPostgreSqlTypeMapping
         }
     }
 
-    protected void addTimestampTestIfSupported(DataTypeTest tests, LocalDateTime dateTime)
+    private void addTimestampTestIfSupported(DataTypeTest tests, boolean legacyTimestamp, ZoneId sessionZone, LocalDateTime dateTime)
     {
+        if (legacyTimestamp && isGap(sessionZone, dateTime)) {
+            // in legacy timestamp semantics we cannot represent this dateTime
+            return;
+        }
+
         tests.addRoundTrip(timestampDataType(), dateTime);
     }
 
@@ -580,8 +571,10 @@ public class TestPostgreSqlTypeMapping
     public Object[][] testTimestampDataProvider()
     {
         return new Object[][] {
-                {true},
-                {false},
+                {true, true},
+                {false, true},
+                {true, false},
+                {false, false},
         };
     }
 
@@ -625,7 +618,7 @@ public class TestPostgreSqlTypeMapping
     @DataProvider
     public Object[][] testTimestampWithTimeZoneDataProvider()
     {
-        return new Object[][]{
+        return new Object[][] {
                 {true},
                 {false},
         };
@@ -678,13 +671,12 @@ public class TestPostgreSqlTypeMapping
 
     private void testUnsupportedDataType(String databaseDataType)
     {
-        JdbcSqlExecutor jdbcSqlExecutor = getJdbcSqlExecutor();
+        JdbcSqlExecutor jdbcSqlExecutor = new JdbcSqlExecutor(postgreSqlServer.getJdbcUrl());
         jdbcSqlExecutor.execute(format("CREATE TABLE tpch.test_unsupported_data_type(key varchar(5), unsupported_column %s)", databaseDataType));
         try {
             assertQuery(
                     "SELECT column_name FROM information_schema.columns WHERE table_schema = 'tpch' AND table_name = 'test_unsupported_data_type'",
-                    "VALUES 'key'");
-            // no unsupported_column
+                    "VALUES 'key'"); // no 'unsupported_column'
         }
         finally {
             jdbcSqlExecutor.execute("DROP TABLE tpch.test_unsupported_data_type");
@@ -739,33 +731,22 @@ public class TestPostgreSqlTypeMapping
                 identity());
     }
 
-    protected DataSetup prestoCreateAsSelect(String tableNamePrefix)
+    private DataSetup prestoCreateAsSelect(String tableNamePrefix)
     {
         return new CreateAsSelectDataSetup(new PrestoSqlExecutor(getQueryRunner()), tableNamePrefix);
     }
 
-    protected DataSetup prestoCreateAsSelect(Session session, String tableNamePrefix)
+    private DataSetup prestoCreateAsSelect(Session session, String tableNamePrefix)
     {
         return new CreateAsSelectDataSetup(new PrestoSqlExecutor(getQueryRunner(), session), tableNamePrefix);
     }
 
-    protected DataSetup postgresCreateAndInsert(String tableNamePrefix)
+    private DataSetup postgresCreateAndInsert(String tableNamePrefix)
     {
-        return new CreateAndInsertDataSetup(getJdbcSqlExecutor(), tableNamePrefix);
+        return new CreateAndInsertDataSetup(new JdbcSqlExecutor(postgreSqlServer.getJdbcUrl()), tableNamePrefix);
     }
 
-    protected JdbcSqlExecutor getJdbcSqlExecutor()
-    {
-        if (extendServer != null) {
-            Properties properties = new Properties();
-            properties.setProperty("user", extendServer.getUser());
-            properties.setProperty("password", extendServer.getPassWd());
-            return new JdbcSqlExecutor(extendServer.getJdbcUrl(), properties);
-        }
-        return new JdbcSqlExecutor(postgreSqlServer.getJdbcUrl());
-    }
-
-    protected static void checkIsGap(ZoneId zone, LocalDateTime dateTime)
+    private static void checkIsGap(ZoneId zone, LocalDateTime dateTime)
     {
         verify(isGap(zone, dateTime), "Expected %s to be a gap in %s", dateTime, zone);
     }
@@ -775,7 +756,7 @@ public class TestPostgreSqlTypeMapping
         return zone.getRules().getValidOffsets(dateTime).isEmpty();
     }
 
-    protected static void checkIsDoubled(ZoneId zone, LocalDateTime dateTime)
+    private static void checkIsDoubled(ZoneId zone, LocalDateTime dateTime)
     {
         verify(zone.getRules().getValidOffsets(dateTime).size() == 2, "Expected %s to be doubled in %s", dateTime, zone);
     }

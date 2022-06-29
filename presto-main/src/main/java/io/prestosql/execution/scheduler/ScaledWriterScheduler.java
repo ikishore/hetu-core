@@ -32,7 +32,6 @@ import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.function.Supplier;
 
 import static io.prestosql.execution.scheduler.ScheduleResult.BlockedReason.WRITER_SCALING;
-import static io.prestosql.snapshot.RecoveryConfig.calculateTaskCount;
 import static io.prestosql.spi.StandardErrorCode.NO_NODES_AVAILABLE;
 import static io.prestosql.util.Failures.checkCondition;
 import static java.util.Objects.requireNonNull;
@@ -50,9 +49,6 @@ public class ScaledWriterScheduler
     private final Set<InternalNode> scheduledNodes = new HashSet<>();
     private final AtomicBoolean done = new AtomicBoolean();
     private volatile SettableFuture<?> future = SettableFuture.create();
-    private final boolean isRecoveryEnabled;
-    // Snapshot: when rescheduling, the number of tasks previously scheduled
-    private final int initialTaskCount;
 
     public ScaledWriterScheduler(
             SqlStageExecution stage,
@@ -60,9 +56,7 @@ public class ScaledWriterScheduler
             Supplier<Collection<TaskStatus>> writerTasksProvider,
             NodeSelector nodeSelector,
             ScheduledExecutorService executor,
-            DataSize writerMinSize,
-            boolean isRecoveryEnabled,
-            Integer initialTaskCount)
+            DataSize writerMinSize)
     {
         this.stage = requireNonNull(stage, "stage is null");
         this.sourceTasksProvider = requireNonNull(sourceTasksProvider, "sourceTasksProvider is null");
@@ -70,13 +64,6 @@ public class ScaledWriterScheduler
         this.nodeSelector = requireNonNull(nodeSelector, "nodeSelector is null");
         this.executor = requireNonNull(executor, "executor is null");
         this.writerMinSizeBytes = requireNonNull(writerMinSize, "minWriterSize is null").toBytes();
-        this.isRecoveryEnabled = isRecoveryEnabled;
-        if (initialTaskCount != null) {
-            checkCondition(initialTaskCount <= nodeSelector.selectableNodeCount(),
-                    NO_NODES_AVAILABLE,
-                    "Snapshot: not enough worker nodes available to resume expected number of writer tasks: " + initialTaskCount);
-        }
-        this.initialTaskCount = initialTaskCount == null ? 1 : initialTaskCount;
     }
 
     public void finish()
@@ -100,14 +87,7 @@ public class ScaledWriterScheduler
     private int getNewTaskCount()
     {
         if (scheduledNodes.isEmpty()) {
-            return initialTaskCount;
-        }
-
-        if (isRecoveryEnabled) {
-            // Don't exceed max allocation limit
-            if (scheduledNodes.size() + 1 > calculateTaskCount(nodeSelector.selectableNodeCount())) {
-                return 0;
-            }
+            return 1;
         }
 
         double fullTasks = sourceTasksProvider.get().stream()
@@ -135,9 +115,8 @@ public class ScaledWriterScheduler
         }
 
         List<InternalNode> nodes = nodeSelector.selectRandomNodes(count, scheduledNodes);
-        if (scheduledNodes.isEmpty() && nodes.size() != initialTaskCount) {
-            checkCondition(false, NO_NODES_AVAILABLE, "No nodes available to run query");
-        }
+
+        checkCondition(!scheduledNodes.isEmpty() || !nodes.isEmpty(), NO_NODES_AVAILABLE, "No nodes available to run query");
 
         ImmutableList.Builder<RemoteTask> tasks = ImmutableList.builder();
         for (InternalNode node : nodes) {

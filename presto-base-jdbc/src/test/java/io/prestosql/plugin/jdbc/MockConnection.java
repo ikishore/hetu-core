@@ -53,7 +53,7 @@ class MockConnection
     public PreparedStatement prepareStatement(String sql)
             throws SQLException
     {
-        throw new SQLException();
+        return null;
     }
 
     @Override

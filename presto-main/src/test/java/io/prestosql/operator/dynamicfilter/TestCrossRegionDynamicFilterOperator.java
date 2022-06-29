@@ -1,5 +1,5 @@
 /*
- * Copyright (C) 2018-2021. Huawei Technologies Co., Ltd. All rights reserved.
+ * Copyright (C) 2018-2020. Huawei Technologies Co., Ltd. All rights reserved.
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
  * You may obtain a copy of the License at
@@ -84,7 +84,6 @@ public class TestCrossRegionDynamicFilterOperator
         operator.addInput(pages.get(1));
         Page page2 = operator.getOutput();
         assertEquals(page2, pages.get(1));
-        operator.close();
     }
 
     @Test
@@ -110,7 +109,6 @@ public class TestCrossRegionDynamicFilterOperator
         Block block = page.getBlock(0).getLoadedBlock();
         String nativeValue = TypeUtils.readNativeValueForDynamicFilter(types.get(0), block, 0);
         assertEquals(nativeValue, "10001");
-        operator.close();
     }
 
     @Test
@@ -122,7 +120,7 @@ public class TestCrossRegionDynamicFilterOperator
         CrossRegionDynamicFilterOperator operator = createBloomFilterOperator(queryId, dynamicFilterCacheManager);
 
         addBloomFilter("orderId", ImmutableList.of("10003", "10004"), dynamicFilterCacheManager, queryId);
-        addBloomFilter("custkey", ImmutableList.of("0001", "0002"), dynamicFilterCacheManager, queryId);
+        addBloomFilter("custKey", ImmutableList.of("0001", "0002"), dynamicFilterCacheManager, queryId);
 
         List<Page> pages = rowPagesBuilder(types)
                 .row("10001", "0001")
@@ -134,7 +132,6 @@ public class TestCrossRegionDynamicFilterOperator
 
         Page page = operator.getOutput();
         assertEquals(page.getPositionCount(), 0);
-        operator.close();
     }
 
     private CrossRegionDynamicFilterOperator createBloomFilterOperator(String queryId, DynamicFilterCacheManager dynamicFilterCacheManager)
@@ -147,8 +144,7 @@ public class TestCrossRegionDynamicFilterOperator
                 createSymbolList(),
                 createTypeProvider(),
                 dynamicFilterCacheManager,
-                createColumns(),
-                createSymbolList());
+                new ArrayList<>());
         DriverContext driverContext = createTaskContext(executor, executor, TEST_SESSION)
                 .addPipelineContext(0, true, true, false)
                 .addDriverContext();
@@ -159,28 +155,20 @@ public class TestCrossRegionDynamicFilterOperator
     private static List<Symbol> createSymbolList()
     {
         List<Symbol> symbols = new ArrayList<>();
-        Symbol symbol = new Symbol("orderId_1");
+        Symbol symbol = new Symbol("orderId");
         symbols.add(symbol);
 
-        symbol = new Symbol("custKey_1");
+        symbol = new Symbol("custKey");
         symbols.add(symbol);
 
         return symbols;
     }
 
-    private static List<String> createColumns()
-    {
-        List<String> columns = new ArrayList<>();
-        columns.add("orderId");
-        columns.add("custkey");
-        return columns;
-    }
-
     private static TypeProvider createTypeProvider()
     {
         Map<Symbol, Type> types = new HashMap<>();
-        types.put(new Symbol("orderId_1"), VarcharType.VARCHAR);
-        types.put(new Symbol("custKey_1"), VarcharType.VARCHAR);
+        types.put(new Symbol("orderId"), VarcharType.VARCHAR);
+        types.put(new Symbol("custKey"), VarcharType.VARCHAR);
 
         return TypeProvider.viewOf(types);
     }

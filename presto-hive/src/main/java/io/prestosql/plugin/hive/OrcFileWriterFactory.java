@@ -15,7 +15,6 @@ package io.prestosql.plugin.hive;
 
 import com.google.common.collect.ImmutableList;
 import com.google.common.collect.ImmutableMap;
-import io.airlift.log.Logger;
 import io.prestosql.orc.OrcDataSink;
 import io.prestosql.orc.OrcDataSource;
 import io.prestosql.orc.OrcDataSourceId;
@@ -31,7 +30,6 @@ import io.prestosql.spi.connector.ConnectorSession;
 import io.prestosql.spi.type.RowType;
 import io.prestosql.spi.type.Type;
 import io.prestosql.spi.type.TypeManager;
-import org.apache.hadoop.fs.FileStatus;
 import org.apache.hadoop.fs.FileSystem;
 import org.apache.hadoop.fs.Path;
 import org.apache.hadoop.hive.ql.io.AcidOutputFormat;
@@ -39,6 +37,7 @@ import org.apache.hadoop.hive.ql.io.AcidUtils;
 import org.apache.hadoop.hive.ql.io.orc.OrcOutputFormat;
 import org.apache.hadoop.mapred.JobConf;
 import org.apache.orc.OrcConf;
+import org.joda.time.DateTimeZone;
 import org.weakref.jmx.Flatten;
 import org.weakref.jmx.Managed;
 
@@ -62,8 +61,7 @@ import static java.util.stream.Collectors.toList;
 public class OrcFileWriterFactory
         implements HiveFileWriterFactory
 {
-    private static final Logger log = Logger.get(OrcFileWriterFactory.class);
-
+    private final DateTimeZone hiveStorageTimeZone;
     private final HdfsEnvironment hdfsEnvironment;
     private final TypeManager typeManager;
     private final NodeVersion nodeVersion;
@@ -85,6 +83,7 @@ public class OrcFileWriterFactory
                 hdfsEnvironment,
                 typeManager,
                 nodeVersion,
+                requireNonNull(hiveConfig, "hiveConfig is null").getDateTimeZone(),
                 hiveConfig.isOrcWriteLegacyVersion(),
                 readStats,
                 requireNonNull(config, "config is null").toOrcWriterOptions());
@@ -94,6 +93,7 @@ public class OrcFileWriterFactory
             HdfsEnvironment hdfsEnvironment,
             TypeManager typeManager,
             NodeVersion nodeVersion,
+            DateTimeZone hiveStorageTimeZone,
             boolean writeLegacyVersion,
             FileFormatDataSourceStats readStats,
             OrcWriterOptions orcWriterOptions)
@@ -101,6 +101,7 @@ public class OrcFileWriterFactory
         this.hdfsEnvironment = requireNonNull(hdfsEnvironment, "hdfsEnvironment is null");
         this.typeManager = requireNonNull(typeManager, "typeManager is null");
         this.nodeVersion = requireNonNull(nodeVersion, "nodeVersion is null");
+        this.hiveStorageTimeZone = requireNonNull(hiveStorageTimeZone, "hiveStorageTimeZone is null");
         this.writeLegacyVersion = writeLegacyVersion;
         this.readStats = requireNonNull(readStats, "stats is null");
         this.orcWriterOptions = requireNonNull(orcWriterOptions, "orcWriterOptions is null");
@@ -179,17 +180,15 @@ public class OrcFileWriterFactory
             if (HiveSessionProperties.isOrcOptimizedWriterValidate(session)) {
                 validationInputFactory = Optional.of(() -> {
                     try {
-                        FileStatus fileStatus = fileSystem.getFileStatus(path);
                         return new HdfsOrcDataSource(
                                 new OrcDataSourceId(path.toString()),
-                                fileStatus.getLen(),
+                                fileSystem.getFileStatus(path).getLen(),
                                 HiveSessionProperties.getOrcMaxMergeDistance(session),
                                 HiveSessionProperties.getOrcMaxBufferSize(session),
                                 HiveSessionProperties.getOrcStreamBufferSize(session),
                                 false,
                                 fileSystem.open(path),
-                                readStats,
-                                fileStatus.getModificationTime());
+                                readStats);
                     }
                     catch (IOException e) {
                         throw new PrestoException(HiveErrorCode.HIVE_WRITE_VALIDATION_FAILED, e);
@@ -198,7 +197,6 @@ public class OrcFileWriterFactory
             }
 
             Callable<Void> rollbackAction = () -> {
-                log.debug("RollBack action to delete file %s", path);
                 fileSystem.delete(path, false);
                 return null;
             };
@@ -223,6 +221,7 @@ public class OrcFileWriterFactory
                             .put(HiveMetadata.PRESTO_QUERY_ID_NAME, session.getQueryId())
                             .put("hive.acid.version", String.valueOf(AcidUtils.OrcAcidVersion.ORC_ACID_VERSION))
                             .build(),
+                    hiveStorageTimeZone,
                     validationInputFactory,
                     HiveSessionProperties.getOrcOptimizedWriterValidateMode(session),
                     stats,
@@ -242,7 +241,6 @@ public class OrcFileWriterFactory
     protected OrcDataSink createOrcDataSink(ConnectorSession session, FileSystem fileSystem, Path path)
             throws IOException
     {
-        log.debug("Creation of OrcDataSink for file %s", path);
         return new OutputStreamOrcDataSink(fileSystem.create(path));
     }
 

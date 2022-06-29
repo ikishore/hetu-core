@@ -20,7 +20,6 @@ import io.prestosql.execution.StateMachine.StateChangeListener;
 import io.prestosql.execution.buffer.OutputBuffers;
 import io.prestosql.metadata.InternalNode;
 import io.prestosql.metadata.Split;
-import io.prestosql.snapshot.QuerySnapshotManager;
 import io.prestosql.spi.plan.PlanNodeId;
 import io.prestosql.sql.planner.PlanFragment;
 
@@ -44,7 +43,6 @@ public class MemoryTrackingRemoteTaskFactory
     @Override
     public RemoteTask createRemoteTask(Session session,
             TaskId taskId,
-            String instanceId,
             InternalNode node,
             PlanFragment fragment,
             Multimap<PlanNodeId, Split> initialSplits,
@@ -52,12 +50,10 @@ public class MemoryTrackingRemoteTaskFactory
             OutputBuffers outputBuffers,
             PartitionedSplitCountTracker partitionedSplitCountTracker,
             boolean summarizeTaskInfo,
-            Optional<PlanNodeId> parent,
-            QuerySnapshotManager snapshotManager)
+            Optional<PlanNodeId> parent)
     {
         RemoteTask task = remoteTaskFactory.createRemoteTask(session,
                 taskId,
-                instanceId,
                 node,
                 fragment,
                 initialSplits,
@@ -65,8 +61,7 @@ public class MemoryTrackingRemoteTaskFactory
                 outputBuffers,
                 partitionedSplitCountTracker,
                 summarizeTaskInfo,
-                parent,
-                snapshotManager);
+                parent);
 
         task.addStateChangeListener(new UpdatePeakMemory(stateMachine));
         return task;

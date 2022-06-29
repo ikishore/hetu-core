@@ -21,11 +21,11 @@ import io.airlift.log.Logging;
 import io.airlift.tpch.TpchTable;
 import io.prestosql.Session;
 import io.prestosql.metadata.Metadata;
+import io.prestosql.metadata.QualifiedObjectName;
 import io.prestosql.plugin.kafka.util.CodecSupplier;
 import io.prestosql.plugin.kafka.util.EmbeddedKafka;
 import io.prestosql.plugin.kafka.util.TestUtils;
 import io.prestosql.plugin.tpch.TpchPlugin;
-import io.prestosql.spi.connector.QualifiedObjectName;
 import io.prestosql.spi.connector.SchemaTableName;
 import io.prestosql.tests.DistributedQueryRunner;
 import io.prestosql.tests.TestingPrestoClient;
@@ -135,8 +135,8 @@ public final class KafkaQueryRunner
         Logging.initialize();
         DistributedQueryRunner queryRunner = createKafkaQueryRunner(EmbeddedKafka.createEmbeddedKafka(), TpchTable.getTables());
         Thread.sleep(10);
-        Logger logger = Logger.get(KafkaQueryRunner.class);
-        logger.info("======== SERVER STARTED ========");
-        logger.info("\n====\n%s\n====", queryRunner.getCoordinator().getBaseUrl());
+        Logger log = Logger.get(KafkaQueryRunner.class);
+        log.info("======== SERVER STARTED ========");
+        log.info("\n====\n%s\n====", queryRunner.getCoordinator().getBaseUrl());
     }
 }

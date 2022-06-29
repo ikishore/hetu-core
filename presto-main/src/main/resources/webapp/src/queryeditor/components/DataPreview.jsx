@@ -94,7 +94,7 @@ class DataPreview
         </div>
         <Table
           headerHeight={25}
-          rowHeight={35}
+          rowHeight={40}
           rowsCount={this.state.table.data.length}
           width={this.props.tableWidth}
           maxHeight={this.props.tableHeight - 39}

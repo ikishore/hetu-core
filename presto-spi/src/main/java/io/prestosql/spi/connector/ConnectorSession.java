@@ -41,6 +41,8 @@ public interface ConnectorSession
 
     long getStartTime();
 
+    boolean isLegacyTimestamp();
+
     <T> T getProperty(String name, Class<T> type);
 
     //for cbg supporting the hive view we need the catalog
@@ -51,11 +53,6 @@ public interface ConnectorSession
 
     //for hive supporting ACID tables.
     default OptionalInt getTaskId()
-    {
-        return OptionalInt.empty();
-    }
-
-    default OptionalInt getPipelineId()
     {
         return OptionalInt.empty();
     }
@@ -91,18 +88,9 @@ public interface ConnectorSession
      * If enabled and supported by the connector, Pages read by the connector will include metadata about the Page.
      * For example, the Hive connector could include info such as the ORC filepath which the Page
      * was read from.
+     * @return
      */
     default void setPageMetadataEnabled(boolean enabled)
     {
-    }
-
-    default boolean isRecoveryEnabled()
-    {
-        return false;
-    }
-
-    default boolean isSnapshotEnabled()
-    {
-        return false;
     }
 }

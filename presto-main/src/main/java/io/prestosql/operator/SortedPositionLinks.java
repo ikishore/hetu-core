@@ -106,16 +106,16 @@ public final class SortedPositionLinks
         public Factory build()
         {
             ArrayPositionLinks.FactoryBuilder arrayPositionLinksFactoryBuilder = ArrayPositionLinks.builder(size);
-            int[][] sortedPositionLinkArray = new int[size][];
+            int[][] sortedPositionLinks = new int[size][];
 
             for (Int2ObjectMap.Entry<IntArrayList> entry : positionLinks.int2ObjectEntrySet()) {
                 int key = entry.getIntKey();
                 IntArrayList positions = entry.getValue();
                 positions.sort(comparator);
 
-                sortedPositionLinkArray[key] = new int[positions.size()];
+                sortedPositionLinks[key] = new int[positions.size()];
                 for (int i = 0; i < positions.size(); i++) {
-                    sortedPositionLinkArray[key][i] = positions.get(i);
+                    sortedPositionLinks[key][i] = positions.get(i);
                 }
 
                 // ArrayPositionsLinks.Builder::link builds position links from
@@ -140,7 +140,7 @@ public final class SortedPositionLinks
                 {
                     return new SortedPositionLinks(
                             arrayPositionLinksFactory.create(ImmutableList.of()),
-                            sortedPositionLinkArray,
+                            sortedPositionLinks,
                             searchFunctions);
                 }
 
@@ -261,19 +261,18 @@ public final class SortedPositionLinks
         int middle;
         int step;
         int count = last - first;
-        int start = first;
         while (count > 0) {
             step = count / 2;
-            middle = start + step;
+            middle = first + step;
             if (!applySearchFunction(searchFunction, links, middle, probePosition, allProbeChannelsPage)) {
-                start = ++middle;
+                first = ++middle;
                 count -= step + 1;
             }
             else {
                 count = step;
             }
         }
-        return start;
+        return first;
     }
 
     @Override

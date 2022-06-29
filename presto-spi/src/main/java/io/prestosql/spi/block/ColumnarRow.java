@@ -73,11 +73,11 @@ public final class ColumnarRow
         }
 
         ColumnarRow columnarRow = toColumnarRow(dictionaryBlock.getDictionary());
-        Block[] blockFields = new Block[columnarRow.getFieldCount()];
+        Block[] fields = new Block[columnarRow.getFieldCount()];
         for (int i = 0; i < columnarRow.getFieldCount(); i++) {
-            blockFields[i] = new DictionaryBlock(nonNullPositionCount, columnarRow.getField(i), dictionaryIds);
+            fields[i] = new DictionaryBlock(nonNullPositionCount, columnarRow.getField(i), dictionaryIds);
         }
-        return new ColumnarRow(dictionaryBlock, blockFields);
+        return new ColumnarRow(dictionaryBlock, fields);
     }
 
     private static ColumnarRow toColumnarRow(RunLengthEncodedBlock rleBlock)
@@ -85,7 +85,7 @@ public final class ColumnarRow
         Block rleValue = rleBlock.getValue();
         ColumnarRow columnarRow = toColumnarRow(rleValue);
 
-        Block[] blockFields = new Block[columnarRow.getFieldCount()];
+        Block[] fields = new Block[columnarRow.getFieldCount()];
         for (int i = 0; i < columnarRow.getFieldCount(); i++) {
             Block nullSuppressedField = columnarRow.getField(i);
             if (rleValue.isNull(0)) {
@@ -93,13 +93,13 @@ public final class ColumnarRow
                 if (nullSuppressedField.getPositionCount() != 0) {
                     throw new IllegalArgumentException("Invalid row block");
                 }
-                blockFields[i] = nullSuppressedField;
+                fields[i] = nullSuppressedField;
             }
             else {
-                blockFields[i] = new RunLengthEncodedBlock(nullSuppressedField, rleBlock.getPositionCount());
+                fields[i] = new RunLengthEncodedBlock(nullSuppressedField, rleBlock.getPositionCount());
             }
         }
-        return new ColumnarRow(rleBlock, blockFields);
+        return new ColumnarRow(rleBlock, fields);
     }
 
     private ColumnarRow(Block nullCheckBlock, Block[] fields)

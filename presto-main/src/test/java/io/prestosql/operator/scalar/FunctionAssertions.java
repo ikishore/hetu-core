@@ -245,25 +245,24 @@ public final class FunctionAssertions
 
     public FunctionAssertions addFunctions(List<? extends SqlFunction> functionInfos)
     {
-        metadata.getFunctionAndTypeManager().registerBuiltInFunctions(functionInfos);
+        metadata.addFunctions(functionInfos);
         return this;
     }
 
     public FunctionAssertions addScalarFunctions(Class<?> clazz)
     {
-        metadata.getFunctionAndTypeManager().registerBuiltInFunctions(new FunctionListBuilder().scalars(clazz).getFunctions());
+        metadata.addFunctions(new FunctionListBuilder().scalars(clazz).getFunctions());
         return this;
     }
 
     public void assertFunction(String projection, Type expectedType, Object expected)
     {
-        Object expectedProjection = expected;
-        if (expectedProjection instanceof Slice) {
-            expectedProjection = ((Slice) expectedProjection).toStringUtf8();
+        if (expected instanceof Slice) {
+            expected = ((Slice) expected).toStringUtf8();
         }
 
         Object actual = selectSingleValue(projection, expectedType, compiler);
-        assertEquals(actual, expectedProjection);
+        assertEquals(actual, expected);
     }
 
     public void assertFunctionString(String projection, Type expectedType, String expected)
@@ -368,12 +367,6 @@ public final class FunctionAssertions
     {
         assertPrestoExceptionThrownBy(() -> evaluateInvalid(projection))
                 .hasErrorCode(INVALID_CAST_ARGUMENT);
-    }
-
-    public void assertInvalidCastWithSemanticErrorCode(String projection, SemanticErrorCode expectedErrorCode)
-    {
-        assertSemanticExceptionThrownBy(() -> evaluateInvalid(projection))
-                .hasErrorCode(expectedErrorCode);
     }
 
     public void assertInvalidCast(String projection, String message)
@@ -900,7 +893,7 @@ public final class FunctionAssertions
 
     private RowExpression toRowExpression(Expression projection, Map<NodeRef<Expression>, Type> expressionTypes, Map<Symbol, Integer> layout)
     {
-        return translate(projection, SCALAR, expressionTypes, layout, metadata.getFunctionAndTypeManager(), session, false);
+        return translate(projection, SCALAR, expressionTypes, layout, metadata, session, false);
     }
 
     private static Page getAtMostOnePage(Operator operator, Page sourcePage)

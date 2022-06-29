@@ -17,7 +17,6 @@ package io.prestosql.operator.aggregation.histogram;
 import io.prestosql.array.ObjectBigArray;
 import io.prestosql.operator.aggregation.state.AbstractGroupedAccumulatorState;
 import io.prestosql.spi.block.Block;
-import io.prestosql.spi.snapshot.RestorableConfig;
 import io.prestosql.spi.type.Type;
 import org.openjdk.jol.info.ClassLayout;
 
@@ -25,7 +24,6 @@ import org.openjdk.jol.info.ClassLayout;
  * original way of doing group-by: one histogram per group-by-id
  */
 @Deprecated
-@RestorableConfig(unsupported = true)
 public class LegacyHistogramGroupState
         extends AbstractGroupedAccumulatorState
         implements HistogramState

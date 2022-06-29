@@ -268,9 +268,6 @@ public class LongSelectiveColumnReader
 
         if (nullsAllowed) {
             outputPositionCount = positionCount;
-            if (outputPositions != positions) {
-                System.arraycopy(positions, 0, outputPositions, 0, outputPositionCount);
-            }
             allNulls = true;
         }
         else {
@@ -283,10 +280,7 @@ public class LongSelectiveColumnReader
     private void skip(int items)
             throws IOException
     {
-        if (dataStream == null) {
-            presentStream.skip(items);
-        }
-        else if (presentStream != null) {
+        if (presentStream != null) {
             int dataToSkip = presentStream.countBitsSet(items);
             dataStream.skip(dataToSkip);
         }
@@ -319,7 +313,7 @@ public class LongSelectiveColumnReader
     }
 
     @Override
-    public void startStripe(ZoneId fileTimeZone, InputStreamSources dataStreamSources, ColumnMetadata<ColumnEncoding> encoding)
+    public void startStripe(ZoneId fileTimeZone, ZoneId storageTimeZone, InputStreamSources dataStreamSources, ColumnMetadata<ColumnEncoding> encoding)
     {
         presentStreamSource = dataStreamSources.getInputStreamSource(streamDescriptor, PRESENT, BooleanInputStream.class);
         dataStreamSource = dataStreamSources.getInputStreamSource(streamDescriptor, DATA, LongInputStream.class);

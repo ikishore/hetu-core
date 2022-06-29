@@ -49,7 +49,6 @@ public class StateMachine<T>
     private final Executor executor;
     private final Object lock = new Object();
     private final Set<T> terminalStates;
-    private StateChangeListener tailStateChangeListener;
 
     @GuardedBy("lock")
     private volatile T state;
@@ -102,34 +101,24 @@ public class StateMachine<T>
      */
     public T set(T newState)
     {
-        return setImpl(newState, false);
-    }
-
-    public T forceSet(T newState)
-    {
-        return setImpl(newState, true);
-    }
-
-    public T setImpl(T newState, boolean canUpdateTerminalState)
-    {
         checkState(!Thread.holdsLock(lock), "Can not set state while holding the lock");
         requireNonNull(newState, "newState is null");
 
         T oldState;
-        FutureStateChange<T> localFutureStateChange;
-        ImmutableList<StateChangeListener<T>> localStateChangeListeners;
+        FutureStateChange<T> futureStateChange;
+        ImmutableList<StateChangeListener<T>> stateChangeListeners;
         synchronized (lock) {
             if (state.equals(newState)) {
                 return state;
             }
 
-            checkState(canUpdateTerminalState || !isTerminalState(state), "%s can not transition from %s to %s", name, state, newState);
+            checkState(!isTerminalState(state), "%s can not transition from %s to %s", name, state, newState);
 
             oldState = state;
             state = newState;
 
-            localFutureStateChange = this.futureStateChange.getAndSet(new FutureStateChange<>());
-            localStateChangeListeners = ImmutableList.copyOf(this.stateChangeListeners);
+            futureStateChange = this.futureStateChange.getAndSet(new FutureStateChange<>());
+            stateChangeListeners = ImmutableList.copyOf(this.stateChangeListeners);
 
             // if we are now in a terminal state, free the listeners since this will be the last notification
             if (isTerminalState(state)) {
@@ -137,7 +126,7 @@ public class StateMachine<T>
             }
         }
 
-        fireStateChanged(newState, localFutureStateChange, localStateChangeListeners);
+        fireStateChanged(newState, futureStateChange, stateChangeListeners);
         return oldState;
     }
 
@@ -185,8 +174,8 @@ public class StateMachine<T>
         requireNonNull(expectedState, "expectedState is null");
         requireNonNull(newState, "newState is null");
 
-        FutureStateChange<T> localFutureStateChange;
-        ImmutableList<StateChangeListener<T>> localStateChangeListeners;
+        FutureStateChange<T> futureStateChange;
+        ImmutableList<StateChangeListener<T>> stateChangeListeners;
         synchronized (lock) {
             if (!state.equals(expectedState)) {
                 return false;
@@ -201,8 +190,8 @@ public class StateMachine<T>
 
             state = newState;
 
-            localFutureStateChange = this.futureStateChange.getAndSet(new FutureStateChange<>());
-            localStateChangeListeners = ImmutableList.copyOf(this.stateChangeListeners);
+            futureStateChange = this.futureStateChange.getAndSet(new FutureStateChange<>());
+            stateChangeListeners = ImmutableList.copyOf(this.stateChangeListeners);
 
             // if we are now in a terminal state, free the listeners since this will be the last notification
             if (isTerminalState(state)) {
@@ -210,7 +199,7 @@ public class StateMachine<T>
             }
         }
 
-        fireStateChanged(newState, localFutureStateChange, localStateChangeListeners);
+        fireStateChanged(newState, futureStateChange, stateChangeListeners);
         return true;
     }
 
@@ -280,24 +269,12 @@ public class StateMachine<T>
             inTerminalState = isTerminalState(currentState);
             if (!inTerminalState) {
                 stateChangeListeners.add(stateChangeListener);
-                if (tailStateChangeListener != null) {
-                    if (stateChangeListeners.contains(tailStateChangeListener)) {
-                        stateChangeListeners.remove(tailStateChangeListener);
-                    }
-                    stateChangeListeners.add(tailStateChangeListener);
-                }
             }
         }
 
         // fire state change listener with the current state
         // always fire listener callbacks from a different thread
         safeExecute(() -> stateChangeListener.stateChanged(currentState));
-    }
-
-    public void addStateChangeListenerToTail(StateChangeListener<T> stateChangeListener)
-    {
-        tailStateChangeListener = stateChangeListener;
-        addStateChangeListener(stateChangeListener);
     }
 
     @VisibleForTesting

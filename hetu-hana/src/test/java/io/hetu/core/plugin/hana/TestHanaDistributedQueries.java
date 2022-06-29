@@ -1,5 +1,5 @@
 /*
- * Copyright (C) 2018-2021. Huawei Technologies Co., Ltd. All rights reserved.
+ * Copyright (C) 2018-2020. Huawei Technologies Co., Ltd. All rights reserved.
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
  * You may obtain a copy of the License at
@@ -138,7 +138,6 @@ public class TestHanaDistributedQueries
     }
 
     @Test
-    @Override
     public void testAccessControl()
     {
         String ordersTable = getActualTable("orders");
@@ -163,7 +162,6 @@ public class TestHanaDistributedQueries
     }
 
     @Test
-    @Override
     public void testCorrelatedNonAggregationScalarSubqueries()
     {
         String subqueryReturnedTooManyRows = "Scalar sub-query has returned multiple rows";
@@ -245,7 +243,6 @@ public class TestHanaDistributedQueries
     }
 
     @Test
-    @Override
     public void testDescribeInput()
     {
         Session session = Session.builder(getSession())
@@ -261,7 +258,6 @@ public class TestHanaDistributedQueries
     }
 
     @Test
-    @Override
     public void testDescribeInputNoParameters()
     {
         Session session = Session.builder(getSession())
@@ -273,7 +269,6 @@ public class TestHanaDistributedQueries
     }
 
     @Test
-    @Override
     public void testDescribeInputWithAggregation()
     {
         Session session = Session.builder(getSession())
@@ -287,7 +282,6 @@ public class TestHanaDistributedQueries
     }
 
     @Test
-    @Override
     public void testDescribeOutput()
     {
         String nationTable = getActualTable("nation");
@@ -306,7 +300,6 @@ public class TestHanaDistributedQueries
     }
 
     @Test
-    @Override
     public void testDescribeOutputNamedAndUnnamed()
     {
         String nationTable = getActualTable("nation");
@@ -324,7 +317,6 @@ public class TestHanaDistributedQueries
     }
 
     @Test
-    @Override
     public void testDescribeOutputNonSelect()
     {
         String nationTable = getActualTable("nation");
@@ -356,7 +348,6 @@ public class TestHanaDistributedQueries
     }
 
     @Test
-    @Override
     public void testDescribeOutputOnAliasedColumnsAndExpressions()
     {
         Session session = Session.builder(getSession())
@@ -372,7 +363,6 @@ public class TestHanaDistributedQueries
     }
 
     @Test
-    @Override
     public void testExecuteUsingWithSubquery()
     {
         String query = "SELECT ? in (SELECT orderkey FROM " + getActualTable("orders") + ")";
@@ -386,7 +376,6 @@ public class TestHanaDistributedQueries
     }
 
     @Test
-    @Override
     public void testExplainExecute()
     {
         String query = "SELECT * FROM " + getActualTable("orders");
@@ -398,7 +387,6 @@ public class TestHanaDistributedQueries
     }
 
     @Test
-    @Override
     public void testExplainExecuteWithUsing()
     {
         String ordersTable = getActualTable("orders");
@@ -435,7 +423,6 @@ public class TestHanaDistributedQueries
     }
 
     @Test
-    @Override
     public void testInformationSchemaFiltering()
     {
         String ordersTable = getActualTable("orders");
@@ -449,7 +436,6 @@ public class TestHanaDistributedQueries
     }
 
     @Test
-    @Override
     public void testInvalidColumn()
     {
         assertQueryFails(
@@ -458,7 +444,6 @@ public class TestHanaDistributedQueries
     }
 
     @Test
-    @Override
     public void testQuotedIdentifiers()
     {
         String expectedQuery = "SELECT \"TOTALPRICE\" \"my price\" FROM \"ORDERS\"";
@@ -466,7 +451,6 @@ public class TestHanaDistributedQueries
     }
 
     @Test
-    @Override
     public void testShowTables()
     {
         Set<String> expectedTables = getExpectedTables();
@@ -476,7 +460,6 @@ public class TestHanaDistributedQueries
     }
 
     @Test
-    @Override
     public void testShowTablesFrom()
     {
         Set<String> expectedTables = getExpectedTables();
@@ -506,7 +489,6 @@ public class TestHanaDistributedQueries
     }
 
     @Test
-    @Override
     public void testShowTablesLike()
     {
         assertThat(computeActual("SHOW TABLES LIKE 'or%'").getOnlyColumnAsSet())

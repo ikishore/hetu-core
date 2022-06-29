@@ -19,10 +19,8 @@ import io.airlift.units.Duration;
 import io.prestosql.execution.QueryManagerConfig;
 import io.prestosql.execution.TaskManagerConfig;
 import io.prestosql.memory.MemoryManagerConfig;
-import io.prestosql.snapshot.RecoveryConfig;
 import io.prestosql.spi.PrestoException;
 import io.prestosql.spi.session.PropertyMetadata;
-import io.prestosql.spi.type.TimeZoneKey;
 import io.prestosql.sql.analyzer.FeaturesConfig;
 import io.prestosql.sql.analyzer.FeaturesConfig.DynamicFilterDataType;
 import io.prestosql.sql.analyzer.FeaturesConfig.JoinDistributionType;
@@ -37,9 +35,6 @@ import java.util.Optional;
 import java.util.OptionalInt;
 
 import static com.google.common.base.Preconditions.checkArgument;
-import static io.prestosql.spi.HetuConstant.EXTENSION_EXECUTION_PLANNER_CLASS_PATH;
-import static io.prestosql.spi.HetuConstant.EXTENSION_EXECUTION_PLANNER_ENABLED;
-import static io.prestosql.spi.HetuConstant.EXTENSION_EXECUTION_PLANNER_JAR_PATH;
 import static io.prestosql.spi.StandardErrorCode.INVALID_SESSION_PROPERTY;
 import static io.prestosql.spi.session.PropertyMetadata.booleanProperty;
 import static io.prestosql.spi.session.PropertyMetadata.dataSizeProperty;
@@ -47,7 +42,6 @@ import static io.prestosql.spi.session.PropertyMetadata.doubleProperty;
 import static io.prestosql.spi.session.PropertyMetadata.durationProperty;
 import static io.prestosql.spi.session.PropertyMetadata.enumProperty;
 import static io.prestosql.spi.session.PropertyMetadata.integerProperty;
-import static io.prestosql.spi.session.PropertyMetadata.longProperty;
 import static io.prestosql.spi.session.PropertyMetadata.stringProperty;
 import static io.prestosql.spi.type.BigintType.BIGINT;
 import static io.prestosql.spi.type.BooleanType.BOOLEAN;
@@ -79,7 +73,6 @@ public final class SystemSessionProperties
     public static final String QUERY_MAX_CPU_TIME = "query_max_cpu_time";
     public static final String QUERY_MAX_STAGE_COUNT = "query_max_stage_count";
     public static final String REDISTRIBUTE_WRITES = "redistribute_writes";
-    public static final String TIME_ZONE_ID = "time_zone_id";
     // redistribute writes type session property key
     public static final String REDISTRIBUTE_WRITES_TYPE = "redistribute_writes_type";
     public static final String SCALE_WRITERS = "scale_writers";
@@ -103,16 +96,14 @@ public final class SystemSessionProperties
     public static final String QUERY_PRIORITY = "query_priority";
     public static final String SPILL_ENABLED = "spill_enabled";
     public static final String SPILL_ORDER_BY = "spill_order_by";
-    public static final String SPILL_NON_BLOCKING_ORDERBY = "spill_non_blocking_orderby";
     public static final String SPILL_WINDOW_OPERATOR = "spill_window_operator";
-    public static final String SPILL_OUTER_JOIN_ENABLED = "spill_build_for_outer_join_enabled";
-    public static final String INNER_JOIN_SPILL_FILTER_ENABLED = "inner_join_spill_filter_enabled";
     public static final String AGGREGATION_OPERATOR_UNSPILL_MEMORY_LIMIT = "aggregation_operator_unspill_memory_limit";
     public static final String OPTIMIZE_DISTINCT_AGGREGATIONS = "optimize_mixed_distinct_aggregations";
     public static final String ITERATIVE_OPTIMIZER = "iterative_optimizer_enabled";
     public static final String ITERATIVE_OPTIMIZER_TIMEOUT = "iterative_optimizer_timeout";
     public static final String ENABLE_FORCED_EXCHANGE_BELOW_GROUP_ID = "enable_forced_exchange_below_group_id";
     public static final String EXCHANGE_COMPRESSION = "exchange_compression";
+    public static final String LEGACY_TIMESTAMP = "legacy_timestamp";
     public static final String ENABLE_INTERMEDIATE_AGGREGATIONS = "enable_intermediate_aggregations";
     public static final String PUSH_AGGREGATION_THROUGH_JOIN = "push_aggregation_through_join";
     public static final String PUSH_PARTIAL_AGGREGATION_THROUGH_JOIN = "push_partial_aggregation_through_join";
@@ -159,31 +150,27 @@ public final class SystemSessionProperties
     public static final String REUSE_TABLE_SCAN = "reuse_table_scan";
     public static final String SPILL_REUSE_TABLESCAN = "spill_reuse_tablescan";
     public static final String SPILL_THRESHOLD_REUSE_TABLESCAN = "spill_threshold_reuse_tablescan";
-    public static final String SORT_BASED_AGGREGATION_ENABLED = "sort_based_aggregation_enabled";
-    public static final String PRCNT_DRIVERS_FOR_PARTIAL_AGGR = "prcnt_drivers_for_partial_aggr";
     // CTE Optimization configurations
     public static final String CTE_REUSE_ENABLED = "cte_reuse_enabled";
     public static final String CTE_MAX_QUEUE_SIZE = "cte_max_queue_size";
     public static final String CTE_MAX_PREFETCH_QUEUE_SIZE = "cte_max_prefetch_queue_size";
     public static final String DELETE_TRANSACTIONAL_TABLE_DIRECT = "delete_transactional_table_direct";
-    public static final String LIST_BUILT_IN_FUNCTIONS_ONLY = "list_built_in_functions_only";
-    // Recovery related configurations
-    public static final String RECOVERY_ENABLED = "recovery_enabled";
-    public static final String RECOVERY_MAX_RETRIES = "recovery_max_retries";
-    public static final String RECOVERY_RETRY_TIMEOUT = "recovery_retry_timeout";
-    // Snapshot related configurationsis
-    public static final String SNAPSHOT_ENABLED = "snapshot_enabled";
-    public static final String SNAPSHOT_INTERVAL_TYPE = "snapshot_interval_type";
-    public static final String SNAPSHOT_TIME_INTERVAL = "snapshot_time_interval";
-    public static final String SNAPSHOT_SPLIT_COUNT_INTERVAL = "snapshot_split_count_interval";
-    public static final String SKIP_ATTACHING_STATS_WITH_PLAN = "skip_attaching_stats_with_plan";
-    public static final String SKIP_NON_APPLICABLE_RULES_ENABLED = "skip_non_applicable_rules_enabled";
+    // BQO configurations
+    public static final String BATCH_ENABLED = "batch_enabled";
+    public static final String BATCH_SIZE = "batch_size";
+    public static final String CM_PARAMETER = "cm_parameter";
+    public static final String SCHEDULER_PARAMETER = "scheduler_parameter";
+    public static final String DP_ENABLED = "dp_enabled";
+    public static final String OVERLAP_OPTIMIZATION = "overlap_opt";
+    public static final String SINGLE_QUERY_COST_THRESHOLD = "single_query_cost_threshold";
+    public static final String CACHING_PARTITIONING = "caching_paritioning";
+    public static final String ONLY_PARTITIONING = "only_partitioning";
 
     private final List<PropertyMetadata<?>> sessionProperties;
 
     public SystemSessionProperties()
     {
-        this(new QueryManagerConfig(), new TaskManagerConfig(), new MemoryManagerConfig(), new FeaturesConfig(), new HetuConfig(), new RecoveryConfig());
+        this(new QueryManagerConfig(), new TaskManagerConfig(), new MemoryManagerConfig(), new FeaturesConfig(), new HetuConfig());
     }
 
     @Inject
@@ -192,8 +179,7 @@ public final class SystemSessionProperties
             TaskManagerConfig taskManagerConfig,
             MemoryManagerConfig memoryManagerConfig,
             FeaturesConfig featuresConfig,
-            HetuConfig hetuConfig,
-            RecoveryConfig recoveryConfig)
+            HetuConfig hetuConfig)
     {
         sessionProperties = ImmutableList.of(
                 stringProperty(
@@ -239,13 +225,15 @@ public final class SystemSessionProperties
                 booleanProperty(
                         OPTIMIZE_HASH_GENERATION,
                         "Compute hash codes for distribution, joins, and aggregations early in query plan",
-                        featuresConfig.isOptimizeHashGeneration(),
+                        //original featuresConfig.isOptimizeHashGeneration(),
+                        false,
                         false),
                 enumProperty(
                         JOIN_DISTRIBUTION_TYPE,
                         "Join distribution type",
                         JoinDistributionType.class,
-                        featuresConfig.getJoinDistributionType(),
+                        //featuresConfig.getJoinDistributionType(),
+			JoinDistributionType.PARTITIONED,
                         false),
                 dataSizeProperty(
                         JOIN_MAX_BROADCAST_TABLE_SIZE,
@@ -270,7 +258,8 @@ public final class SystemSessionProperties
                 booleanProperty(
                         DYNAMIC_SCHEDULE_FOR_GROUPED_EXECUTION,
                         "Experimental: Use dynamic schedule for grouped execution when possible",
-                        featuresConfig.isDynamicScheduleForGroupedExecutionEnabled(),
+                        //original: featuresConfig.isDynamicScheduleForGroupedExecutionEnabled(),
+                        false,
                         false),
                 booleanProperty(
                         PREFER_STREAMING_OPERATORS,
@@ -291,16 +280,6 @@ public final class SystemSessionProperties
                         "Force parallel distributed writes",
                         featuresConfig.isRedistributeWrites(),
                         false),
-                stringProperty(
-                        TIME_ZONE_ID,
-                        "Time Zone Id for the current session",
-                        null,
-                        value -> {
-                            if (value != null) {
-                                TimeZoneKey.getTimeZoneKey(value);
-                            }
-                        },
-                        true),
                 // redistribute writes type config
                 enumProperty(
                         REDISTRIBUTE_WRITES_TYPE,
@@ -506,21 +485,6 @@ public final class SystemSessionProperties
                         featuresConfig.isSpillOrderBy(),
                         false),
                 booleanProperty(
-                        SPILL_NON_BLOCKING_ORDERBY,
-                        "Spill orderby in non blocking manner",
-                        featuresConfig.isNonBlockingSpill(),
-                        false),
-                booleanProperty(
-                        SPILL_OUTER_JOIN_ENABLED,
-                        "Enable build side spill for Right or Full Outer Join",
-                        featuresConfig.isSpillBuildForOuterJoinEnabled(),
-                        false),
-                booleanProperty(
-                        INNER_JOIN_SPILL_FILTER_ENABLED,
-                        "Enable build side spill matching optimization for Inner Join",
-                        featuresConfig.isInnerJoinSpillFilterEnabled(),
-                        false),
-                booleanProperty(
                         SPILL_WINDOW_OPERATOR,
                         "Spill in WindowOperator if spill_enabled is also set",
                         featuresConfig.isSpillWindowOperator(),
@@ -555,6 +519,11 @@ public final class SystemSessionProperties
                         "Enable compression in exchanges",
                         featuresConfig.isExchangeCompressionEnabled(),
                         false),
+                booleanProperty(
+                        LEGACY_TIMESTAMP,
+                        "Use legacy TIME & TIMESTAMP semantics (warning: this will be removed)",
+                        featuresConfig.isLegacyTimestamp(),
+                        true),
                 booleanProperty(
                         ENABLE_INTERMEDIATE_AGGREGATIONS,
                         "Enable the use of intermediate aggregations",
@@ -624,7 +593,7 @@ public final class SystemSessionProperties
                         ENABLE_STATS_CALCULATOR,
                         "Experimental: Enable statistics calculator",
                         featuresConfig.isEnableStatsCalculator(),
-                        false),
+                        true),
                 new PropertyMetadata<>(
                         MAX_DRIVERS_PER_TASK,
                         "Maximum number of drivers per task",
@@ -672,7 +641,8 @@ public final class SystemSessionProperties
                 booleanProperty(
                         ENABLE_DYNAMIC_FILTERING,
                         "Enable dynamic filtering",
-                        featuresConfig.isEnableDynamicFiltering(),
+                        //original: featuresConfig.isEnableDynamicFiltering(),
+                        false,
                         false),
                 durationProperty(
                         DYNAMIC_FILTERING_WAIT_TIME,
@@ -713,7 +683,8 @@ public final class SystemSessionProperties
                 booleanProperty(
                         ENABLE_EXECUTION_PLAN_CACHE,
                         "Enable execution plan caching",
-                        featuresConfig.isEnableExecutionPlanCache(),
+                        //original: featuresConfig.isEnableExecutionPlanCache(),
+                        false,
                         false),
                 booleanProperty(
                         ENABLE_HEURISTICINDEX_FILTER,
@@ -761,81 +732,49 @@ public final class SystemSessionProperties
                         featuresConfig.isEnableStarTreeIndex(),
                         false),
                 booleanProperty(
-                        LIST_BUILT_IN_FUNCTIONS_ONLY,
-                        "Only List built-in functions in SHOW FUNCTIONS",
-                        featuresConfig.isListBuiltInFunctionsOnly(),
-                        false),
-                booleanProperty(
-                        RECOVERY_ENABLED,
-                        "Enable query recovery",
-                        false,
-                        false),
-                longProperty(
-                        RECOVERY_MAX_RETRIES,
-                        "recovery max retries",
-                        recoveryConfig.getRecoveryMaxRetries(),
-                        false),
-                durationProperty(
-                        RECOVERY_RETRY_TIMEOUT,
-                        "recovery retry timeout",
-                        recoveryConfig.getRecoveryRetryTimeout(),
-                        false),
-                booleanProperty(
-                        SNAPSHOT_ENABLED,
-                        "Enable query snapshoting",
-                        false,
-                        false),
-                enumProperty(
-                        SNAPSHOT_INTERVAL_TYPE,
-                        "Snapshot interval type",
-                        RecoveryConfig.IntervalType.class,
-                        recoveryConfig.getSnapshotIntervalType(),
-                        false),
-                durationProperty(
-                        SNAPSHOT_TIME_INTERVAL,
-                        "Snapshot time interval",
-                        recoveryConfig.getSnapshotTimeInterval(),
-                        false),
-                longProperty(
-                        SNAPSHOT_SPLIT_COUNT_INTERVAL,
-                        "snapshot split count interval",
-                        recoveryConfig.getSnapshotSplitCountInterval(),
-                        false),
-                booleanProperty(
-                        SORT_BASED_AGGREGATION_ENABLED,
-                        "Enable sort based aggregation",
-                        featuresConfig.isSortBasedAggregationEnabled(),
+                        BATCH_ENABLED,
+                        "Enabled batching",
+                        featuresConfig.isBatchEnabled(),
                         false),
                 integerProperty(
-                        PRCNT_DRIVERS_FOR_PARTIAL_AGGR,
-                        "Sort based aggr, percentage of number of drivers that are used for not finalized values",
-                        featuresConfig.getPrcntDriversForPartialAggr(),
+                        BATCH_SIZE,
+                        "Set batch size",
+                        featuresConfig.getBatchSize(),
+                        false),
+                integerProperty(
+                        CM_PARAMETER,
+                        "Set cost model parameter",
+                        featuresConfig.getCostModelParameter(),
+                        false),
+                integerProperty(
+                        SCHEDULER_PARAMETER,
+                        "Set scheduler parameter",
+                        featuresConfig.getSchedulerParameter(),
+                        false),
+                integerProperty(
+                        SINGLE_QUERY_COST_THRESHOLD,
+                        "Set single query cost threshold",
+                        featuresConfig.getSingleQueryCostThreshold(),
                         false),
                 booleanProperty(
-                        SKIP_ATTACHING_STATS_WITH_PLAN,
-                        "Whether to calculate stats and attach with final plan",
-                        featuresConfig.isSkipAttachingStatsWithPlan(),
+                        DP_ENABLED,
+                        "Set DP enabled parameter",
+                        featuresConfig.getDPEnabled(),
                         false),
                 booleanProperty(
-                        SKIP_NON_APPLICABLE_RULES_ENABLED,
-                        "Whether to skip applying some selected rules based on query pattern",
-                        featuresConfig.isSkipNonApplicableRulesEnabled(),
-                        false),
-                // add extension execution planner and operator
-                stringProperty(
-                        EXTENSION_EXECUTION_PLANNER_JAR_PATH,
-                        "extension execution planner jar path",
-                        hetuConfig.getExtensionExecutionPlannerJarPath(),
-                        false),
-                stringProperty(
-                        EXTENSION_EXECUTION_PLANNER_CLASS_PATH,
-                        "extension execution planner class path",
-                        hetuConfig.getExtensionExecutionPlannerClassPath(),
+                        OVERLAP_OPTIMIZATION,
+                        "Set overlap optimization parameter",
+                        featuresConfig.getOverlapOpt(),
                         false),
                 booleanProperty(
-                        EXTENSION_EXECUTION_PLANNER_ENABLED,
-                        "extension execution planner enabled",
-                        hetuConfig.getExtensionExecutionPlannerEnabled(),
+                        CACHING_PARTITIONING,
+                        "Set Caching and Partitioning enabling parameter",
+                        featuresConfig.getCachingPartitioning(),
+                        false),
+                booleanProperty(
+                        ONLY_PARTITIONING,
+                        "Set Only Partitioning Parameter",
+                        featuresConfig.getOnlyPartitioning(),
                         false));
     }
 
@@ -1101,21 +1040,6 @@ public final class SystemSessionProperties
         return session.getSystemProperty(SPILL_ENABLED, Boolean.class);
     }
 
-    public static boolean isSpillForOuterJoinEnabled(Session session)
-    {
-        return session.getSystemProperty(SPILL_OUTER_JOIN_ENABLED, Boolean.class);
-    }
-
-    public static boolean isInnerJoinSpillFilteringEnabled(Session session)
-    {
-        return session.getSystemProperty(INNER_JOIN_SPILL_FILTER_ENABLED, Boolean.class);
-    }
-
-    public static boolean isNonBlockingSpillOrderby(Session session)
-    {
-        return session.getSystemProperty(SPILL_NON_BLOCKING_ORDERBY, Boolean.class);
-    }
-
     public static boolean isSpillOrderBy(Session session)
     {
         return session.getSystemProperty(SPILL_ORDER_BY, Boolean.class);
@@ -1141,6 +1065,11 @@ public final class SystemSessionProperties
     public static boolean isNewOptimizerEnabled(Session session)
     {
         return session.getSystemProperty(ITERATIVE_OPTIMIZER, Boolean.class);
+    }
+
+    public static boolean isLegacyTimestamp(Session session)
+    {
+        return session.getSystemProperty(LEGACY_TIMESTAMP, Boolean.class);
     }
 
     public static Duration getOptimizerTimeout(Session session)
@@ -1390,79 +1319,48 @@ public final class SystemSessionProperties
         return session.getSystemProperty(ENABLE_STAR_TREE_INDEX, Boolean.class);
     }
 
-    public static boolean isListBuiltInFunctionsOnly(Session session)
+    public static boolean isBatchEnabled(Session session)
     {
-        return session.getSystemProperty(LIST_BUILT_IN_FUNCTIONS_ONLY, Boolean.class);
+        return session.getSystemProperty(BATCH_ENABLED, Boolean.class);
     }
 
-    public static boolean isRecoveryEnabled(Session session)
+    public static boolean isDPEnabled(Session session)
     {
-        // return true if snapshot_enabled=true, irrespective of RECOVERY_ENABLED property value
-        return isSnapshotEnabled(session) ? true : session.getSystemProperty(RECOVERY_ENABLED, Boolean.class);
+        return session.getSystemProperty(DP_ENABLED, Boolean.class);
     }
 
-    public static long getRecoveryMaxRetries(Session session)
+    public static boolean isOverlapOptEnabled(Session session)
     {
-        return session.getSystemProperty(RECOVERY_MAX_RETRIES, Long.class);
+        return session.getSystemProperty(OVERLAP_OPTIMIZATION, Boolean.class);
     }
 
-    public static Duration getRecoveryRetryTimeout(Session session)
+    public static boolean isCachingPartioningEnabled(Session session)
     {
-        return session.getSystemProperty(RECOVERY_RETRY_TIMEOUT, Duration.class);
+        return session.getSystemProperty(CACHING_PARTITIONING, Boolean.class);
     }
 
-    public static boolean isSnapshotEnabled(Session session)
+    public static boolean isOnlyPartitioningEnabled(Session session)
     {
-        return session.getSystemProperty(SNAPSHOT_ENABLED, Boolean.class);
+        return session.getSystemProperty(ONLY_PARTITIONING, Boolean.class);
     }
 
-    public static RecoveryConfig.IntervalType getSnapshotIntervalType(Session session)
+    public static int getBatchSize(Session session)
     {
-        return session.getSystemProperty(SNAPSHOT_INTERVAL_TYPE, RecoveryConfig.IntervalType.class);
+        return session.getSystemProperty(BATCH_SIZE, Integer.class);
     }
 
-    public static Duration getSnapshotTimeInterval(Session session)
+    public static int getSchedulerParameter(Session session)
     {
-        return session.getSystemProperty(SNAPSHOT_TIME_INTERVAL, Duration.class);
+        return session.getSystemProperty(SCHEDULER_PARAMETER, Integer.class);
     }
 
-    public static long getSnapshotSplitCountInterval(Session session)
+    public static int getCostModelParameter(Session session)
     {
-        return session.getSystemProperty(SNAPSHOT_SPLIT_COUNT_INTERVAL, Long.class);
+        return session.getSystemProperty(CM_PARAMETER, Integer.class);
     }
 
-    public static boolean isSortBasedAggregationEnabled(Session session)
+    public static int getSingleQueryCostThreshold(Session session)
     {
-        return session.getSystemProperty(SORT_BASED_AGGREGATION_ENABLED, Boolean.class);
-    }
-
-    public static int getPrcntDriversForPartialAggr(Session session)
-    {
-        return session.getSystemProperty(PRCNT_DRIVERS_FOR_PARTIAL_AGGR, Integer.class);
-    }
-
-    public static boolean isSkipAttachingStatsWithPlan(Session session)
-    {
-        return session.getSystemProperty(SKIP_ATTACHING_STATS_WITH_PLAN, Boolean.class);
-    }
-
-    public static boolean isSkipNonApplicableRulesEnabled(Session session)
-    {
-        return session.getSystemProperty(SKIP_NON_APPLICABLE_RULES_ENABLED, Boolean.class);
-    }
-
-    public static Boolean isExtensionExecutionPlannerEnabled(Session session)
-    {
-        return session.getSystemProperty(EXTENSION_EXECUTION_PLANNER_ENABLED, Boolean.class);
-    }
-
-    public static String getExtensionExecutionPlannerJarPath(Session session)
-    {
-        return session.getSystemProperty(EXTENSION_EXECUTION_PLANNER_JAR_PATH, String.class);
-    }
-
-    public static String getExtensionExecutionPlannerClassPath(Session session)
-    {
-        return session.getSystemProperty(EXTENSION_EXECUTION_PLANNER_CLASS_PATH, String.class);
+        return session.getSystemProperty(SINGLE_QUERY_COST_THRESHOLD, Integer.class);
     }
 }

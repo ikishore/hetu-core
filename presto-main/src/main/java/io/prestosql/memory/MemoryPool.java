@@ -255,12 +255,12 @@ public class MemoryPool
             // query is not registered (likely a race with query completion)
             return Futures.immediateFuture(null);
         }
-        ListenableFuture<?> listenableFuture = targetMemoryPool.reserve(queryId, MOVE_QUERY_TAG, originalReserved);
+        ListenableFuture<?> future = targetMemoryPool.reserve(queryId, MOVE_QUERY_TAG, originalReserved);
         free(queryId, MOVE_QUERY_TAG, originalReserved);
         targetMemoryPool.reserveRevocable(queryId, originalRevocableReserved);
         freeRevocable(queryId, originalRevocableReserved);
         targetMemoryPool.taggedMemoryAllocations.put(queryId, taggedAllocations);
-        return listenableFuture;
+        return future;
     }
 
     /**

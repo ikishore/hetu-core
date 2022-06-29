@@ -1,13 +1,13 @@
-final hashaggregation over ()
+final aggregation over ()
     local exchange (GATHER, SINGLE, [])
         remote exchange (GATHER, SINGLE, [])
-            partial hashaggregation over ()
+            partial aggregation over ()
                 cross join:
                     join (RIGHT, PARTITIONED):
-                        final hashaggregation over (cs_item_sk_15)
+                        final aggregation over (cs_item_sk_15)
                             local exchange (GATHER, SINGLE, [])
                                 remote exchange (REPARTITION, HASH, ["cs_item_sk_15"])
-                                    partial hashaggregation over (cs_item_sk_15)
+                                    partial aggregation over (cs_item_sk_15)
                                         join (INNER, REPLICATED):
                                             scan catalog_sales
                                             local exchange (GATHER, SINGLE, [])
@@ -26,5 +26,5 @@ final hashaggregation over ()
                                             scan date_dim
                     local exchange (GATHER, SINGLE, [])
                         remote exchange (REPLICATE, BROADCAST, [])
-                            single hashaggregation over ()
+                            single aggregation over ()
                                 values (1 rows)

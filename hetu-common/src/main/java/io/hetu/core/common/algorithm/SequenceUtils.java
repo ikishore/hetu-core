@@ -1,5 +1,5 @@
 /*
- * Copyright (C) 2018-2021. Huawei Technologies Co., Ltd. All rights reserved.
+ * Copyright (C) 2018-2020. Huawei Technologies Co., Ltd. All rights reserved.
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
  * You may obtain a copy of the License at
@@ -18,14 +18,16 @@ package io.hetu.core.common.algorithm;
 import com.google.common.collect.Iterators;
 import com.google.common.collect.PeekingIterator;
 
-import java.util.Arrays;
+import java.util.ArrayList;
 import java.util.Comparator;
 import java.util.Iterator;
 import java.util.List;
 import java.util.PriorityQueue;
 
 /**
- * Algorithms for ordered iterator operations (merge, union, intersect)
+ * Algorithms for sequence operations (merge, union, intersect)
+ *
+ * @author Han
  */
 public class SequenceUtils
 {
@@ -45,10 +47,12 @@ public class SequenceUtils
         return merge(iterators, false);
     }
 
-    @SafeVarargs
-    public static <T extends Comparable<T>> Iterator<T> union(Iterator<T>... iterators)
+    public static <T extends Comparable<T>> Iterator<T> union(Iterator<T> iterator1, Iterator<T> iterator2)
     {
-        return union(Arrays.asList(iterators));
+        List<Iterator<T>> iterators = new ArrayList<>(2);
+        iterators.add(iterator1);
+        iterators.add(iterator2);
+        return union(iterators);
     }
 
     /**
@@ -118,10 +122,12 @@ public class SequenceUtils
         };
     }
 
-    @SafeVarargs
-    public static <T extends Comparable<T>> Iterator<T> merge(boolean keepDuplication, Iterator<T>... iterators)
+    public static <T extends Comparable<T>> Iterator<T> merge(Iterator<T> iterator1, Iterator<T> iterator2, boolean keepDuplication)
     {
-        return merge(Arrays.asList(iterators), keepDuplication);
+        List<Iterator<T>> iterators = new ArrayList<>(2);
+        iterators.add(iterator1);
+        iterators.add(iterator2);
+        return merge(iterators, keepDuplication);
     }
 
     /**
@@ -199,10 +205,12 @@ public class SequenceUtils
         };
     }
 
-    @SafeVarargs
-    public static <T extends Comparable<T>> Iterator<T> intersect(Iterator<T>... iterators)
+    public static <T extends Comparable<T>> Iterator<T> intersect(Iterator<T> iterator1, Iterator<T> iterator2)
     {
-        return intersect(Arrays.asList(iterators));
+        List<Iterator<T>> iterators = new ArrayList<>(2);
+        iterators.add(iterator1);
+        iterators.add(iterator2);
+        return intersect(iterators);
     }
 
     private static <T> T allEquals(T[] arr)

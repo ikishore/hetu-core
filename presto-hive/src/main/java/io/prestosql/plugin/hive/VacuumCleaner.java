@@ -27,7 +27,6 @@ import org.apache.hadoop.hive.ql.io.AcidUtils;
 
 import java.io.IOException;
 import java.util.BitSet;
-import java.util.Iterator;
 import java.util.List;
 import java.util.Set;
 import java.util.concurrent.ScheduledExecutorService;
@@ -36,7 +35,6 @@ import java.util.concurrent.TimeUnit;
 import java.util.stream.Collectors;
 
 import static io.prestosql.spi.StandardErrorCode.GENERIC_INTERNAL_ERROR;
-import static java.util.Locale.ENGLISH;
 
 public class VacuumCleaner
 {
@@ -186,15 +184,14 @@ public class VacuumCleaner
                     return true;
                 }
             }
-            log(String.format(ENGLISH, "Number of readers = %d", lockIds.size()));
+            log(String.format("Number of readers = %d", lockIds.size()));
             Set<Long> currentLockIds = lockResponseToSet(response);
-            Iterator<Long> iterator = lockIds.iterator();
-            while (iterator.hasNext()) {
-                if (currentLockIds.contains(iterator.next())) {
+            for (Long lockId : lockIds) {
+                if (currentLockIds.contains(lockId)) {
                     return false;
                 }
                 else {
-                    iterator.remove();
+                    lockIds.remove(lockId);
                 }
             }
             return true;

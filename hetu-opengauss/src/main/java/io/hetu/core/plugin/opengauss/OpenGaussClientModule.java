@@ -24,6 +24,7 @@ import io.prestosql.plugin.jdbc.BaseJdbcConfig;
 import io.prestosql.plugin.jdbc.ConnectionFactory;
 import io.prestosql.plugin.jdbc.DriverConnectionFactory;
 import io.prestosql.plugin.jdbc.JdbcClient;
+import io.prestosql.plugin.postgresql.PostgreSqlConfig;
 import org.postgresql.Driver;
 
 import static io.airlift.configuration.ConfigBinder.configBinder;
@@ -36,7 +37,7 @@ public class OpenGaussClientModule
     {
         binder.bind(JdbcClient.class).to(OpenGaussClient.class).in(Scopes.SINGLETON);
         configBinder(binder).bindConfig(BaseJdbcConfig.class);
-        configBinder(binder).bindConfig(OpenGaussClientConfig.class);
+        configBinder(binder).bindConfig(PostgreSqlConfig.class);
     }
 
     @Provides

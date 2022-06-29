@@ -50,7 +50,7 @@ public class TestTpcdsMetadataStatistics
                         .forEach(table -> {
                             SchemaTableName schemaTableName = new SchemaTableName(schemaName, table.getName());
                             ConnectorTableHandle tableHandle = metadata.getTableHandle(session, schemaTableName);
-                            TableStatistics tableStatistics = metadata.getTableStatistics(session, tableHandle, alwaysTrue(), true);
+                            TableStatistics tableStatistics = metadata.getTableStatistics(session, tableHandle, alwaysTrue());
                             assertTrue(tableStatistics.getRowCount().isUnknown());
                             assertTrue(tableStatistics.getColumnStatistics().isEmpty());
                         }));
@@ -64,7 +64,7 @@ public class TestTpcdsMetadataStatistics
                         .forEach(table -> {
                             SchemaTableName schemaTableName = new SchemaTableName(schemaName, table.getName());
                             ConnectorTableHandle tableHandle = metadata.getTableHandle(session, schemaTableName);
-                            TableStatistics tableStatistics = metadata.getTableStatistics(session, tableHandle, alwaysTrue(), true);
+                            TableStatistics tableStatistics = metadata.getTableStatistics(session, tableHandle, alwaysTrue());
                             assertFalse(tableStatistics.getRowCount().isUnknown());
                             for (ColumnHandle column : metadata.getColumnHandles(session, tableHandle).values()) {
                                 assertTrue(tableStatistics.getColumnStatistics().containsKey(column));
@@ -78,7 +78,7 @@ public class TestTpcdsMetadataStatistics
     {
         SchemaTableName schemaTableName = new SchemaTableName("sf1", Table.CALL_CENTER.getName());
         ConnectorTableHandle tableHandle = metadata.getTableHandle(session, schemaTableName);
-        TableStatistics tableStatistics = metadata.getTableStatistics(session, tableHandle, alwaysTrue(), true);
+        TableStatistics tableStatistics = metadata.getTableStatistics(session, tableHandle, alwaysTrue());
 
         estimateAssertion.assertClose(tableStatistics.getRowCount(), Estimate.of(6), "Row count does not match");
 
@@ -148,7 +148,7 @@ public class TestTpcdsMetadataStatistics
     {
         SchemaTableName schemaTableName = new SchemaTableName("sf1", Table.WEB_SITE.getName());
         ConnectorTableHandle tableHandle = metadata.getTableHandle(session, schemaTableName);
-        TableStatistics tableStatistics = metadata.getTableStatistics(session, tableHandle, alwaysTrue(), true);
+        TableStatistics tableStatistics = metadata.getTableStatistics(session, tableHandle, alwaysTrue());
 
         Map<String, ColumnHandle> columnHandles = metadata.getColumnHandles(session, tableHandle);
 

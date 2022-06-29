@@ -1,5 +1,5 @@
 /*
- * Copyright (C) 2018-2021. Huawei Technologies Co., Ltd. All rights reserved.
+ * Copyright (C) 2018-2020. Huawei Technologies Co., Ltd. All rights reserved.
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
  * You may obtain a copy of the License at
@@ -17,7 +17,6 @@ package io.hetu.core.heuristicindex.filter;
 
 import com.google.common.collect.ImmutableList;
 import io.hetu.core.common.algorithm.SequenceUtils;
-import io.prestosql.spi.function.BuiltInFunctionHandle;
 import io.prestosql.spi.function.OperatorType;
 import io.prestosql.spi.function.Signature;
 import io.prestosql.spi.heuristicindex.IndexFilter;
@@ -28,22 +27,17 @@ import io.prestosql.spi.relation.RowExpression;
 import io.prestosql.spi.relation.SpecialForm;
 import io.prestosql.spi.relation.VariableReferenceExpression;
 
+import java.util.ArrayList;
 import java.util.Iterator;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
-import java.util.stream.Collectors;
 
 public class HeuristicIndexFilter
         implements IndexFilter
 {
     Map<String, List<IndexMetadata>> indices;
 
-    /**
-     * Construct the filter with indexes.
-     *
-     * @param indices A map of column name to list of index. Only one column is supported for now.
-     */
     public HeuristicIndexFilter(Map<String, List<IndexMetadata>> indices)
     {
         this.indices = indices;
@@ -67,17 +61,15 @@ public class HeuristicIndexFilter
                     Signature sigRight = Signature.internalOperator(OperatorType.LESS_THAN_OR_EQUAL,
                             specialForm.getType().getTypeSignature(),
                             specialForm.getArguments().get(2).getType().getTypeSignature());
-                    // todo remote udf, we should get FunctionHandle from FunctionAndTypeManager
-                    CallExpression left = new CallExpression(OperatorType.GREATER_THAN_OR_EQUAL.name(), new BuiltInFunctionHandle(sigLeft), specialForm.getType(), ImmutableList.of(specialForm.getArguments().get(0), specialForm.getArguments().get(1)), Optional.empty());
-                    CallExpression right = new CallExpression(OperatorType.LESS_THAN_OR_EQUAL.name(), new BuiltInFunctionHandle(sigRight), specialForm.getType(), ImmutableList.of(specialForm.getArguments().get(0), specialForm.getArguments().get(2)), Optional.empty());
-                    return matches(left) && matches(right); // break it to (>= left and <= right)
+                    CallExpression left = new CallExpression(sigLeft, specialForm.getType(), ImmutableList.of(specialForm.getArguments().get(0), specialForm.getArguments().get(1)), Optional.empty());
+                    CallExpression right = new CallExpression(sigRight, specialForm.getType(), ImmutableList.of(specialForm.getArguments().get(0), specialForm.getArguments().get(2)), Optional.empty());
+                    return matches(left) && matches(right);
                 case IN:
                     Signature sigEqual = Signature.internalOperator(OperatorType.EQUAL,
                             specialForm.getType().getTypeSignature(),
                             specialForm.getArguments().get(1).getType().getTypeSignature());
                     for (RowExpression exp : specialForm.getArguments().subList(1, specialForm.getArguments().size())) {
-                        // todo remote udf, we should get FunctionHandle from FunctionAndTypeManager
-                        if (matches(new CallExpression(OperatorType.EQUAL.name(), new BuiltInFunctionHandle(sigEqual), specialForm.getType(), ImmutableList.of(specialForm.getArguments().get(0), exp), Optional.empty()))) {
+                        if (matches(new CallExpression(sigEqual, specialForm.getType(), ImmutableList.of(specialForm.getArguments().get(0), exp), Optional.empty()))) {
                             return true;
                         }
                     }
@@ -176,14 +168,6 @@ public class HeuristicIndexFilter
         return false;
     }
 
-    /**
-     * Lookup all index available according to the expression and union the result.
-     * <p>
-     * It returns {@code null} as the special value for "universe" result U such that,
-     * for any other results A: U \and A == A, U \or A == U.
-     * <p>
-     * If any of the index throws {@code IndexLookUpException} during lookup, it immediately break and return null.
-     */
     private <T extends Comparable<T>> Iterator<T> lookUpAll(RowExpression expression)
     {
         RowExpression varRef = null;
@@ -207,22 +191,12 @@ public class HeuristicIndexFilter
             return null;
         }
 
-        try {
-            List<Iterator<T>> iterators = selectedIndex.parallelStream()
-                    .map(indexMetadata -> {
-                        try {
-                            return (Iterator<T>) indexMetadata.getIndex().lookUp(expression);
-                        }
-                        catch (IndexLookUpException e) {
-                            throw new RuntimeException(e);
-                        }
-                    })
-                    .collect(Collectors.toList());
+        List<Iterator<T>> iterators = new ArrayList<>(selectedIndex.size());
 
-            return SequenceUtils.union(iterators);
+        for (IndexMetadata indexMetadata : selectedIndex) {
+            iterators.add((indexMetadata.getIndex()).lookUp(expression));
         }
-        catch (RuntimeException re) {
-            return null;
-        }
+
+        return SequenceUtils.union(iterators);
     }
 }

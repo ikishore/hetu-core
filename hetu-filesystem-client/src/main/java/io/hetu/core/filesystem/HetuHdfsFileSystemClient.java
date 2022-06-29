@@ -1,5 +1,5 @@
 /*
- * Copyright (C) 2018-2021. Huawei Technologies Co., Ltd. All rights reserved.
+ * Copyright (C) 2018-2020. Huawei Technologies Co., Ltd. All rights reserved.
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
  * You may obtain a copy of the License at
@@ -35,7 +35,6 @@ import java.nio.file.NoSuchFileException;
 import java.nio.file.OpenOption;
 import java.nio.file.Path;
 import java.nio.file.Paths;
-import java.util.UUID;
 import java.util.stream.Stream;
 
 import static java.nio.file.StandardOpenOption.CREATE_NEW;
@@ -200,7 +199,7 @@ public class HetuHdfsFileSystemClient
             case SupportedFileAttributes.LAST_MODIFIED_TIME:
                 return fileStatus.getModificationTime();
             case SupportedFileAttributes.SIZE:
-                return fileStatus.getLen();
+                return fileStatus.getBlockSize();
             default:
                 return null;
         }
@@ -272,40 +271,6 @@ public class HetuHdfsFileSystemClient
             throws IOException
     {
         getHdfs().close();
-    }
-
-    @Override
-    public long getUsableSpace(Path path) throws IOException
-    {
-        return getHdfs().getStatus(toHdfsPath(path)).getRemaining();
-    }
-
-    @Override
-    public long getTotalSpace(Path path) throws IOException
-    {
-        return getHdfs().getStatus(toHdfsPath(path)).getCapacity();
-    }
-
-    @Override
-    public Path createTemporaryFile(Path path, String prefix, String suffix) throws IOException
-    {
-        String randomNo = UUID.randomUUID().toString();
-        Path finalPath = Paths.get(String.valueOf(path), prefix + randomNo + suffix);
-        unwrapHdfsExceptions(() -> getHdfs().create(toHdfsPath(finalPath)));
-        return finalPath;
-    }
-
-    @Override
-    public Path createFile(Path path) throws IOException
-    {
-        unwrapHdfsExceptions(() -> getHdfs().create(toHdfsPath(path)));
-        return path;
-    }
-
-    @Override
-    public Stream<Path> getDirectoryStream(Path path, String prefix, String suffix) throws IOException
-    {
-        return list(path).filter(pth -> pth.getFileName().toString().startsWith(prefix) && pth.getFileName().toString().endsWith(suffix));
     }
 
     /**

@@ -14,7 +14,6 @@
 package io.prestosql.operator.window;
 
 import com.google.common.collect.ImmutableList;
-import io.prestosql.spi.connector.QualifiedObjectName;
 import io.prestosql.spi.function.Signature;
 import io.prestosql.spi.function.TypeVariableConstraint;
 import io.prestosql.spi.function.WindowFunction;
@@ -26,7 +25,6 @@ import java.util.stream.Stream;
 
 import static com.google.common.base.Preconditions.checkArgument;
 import static com.google.common.collect.ImmutableList.toImmutableList;
-import static io.prestosql.spi.connector.CatalogSchemaName.DEFAULT_NAMESPACE;
 import static io.prestosql.spi.function.FunctionKind.WINDOW;
 import static io.prestosql.spi.function.Signature.typeVariable;
 import static io.prestosql.spi.type.TypeSignature.parseTypeSignature;
@@ -56,7 +54,7 @@ public final class WindowAnnotationsParser
                 .collect(toImmutableList());
 
         Signature signature = new Signature(
-                QualifiedObjectName.valueOf(DEFAULT_NAMESPACE, window.name()),
+                window.name(),
                 WINDOW,
                 typeVariables,
                 ImmutableList.of(),

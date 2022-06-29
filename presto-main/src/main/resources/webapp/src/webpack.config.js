@@ -9,9 +9,7 @@ module.exports = {
         'hetuqueryeditor': __dirname +'/hetuqueryeditor.jsx',
         'overview': __dirname +'/overview.jsx',
         'nodes': __dirname +'/nodes.jsx',
-        'headerfooter': __dirname +'/HeaderFooter.jsx',
-        'auditlog': __dirname + '/auditlog.jsx',
-        'querymonitor': __dirname + '/querymonitor.jsx',
+        'headerfooter': __dirname +'/HeaderFooter.jsx'
     },
     mode: "development",
     module: {

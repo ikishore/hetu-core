@@ -15,7 +15,6 @@ package io.prestosql.execution;
 
 import com.fasterxml.jackson.core.JsonProcessingException;
 import com.fasterxml.jackson.databind.ObjectMapper;
-import com.google.common.collect.ImmutableList;
 import com.google.common.collect.Ordering;
 import com.google.common.util.concurrent.ListenableFuture;
 import io.airlift.concurrent.ThreadPoolExecutorMBean;
@@ -30,10 +29,7 @@ import io.prestosql.execution.StateMachine.StateChangeListener;
 import io.prestosql.memory.ClusterMemoryManager;
 import io.prestosql.metadata.SessionPropertyManager;
 import io.prestosql.queryeditorui.QueryEditorUIModule;
-import io.prestosql.queryhistory.QueryHistoryService;
 import io.prestosql.server.BasicQueryInfo;
-import io.prestosql.snapshot.QuerySnapshotManager;
-import io.prestosql.spi.ErrorType;
 import io.prestosql.spi.PrestoException;
 import io.prestosql.spi.QueryId;
 import io.prestosql.spi.statestore.StateMap;
@@ -43,6 +39,7 @@ import io.prestosql.statestore.StateCacheStore;
 import io.prestosql.statestore.StateStoreConstants;
 import io.prestosql.statestore.StateStoreProvider;
 import io.prestosql.version.EmbedVersion;
+import org.joda.time.DateTime;
 import org.weakref.jmx.Flatten;
 import org.weakref.jmx.Managed;
 import org.weakref.jmx.Nested;
@@ -52,17 +49,15 @@ import javax.annotation.PreDestroy;
 import javax.annotation.concurrent.ThreadSafe;
 import javax.inject.Inject;
 
+import java.io.File;
+import java.io.FileWriter;
+import java.io.IOException;
 import java.util.List;
 import java.util.Locale;
 import java.util.Map;
 import java.util.NoSuchElementException;
 import java.util.Objects;
-import java.util.Set;
-import java.util.concurrent.ExecutorService;
-import java.util.concurrent.Executors;
-import java.util.concurrent.ScheduledExecutorService;
-import java.util.concurrent.ThreadPoolExecutor;
-import java.util.concurrent.TimeUnit;
+import java.util.concurrent.*;
 import java.util.function.Consumer;
 import java.util.function.Supplier;
 import java.util.stream.Collectors;
@@ -72,9 +67,7 @@ import static com.google.common.util.concurrent.Futures.immediateFailedFuture;
 import static io.airlift.concurrent.Threads.threadsNamed;
 import static io.prestosql.SystemSessionProperties.getQueryMaxCpuTime;
 import static io.prestosql.execution.QueryState.RUNNING;
-import static io.prestosql.execution.QueryState.SUSPENDED;
 import static io.prestosql.spi.StandardErrorCode.GENERIC_INTERNAL_ERROR;
-import static io.prestosql.spi.StandardErrorCode.QUERY_EXPIRE;
 import static io.prestosql.utils.StateUtils.isMultiCoordinatorEnabled;
 import static java.lang.String.format;
 import static java.util.Objects.requireNonNull;
@@ -85,6 +78,8 @@ public class SqlQueryManager
         implements QueryManager
 {
     private static final Logger log = Logger.get(SqlQueryManager.class);
+
+    private static ConcurrentLinkedQueue<LogEntry> logQueue = new ConcurrentLinkedQueue();
 
     private final ClusterMemoryManager memoryManager;
     private final QueryMonitor queryMonitor;
@@ -103,16 +98,14 @@ public class SqlQueryManager
     // LocalStateProvider
     private final StateStoreProvider stateStoreProvider;
     private final SessionPropertyManager sessionPropertyManager;
-    private final QueryHistoryService queryHistoryService;
 
     // Inject LocalStateProvider
     @Inject
-    public SqlQueryManager(ClusterMemoryManager memoryManager, QueryMonitor queryMonitor, EmbedVersion embedVersion, QueryManagerConfig queryManagerConfig, StateStoreProvider stateStoreProvider, SessionPropertyManager sessionPropertyManager, QueryHistoryService queryHistoryService)
+    public SqlQueryManager(ClusterMemoryManager memoryManager, QueryMonitor queryMonitor, EmbedVersion embedVersion, QueryManagerConfig queryManagerConfig, StateStoreProvider stateStoreProvider, SessionPropertyManager sessionPropertyManager)
     {
         this.memoryManager = requireNonNull(memoryManager, "memoryManager is null");
         this.queryMonitor = requireNonNull(queryMonitor, "queryMonitor is null");
         this.embedVersion = requireNonNull(embedVersion, "embedVersion is null");
-        this.queryHistoryService = requireNonNull(queryHistoryService, "embedVersion is null");
 
         this.maxQueryCpuTime = queryManagerConfig.getQueryMaxCpuTime();
 
@@ -122,7 +115,7 @@ public class SqlQueryManager
         this.queryManagementExecutor = Executors.newScheduledThreadPool(queryManagerConfig.getQueryManagerExecutorPoolSize(), threadsNamed("query-management-%s"));
         this.queryManagementExecutorMBean = new ThreadPoolExecutorMBean((ThreadPoolExecutor) queryManagementExecutor);
 
-        this.queryTracker = new QueryTracker<>(queryManagerConfig, queryManagementExecutor, stateStoreProvider);
+        this.queryTracker = new QueryTracker<>(queryManagerConfig, queryManagementExecutor);
         // Inject LocalStateProvider
         this.stateStoreProvider = stateStoreProvider;
         this.sessionPropertyManager = sessionPropertyManager;
@@ -143,17 +136,9 @@ public class SqlQueryManager
 
             try {
                 enforceCpuLimits();
-                // Todo(Nitin K): patch to suspend query in case cpu limits increase...
             }
             catch (Throwable e) {
                 log.error(e, "Error enforcing query CPU time limits");
-            }
-
-            try {
-                killExpiredQuery();
-            }
-            catch (Throwable e) {
-                log.error(e, "Error killing expired query");
             }
         }, 1, 1, TimeUnit.SECONDS);
     }
@@ -161,6 +146,21 @@ public class SqlQueryManager
     @PreDestroy
     public void stop()
     {
+        try {
+            String fileName = "/scratch/bqo/rebasev2/bqo2/log.txt";
+            new File(fileName);
+            FileWriter outputFile = new FileWriter(fileName);
+
+            while (!logQueue.isEmpty()) {
+                LogEntry entry = logQueue.poll();
+                outputFile.write(entry.toString() + "\n");
+            }
+
+            outputFile.close();
+        } catch (IOException e) {
+
+        }
+
         queryTracker.stop();
         queryManagementExecutor.shutdownNow();
         queryExecutor.shutdownNow();
@@ -264,8 +264,6 @@ public class SqlQueryManager
             throw new PrestoException(GENERIC_INTERNAL_ERROR, format("Query %s already registered", queryExecution.getQueryId()));
         }
 
-        // CreateIndex operations could not register cleanup operations like connectors
-        // Therefore a listener is added here to clean up index records on failure
         if (isIndexCreationQuery(queryExecution.getQueryInfo())) {
             queryExecution.addStateChangeListener(state -> {
                 try {
@@ -280,10 +278,7 @@ public class SqlQueryManager
 
         queryExecution.addFinalQueryInfoListener(finalQueryInfo -> {
             try {
-                queryMonitor.queryCompletedEvent(finalQueryInfo);
-                if (!(finalQueryInfo.getSession().getSource().map(source -> QueryEditorUIModule.UI_QUERY_SOURCE.equals(source)).orElse(false))) {
-                    queryHistoryService.insert(finalQueryInfo);
-                }
+                queryMonitor.queryCompletedEvent(finalQueryInfo, logQueue);
             }
             finally {
                 // execution MUST be added to the expiration queue or there will be a leak
@@ -326,26 +321,6 @@ public class SqlQueryManager
     }
 
     @Override
-    public void suspendQuery(QueryId queryId)
-    {
-        requireNonNull(queryId, "queryId is null");
-        log.debug("Suspending query %s", queryId);
-
-        queryTracker.tryGetQuery(queryId)
-                .ifPresent(QueryExecution::suspendQuery);
-    }
-
-    @Override
-    public void resumeQuery(QueryId queryId)
-    {
-        requireNonNull(queryId, "queryId is null");
-        log.debug("Resuming Suspended query %s", queryId);
-
-        queryTracker.tryGetQuery(queryId)
-                .ifPresent(QueryExecution::resumeQuery);
-    }
-
-    @Override
     @Managed
     @Flatten
     public QueryManagerStats getStats()
@@ -373,7 +348,6 @@ public class SqlQueryManager
     private void enforceMemoryLimits()
     {
         List<QueryExecution> runningQueries;
-        List<QueryExecution> suspendedQueries = ImmutableList.of();
         Supplier<List<BasicQueryInfo>> allQueryInfoSupplier;
 
         Map<String, SharedQueryState> queryStates = StateCacheStore.get().getCachedStates(StateStoreConstants.QUERY_STATE_COLLECTION_NAME);
@@ -389,13 +363,9 @@ public class SqlQueryManager
                     .filter(query -> query.getState() == RUNNING)
                     .collect(toImmutableList());
             allQueryInfoSupplier = this::getQueries;
-
-            suspendedQueries = queryTracker.getAllQueries().stream()
-                    .filter(query -> query.getState() == SUSPENDED)
-                    .collect(toImmutableList());
         }
 
-        memoryManager.process(runningQueries, suspendedQueries, allQueryInfoSupplier);
+        memoryManager.process(runningQueries, allQueryInfoSupplier);
 
         // Put the chosen query to kill into state store
         if (isMultiCoordinatorEnabled() && queryStates != null) {
@@ -470,34 +440,6 @@ public class SqlQueryManager
         }
     }
 
-    /**
-     * Kill query when expired, state has already been updated in StateFetcher.
-     */
-    private void killExpiredQuery()
-    {
-        if (!isMultiCoordinatorEnabled()) {
-            return;
-        }
-        List<QueryExecution> localRunningQueries = queryTracker.getAllQueries().stream()
-                .filter(query -> query.getState() == RUNNING)
-                .collect(toImmutableList());
-
-        Map<String, SharedQueryState> queries = StateCacheStore.get().getCachedStates(StateStoreConstants.FINISHED_QUERY_STATE_COLLECTION_NAME);
-        if (queries != null) {
-            Set<String> expiredQueryIds = queries.entrySet().stream()
-                    .filter(entry -> isQueryExpired(entry.getValue()))
-                    .map(entry -> entry.getKey())
-                    .collect(Collectors.toSet());
-            if (!expiredQueryIds.isEmpty()) {
-                for (QueryExecution localQuery : localRunningQueries) {
-                    if (expiredQueryIds.contains(localQuery.getQueryId().getId())) {
-                        localQuery.fail(new PrestoException(QUERY_EXPIRE, "Query killed because the query has expired. Please try again in a few minutes."));
-                    }
-                }
-            }
-        }
-    }
-
     @Override
     public void checkForQueryPruning(QueryId queryId, QueryInfo queryInfo)
     {
@@ -510,20 +452,40 @@ public class SqlQueryManager
         }
     }
 
-    @Override
-    public QuerySnapshotManager getQuerySnapshotManager(QueryId queryId)
-    {
-        return queryTracker.getQuery(queryId).getQuerySnapshotManager();
-    }
-
     private boolean isIndexCreationQuery(QueryInfo queryInfo)
     {
         return queryInfo.getQuery().toUpperCase(Locale.ROOT).startsWith("CREATE INDEX");
     }
 
-    private static boolean isQueryExpired(SharedQueryState state)
+    public static class LogEntry
     {
-        BasicQueryInfo info = state.getBasicQueryInfo();
-        return info.getState() == QueryState.FAILED && info.getErrorType() == ErrorType.INTERNAL_ERROR && info.getErrorCode().equals(QUERY_EXPIRE.toErrorCode());
+        private Long startTime;
+        private Long endTime;
+        private Long elapsed;
+        private Long running;
+        private String ids;
+
+        public LogEntry (DateTime startTime, DateTime endTIme, long elapsed, long running, List<QueryId> batchQueries)
+        {
+            this.startTime = startTime.getMillis();
+            this.endTime = endTIme.getMillis();
+            this.elapsed = elapsed;
+            this.running = running;
+
+            this.ids = "";
+
+            for (QueryId id : batchQueries) {
+                if (this.ids.length() == 0) {
+                    this.ids = id.getId();
+                } else {
+                    this.ids = this.ids + "-" + id.getId();
+                }
+            }
+        }
+
+        public String toString ()
+        {
+            return startTime.toString() + "," + endTime.toString() + "," + elapsed.toString() + "," + running.toString() + "," + ids;
+        }
     }
 }

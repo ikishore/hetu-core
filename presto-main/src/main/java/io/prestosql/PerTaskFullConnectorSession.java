@@ -1,5 +1,5 @@
 /*
- * Copyright (C) 2018-2021. Huawei Technologies Co., Ltd. All rights reserved.
+ * Copyright (C) 2018-2020. Huawei Technologies Co., Ltd. All rights reserved.
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
  * You may obtain a copy of the License at
@@ -14,7 +14,7 @@
  */
 package io.prestosql;
 
-import io.prestosql.execution.DriverPipelineTaskId;
+import io.prestosql.execution.DriverTaskId;
 import io.prestosql.metadata.SessionPropertyManager;
 import io.prestosql.spi.connector.CatalogName;
 import io.prestosql.spi.security.ConnectorIdentity;
@@ -29,7 +29,7 @@ import java.util.OptionalInt;
 public class PerTaskFullConnectorSession
         extends FullConnectorSession
 {
-    private final Optional<DriverPipelineTaskId> driverPipelineTaskId;
+    private final Optional<DriverTaskId> driverTaskId;
 
     public PerTaskFullConnectorSession(Session session,
                                        ConnectorIdentity identity,
@@ -37,25 +37,16 @@ public class PerTaskFullConnectorSession
                                        CatalogName catalogName,
                                        String catalog,
                                        SessionPropertyManager sessionPropertyManager,
-                                       Optional<DriverPipelineTaskId> taskId)
+                                       Optional<DriverTaskId> taskId)
     {
         super(session, identity, properties, catalogName, catalog, sessionPropertyManager);
-        this.driverPipelineTaskId = taskId;
+        this.driverTaskId = taskId;
     }
 
     public OptionalInt getTaskId()
     {
-        if (driverPipelineTaskId.isPresent() && driverPipelineTaskId.get().getTaskId().isPresent()) {
-            return OptionalInt.of(driverPipelineTaskId.get().getTaskId().get().getId());
-        }
-        return OptionalInt.empty();
-    }
-
-    @Override
-    public OptionalInt getPipelineId()
-    {
-        if (driverPipelineTaskId.isPresent()) {
-            return OptionalInt.of(driverPipelineTaskId.get().getPipelineId());
+        if (driverTaskId.isPresent() && driverTaskId.get().getTaskId().isPresent()) {
+            return OptionalInt.of(driverTaskId.get().getTaskId().get().getId());
         }
         return OptionalInt.empty();
     }
@@ -63,8 +54,8 @@ public class PerTaskFullConnectorSession
     @Override
     public OptionalInt getDriverId()
     {
-        if (driverPipelineTaskId.isPresent()) {
-            return OptionalInt.of(driverPipelineTaskId.get().getDriverId());
+        if (driverTaskId.isPresent()) {
+            return OptionalInt.of(driverTaskId.get().getDriverId());
         }
         return OptionalInt.empty();
     }

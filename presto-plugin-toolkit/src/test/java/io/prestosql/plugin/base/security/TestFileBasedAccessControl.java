@@ -23,7 +23,7 @@ import org.testng.Assert.ThrowingRunnable;
 import org.testng.annotations.Test;
 
 import java.io.IOException;
-import java.util.Set;
+import java.util.Optional;
 
 import static io.prestosql.spi.testing.InterfaceTestUtils.assertAllMethodsOverridden;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
@@ -32,21 +32,16 @@ import static org.testng.Assert.assertThrows;
 public class TestFileBasedAccessControl
 {
     public static final ConnectorTransactionHandle TRANSACTION_HANDLE = new ConnectorTransactionHandle() {};
-    private static final ConnectorIdentity ADMIN = user("admin", ImmutableSet.of("admin", "staff"));
-    private static final ConnectorIdentity ALICE = user("alice", ImmutableSet.of("staff"));
-    private static final ConnectorIdentity BOB = user("bob", ImmutableSet.of("staff"));
-    private static final ConnectorIdentity CHARLIE = user("charlie", ImmutableSet.of("guests"));
-    private static final ConnectorIdentity JOE = user("joe", ImmutableSet.of());
 
     @Test
     public void testSchemaRules()
             throws IOException
     {
         ConnectorAccessControl accessControl = createAccessControl("schema.json");
-        accessControl.checkCanCreateTable(TRANSACTION_HANDLE, ADMIN, new SchemaTableName("test", "test"));
-        accessControl.checkCanCreateTable(TRANSACTION_HANDLE, BOB, new SchemaTableName("bob", "test"));
-        assertDenied(() -> accessControl.checkCanCreateTable(TRANSACTION_HANDLE, BOB, new SchemaTableName("test", "test")));
-        assertDenied(() -> accessControl.checkCanCreateTable(TRANSACTION_HANDLE, ADMIN, new SchemaTableName("secret", "test")));
+        accessControl.checkCanCreateTable(TRANSACTION_HANDLE, user("admin"), new SchemaTableName("test", "test"));
+        accessControl.checkCanCreateTable(TRANSACTION_HANDLE, user("bob"), new SchemaTableName("bob", "test"));
+        assertDenied(() -> accessControl.checkCanCreateTable(TRANSACTION_HANDLE, user("bob"), new SchemaTableName("test", "test")));
+        assertDenied(() -> accessControl.checkCanCreateTable(TRANSACTION_HANDLE, user("admin"), new SchemaTableName("secret", "test")));
     }
 
     @Test
@@ -54,21 +49,21 @@ public class TestFileBasedAccessControl
             throws IOException
     {
         ConnectorAccessControl accessControl = createAccessControl("table.json");
-        accessControl.checkCanSelectFromColumns(TRANSACTION_HANDLE, ALICE, new SchemaTableName("test", "test"), ImmutableSet.of());
-        accessControl.checkCanSelectFromColumns(TRANSACTION_HANDLE, ALICE, new SchemaTableName("bobschema", "bobtable"), ImmutableSet.of());
-        accessControl.checkCanSelectFromColumns(TRANSACTION_HANDLE, ALICE, new SchemaTableName("bobschema", "bobtable"), ImmutableSet.of("bobcolumn"));
-        accessControl.checkCanSelectFromColumns(TRANSACTION_HANDLE, BOB, new SchemaTableName("bobschema", "bobtable"), ImmutableSet.of());
-        accessControl.checkCanInsertIntoTable(TRANSACTION_HANDLE, BOB, new SchemaTableName("bobschema", "bobtable"));
-        accessControl.checkCanDeleteFromTable(TRANSACTION_HANDLE, BOB, new SchemaTableName("bobschema", "bobtable"));
-        accessControl.checkCanSelectFromColumns(TRANSACTION_HANDLE, JOE, new SchemaTableName("bobschema", "bobtable"), ImmutableSet.of());
-        accessControl.checkCanCreateViewWithSelectFromColumns(TRANSACTION_HANDLE, BOB, new SchemaTableName("bobschema", "bobtable"), ImmutableSet.of());
-        accessControl.checkCanDropTable(TRANSACTION_HANDLE, ADMIN, new SchemaTableName("bobschema", "bobtable"));
-        assertDenied(() -> accessControl.checkCanInsertIntoTable(TRANSACTION_HANDLE, ALICE, new SchemaTableName("bobschema", "bobtable")));
-        assertDenied(() -> accessControl.checkCanDropTable(TRANSACTION_HANDLE, BOB, new SchemaTableName("bobschema", "bobtable")));
-        assertDenied(() -> accessControl.checkCanInsertIntoTable(TRANSACTION_HANDLE, BOB, new SchemaTableName("test", "test")));
-        assertDenied(() -> accessControl.checkCanSelectFromColumns(TRANSACTION_HANDLE, ADMIN, new SchemaTableName("secret", "secret"), ImmutableSet.of()));
-        assertDenied(() -> accessControl.checkCanSelectFromColumns(TRANSACTION_HANDLE, JOE, new SchemaTableName("secret", "secret"), ImmutableSet.of()));
-        assertDenied(() -> accessControl.checkCanCreateViewWithSelectFromColumns(TRANSACTION_HANDLE, JOE, new SchemaTableName("bobschema", "bobtable"), ImmutableSet.of()));
+        accessControl.checkCanSelectFromColumns(TRANSACTION_HANDLE, user("alice"), new SchemaTableName("test", "test"), ImmutableSet.of());
+        accessControl.checkCanSelectFromColumns(TRANSACTION_HANDLE, user("alice"), new SchemaTableName("bobschema", "bobtable"), ImmutableSet.of());
+        accessControl.checkCanSelectFromColumns(TRANSACTION_HANDLE, user("alice"), new SchemaTableName("bobschema", "bobtable"), ImmutableSet.of("bobcolumn"));
+        accessControl.checkCanSelectFromColumns(TRANSACTION_HANDLE, user("bob"), new SchemaTableName("bobschema", "bobtable"), ImmutableSet.of());
+        accessControl.checkCanInsertIntoTable(TRANSACTION_HANDLE, user("bob"), new SchemaTableName("bobschema", "bobtable"));
+        accessControl.checkCanDeleteFromTable(TRANSACTION_HANDLE, user("bob"), new SchemaTableName("bobschema", "bobtable"));
+        accessControl.checkCanSelectFromColumns(TRANSACTION_HANDLE, user("joe"), new SchemaTableName("bobschema", "bobtable"), ImmutableSet.of());
+        accessControl.checkCanCreateViewWithSelectFromColumns(TRANSACTION_HANDLE, user("bob"), new SchemaTableName("bobschema", "bobtable"), ImmutableSet.of());
+        accessControl.checkCanDropTable(TRANSACTION_HANDLE, user("admin"), new SchemaTableName("bobschema", "bobtable"));
+        assertDenied(() -> accessControl.checkCanInsertIntoTable(TRANSACTION_HANDLE, user("alice"), new SchemaTableName("bobschema", "bobtable")));
+        assertDenied(() -> accessControl.checkCanDropTable(TRANSACTION_HANDLE, user("bob"), new SchemaTableName("bobschema", "bobtable")));
+        assertDenied(() -> accessControl.checkCanInsertIntoTable(TRANSACTION_HANDLE, user("bob"), new SchemaTableName("test", "test")));
+        assertDenied(() -> accessControl.checkCanSelectFromColumns(TRANSACTION_HANDLE, user("admin"), new SchemaTableName("secret", "secret"), ImmutableSet.of()));
+        assertDenied(() -> accessControl.checkCanSelectFromColumns(TRANSACTION_HANDLE, user("joe"), new SchemaTableName("secret", "secret"), ImmutableSet.of()));
+        assertDenied(() -> accessControl.checkCanCreateViewWithSelectFromColumns(TRANSACTION_HANDLE, user("joe"), new SchemaTableName("bobschema", "bobtable"), ImmutableSet.of()));
     }
 
     @Test
@@ -76,13 +71,13 @@ public class TestFileBasedAccessControl
             throws IOException
     {
         ConnectorAccessControl accessControl = createAccessControl("session_property.json");
-        accessControl.checkCanSetCatalogSessionProperty(TRANSACTION_HANDLE, ADMIN, "dangerous");
-        accessControl.checkCanSetCatalogSessionProperty(TRANSACTION_HANDLE, ALICE, "safe");
-        accessControl.checkCanSetCatalogSessionProperty(TRANSACTION_HANDLE, ALICE, "unsafe");
-        accessControl.checkCanSetCatalogSessionProperty(TRANSACTION_HANDLE, BOB, "safe");
-        assertDenied(() -> accessControl.checkCanSetCatalogSessionProperty(TRANSACTION_HANDLE, BOB, "unsafe"));
-        assertDenied(() -> accessControl.checkCanSetCatalogSessionProperty(TRANSACTION_HANDLE, ALICE, "dangerous"));
-        assertDenied(() -> accessControl.checkCanSetCatalogSessionProperty(TRANSACTION_HANDLE, CHARLIE, "safe"));
+        accessControl.checkCanSetCatalogSessionProperty(TRANSACTION_HANDLE, user("admin"), "dangerous");
+        accessControl.checkCanSetCatalogSessionProperty(TRANSACTION_HANDLE, user("alice"), "safe");
+        accessControl.checkCanSetCatalogSessionProperty(TRANSACTION_HANDLE, user("alice"), "unsafe");
+        accessControl.checkCanSetCatalogSessionProperty(TRANSACTION_HANDLE, user("bob"), "safe");
+        assertDenied(() -> accessControl.checkCanSetCatalogSessionProperty(TRANSACTION_HANDLE, user("bob"), "unsafe"));
+        assertDenied(() -> accessControl.checkCanSetCatalogSessionProperty(TRANSACTION_HANDLE, user("alice"), "dangerous"));
+        assertDenied(() -> accessControl.checkCanSetCatalogSessionProperty(TRANSACTION_HANDLE, user("charlie"), "safe"));
     }
 
     @Test
@@ -98,9 +93,9 @@ public class TestFileBasedAccessControl
         assertAllMethodsOverridden(ConnectorAccessControl.class, FileBasedAccessControl.class);
     }
 
-    private static ConnectorIdentity user(String name, Set<String> groups)
+    private static ConnectorIdentity user(String name)
     {
-        return ConnectorIdentity.forUser(name).withGroups(groups).build();
+        return new ConnectorIdentity(name, Optional.empty(), Optional.empty());
     }
 
     private ConnectorAccessControl createAccessControl(String fileName)

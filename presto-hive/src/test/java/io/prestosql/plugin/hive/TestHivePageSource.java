@@ -1,5 +1,5 @@
 /*
- * Copyright (C) 2018-2021. Huawei Technologies Co., Ltd. All rights reserved.
+ * Copyright (C) 2018-2020. Huawei Technologies Co., Ltd. All rights reserved.
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
  * You may obtain a copy of the License at
@@ -14,7 +14,6 @@
  */
 package io.prestosql.plugin.hive;
 
-import com.google.common.collect.ImmutableList;
 import com.google.common.collect.ImmutableMap;
 import io.prestosql.spi.Page;
 import io.prestosql.spi.block.Block;
@@ -29,9 +28,7 @@ import io.prestosql.spi.util.BloomFilter;
 import org.testng.annotations.DataProvider;
 import org.testng.annotations.Test;
 
-import java.util.ArrayList;
 import java.util.HashMap;
-import java.util.List;
 import java.util.Map;
 import java.util.Optional;
 
@@ -72,7 +69,7 @@ public class TestHivePageSource
 
         Page page = new Page(dayBlock, appBlock);
 
-        Map<ColumnHandle, DynamicFilter> dynamicFilter = new HashMap<>();
+        Map<ColumnHandle, DynamicFilter> dynamicFilters = new HashMap<>();
         ColumnHandle dayColumn = new HiveColumnHandle("pt_d", HIVE_INT, parseTypeSignature(INTEGER), 0, REGULAR, Optional.empty());
         ColumnHandle appColumn = new HiveColumnHandle("app_d", HIVE_INT, parseTypeSignature(INTEGER), 1, REGULAR, Optional.empty());
 
@@ -83,13 +80,10 @@ public class TestHivePageSource
             dayFilter.add(columnOffset1 + i);
             appFilter.add(columnOffset2 + i);
         }
-        dynamicFilter.put(dayColumn, new BloomFilterDynamicFilter("1", dayColumn, dayFilter, DynamicFilter.Type.GLOBAL));
-        dynamicFilter.put(appColumn, new BloomFilterDynamicFilter("2", appColumn, appFilter, DynamicFilter.Type.GLOBAL));
+        dynamicFilters.put(dayColumn, new BloomFilterDynamicFilter("1", dayColumn, dayFilter, DynamicFilter.Type.GLOBAL));
+        dynamicFilters.put(appColumn, new BloomFilterDynamicFilter("2", appColumn, appFilter, DynamicFilter.Type.GLOBAL));
 
-        List<Map<ColumnHandle, DynamicFilter>> dynamicFilters = new ArrayList<>();
-        dynamicFilters.add(dynamicFilter);
-
-        List<Map<Integer, ColumnHandle>> eligibleColumns = ImmutableList.of(ImmutableMap.of(0, dayColumn, 1, appColumn));
+        Map<Integer, ColumnHandle> eligibleColumns = ImmutableMap.of(0, dayColumn, 1, appColumn);
 
         Page filteredPage = filter(dynamicFilters, page, eligibleColumns, types);
 

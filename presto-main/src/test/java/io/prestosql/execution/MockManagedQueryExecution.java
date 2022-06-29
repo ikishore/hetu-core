@@ -13,6 +13,7 @@
  */
 package io.prestosql.execution;
 
+import com.google.common.collect.ImmutableList;
 import com.google.common.collect.ImmutableSet;
 import io.airlift.units.DataSize;
 import io.airlift.units.Duration;
@@ -52,30 +53,12 @@ public class MockManagedQueryExecution
     private final Session session;
     private QueryState state = QUEUED;
     private Throwable failureCause;
-    private final DateTime startTime;
-    private final double queryProgress;
-    private final String queryId;
     // add optional field resourceGroupId
     private Optional<ResourceGroupId> resourceGroupId = Optional.empty();
 
     public MockManagedQueryExecution(long memoryUsage)
     {
-        this(memoryUsage, "test", 1);
-    }
-
-    public MockManagedQueryExecution(long memoryUsage, double queryProgress)
-    {
-        this(memoryUsage, "test", 1, new Duration(0, MILLISECONDS), queryProgress);
-    }
-
-    public MockManagedQueryExecution(long memoryUsage, String queryId, double queryProgress)
-    {
-        this(memoryUsage, queryId, 1, new Duration(0, MILLISECONDS), queryProgress);
-    }
-
-    public MockManagedQueryExecution(long memoryUsage, String queryId)
-    {
-        this(memoryUsage, queryId, 1, new Duration(0, MILLISECONDS));
+        this(memoryUsage, "query_id", 1);
     }
 
     public MockManagedQueryExecution(long memoryUsage, String queryId, int priority)
@@ -85,19 +68,11 @@ public class MockManagedQueryExecution
 
     public MockManagedQueryExecution(long memoryUsage, String queryId, int priority, Duration cpuUsage)
     {
-        this(memoryUsage, queryId, priority, cpuUsage, 0);
-    }
-
-    public MockManagedQueryExecution(long memoryUsage, String queryId, int priority, Duration cpuUsage, double queryProgress)
-    {
         this.memoryUsage = succinctBytes(memoryUsage);
         this.cpuUsage = cpuUsage;
         this.session = testSessionBuilder()
                 .setSystemProperty(QUERY_PRIORITY, String.valueOf(priority))
                 .build();
-        this.startTime = DateTime.now();
-        this.queryProgress = queryProgress;
-        this.queryId = queryId;
     }
 
     public void complete()
@@ -127,7 +102,8 @@ public class MockManagedQueryExecution
     public BasicQueryInfo getBasicQueryInfo()
     {
         return new BasicQueryInfo(
-                new QueryId(queryId),
+                new QueryId("test"),
+                ImmutableList.of(new QueryId("test")),
                 session.toSessionRepresentation(),
                 resourceGroupId, // pass resourceGroupId
                 state,
@@ -157,7 +133,7 @@ public class MockManagedQueryExecution
                         new Duration(22, NANOSECONDS),
                         false,
                         ImmutableSet.of(),
-                        OptionalDouble.of(queryProgress)),
+                        OptionalDouble.empty()),
                 null,
                 null);
     }
@@ -189,12 +165,6 @@ public class MockManagedQueryExecution
     public QueryState getState()
     {
         return state;
-    }
-
-    @Override
-    public Optional<DateTime> getQueryExecutionStartTime()
-    {
-        return Optional.of(startTime);
     }
 
     @Override

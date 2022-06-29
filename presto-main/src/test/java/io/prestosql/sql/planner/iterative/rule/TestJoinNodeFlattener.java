@@ -16,21 +16,16 @@ package io.prestosql.sql.planner.iterative.rule;
 
 import com.google.common.collect.ImmutableList;
 import io.prestosql.expressions.LogicalRowExpressions;
-import io.prestosql.spi.function.BuiltInFunctionHandle;
 import io.prestosql.spi.function.OperatorType;
-import io.prestosql.spi.function.Signature;
 import io.prestosql.spi.plan.JoinNode;
 import io.prestosql.spi.plan.JoinNode.EquiJoinClause;
 import io.prestosql.spi.plan.PlanNodeIdAllocator;
 import io.prestosql.spi.plan.Symbol;
 import io.prestosql.spi.plan.ValuesNode;
-import io.prestosql.spi.relation.CallExpression;
 import io.prestosql.spi.relation.RowExpression;
-import io.prestosql.sql.planner.TypeProvider;
 import io.prestosql.sql.planner.iterative.rule.ReorderJoins.MultiJoinNode;
 import io.prestosql.sql.planner.iterative.rule.test.PlanBuilder;
-import io.prestosql.sql.relational.FunctionResolution;
-import io.prestosql.sql.relational.RowExpressionDeterminismEvaluator;
+import io.prestosql.sql.tree.ComparisonExpression;
 import io.prestosql.testing.LocalQueryRunner;
 import org.testng.annotations.AfterClass;
 import org.testng.annotations.BeforeClass;
@@ -39,17 +34,16 @@ import org.testng.annotations.Test;
 import java.util.Optional;
 
 import static io.airlift.testing.Closeables.closeAllRuntimeException;
-import static io.prestosql.spi.function.Signature.internalOperator;
 import static io.prestosql.spi.plan.JoinNode.Type.FULL;
 import static io.prestosql.spi.plan.JoinNode.Type.INNER;
 import static io.prestosql.spi.plan.JoinNode.Type.LEFT;
 import static io.prestosql.spi.type.BigintType.BIGINT;
-import static io.prestosql.spi.type.BooleanType.BOOLEAN;
-import static io.prestosql.sql.planner.VariableReferenceSymbolConverter.toVariableReference;
+import static io.prestosql.sql.ExpressionUtils.and;
+import static io.prestosql.sql.planner.SymbolUtils.toSymbolReference;
 import static io.prestosql.sql.planner.iterative.Lookup.noLookup;
 import static io.prestosql.sql.planner.iterative.rule.ReorderJoins.MultiJoinNode.toMultiJoinNode;
-import static io.prestosql.sql.relational.Expressions.call;
 import static io.prestosql.sql.relational.Expressions.constant;
+import static io.prestosql.sql.tree.ComparisonExpression.Operator.EQUAL;
 import static io.prestosql.testing.TestingSession.testSessionBuilder;
 import static org.testng.Assert.assertEquals;
 
@@ -59,15 +53,10 @@ public class TestJoinNodeFlattener
 
     private LocalQueryRunner queryRunner;
 
-    private LogicalRowExpressions logicalRowExpressions;
-
     @BeforeClass
     public void setUp()
     {
         queryRunner = new LocalQueryRunner(testSessionBuilder().build());
-        logicalRowExpressions = new LogicalRowExpressions(new RowExpressionDeterminismEvaluator(queryRunner.getMetadata()),
-                                                            new FunctionResolution(queryRunner.getMetadata().getFunctionAndTypeManager()),
-                                                            queryRunner.getMetadata().getFunctionAndTypeManager());
     }
 
     @AfterClass(alwaysRun = true)
@@ -90,7 +79,7 @@ public class TestJoinNodeFlattener
                 ImmutableList.of(equiJoinClause(a1, b1)),
                 ImmutableList.of(a1, b1),
                 Optional.empty());
-        toMultiJoinNode(outerJoin, noLookup(), DEFAULT_JOIN_LIMIT, queryRunner.getMetadata(), p.getTypes(), logicalRowExpressions);
+        toMultiJoinNode(outerJoin, noLookup(), DEFAULT_JOIN_LIMIT);
     }
 
     @Test
@@ -117,12 +106,10 @@ public class TestJoinNodeFlattener
                 Optional.empty());
 
         MultiJoinNode expected = MultiJoinNode.builder()
-                .setSources(leftJoin, valuesC)
-                .setFilter(createEqualsExpression(a1, c1, p.getTypes()))
+                .setSources(leftJoin, valuesC).setFilter(createEqualsExpression(a1, c1))
                 .setOutputSymbols(a1, b1, c1)
-                .setLogicalRowExpressions(logicalRowExpressions)
                 .build();
-        assertEquals(toMultiJoinNode(joinNode, noLookup(), DEFAULT_JOIN_LIMIT, queryRunner.getMetadata(), p.getTypes(), logicalRowExpressions), expected);
+        assertEquals(toMultiJoinNode(joinNode, noLookup(), DEFAULT_JOIN_LIMIT), expected);
     }
 
     @Test
@@ -156,11 +143,10 @@ public class TestJoinNodeFlattener
                 Optional.empty());
         MultiJoinNode expected = MultiJoinNode.builder()
                 .setSources(valuesA, valuesB, valuesC)
-                .setFilter(logicalRowExpressions.and(createEqualsExpression(b1, c1, p.getTypes()), createEqualsExpression(a1, b1, p.getTypes())))
+                .setFilter(and(createEqualsExpression(b1, c1), createEqualsExpression(a1, b1)))
                 .setOutputSymbols(a1, b1)
-                .setLogicalRowExpressions(logicalRowExpressions)
                 .build();
-        assertEquals(toMultiJoinNode(joinNode, noLookup(), DEFAULT_JOIN_LIMIT, queryRunner.getMetadata(), p.getTypes(), logicalRowExpressions), expected);
+        assertEquals(toMultiJoinNode(joinNode, noLookup(), DEFAULT_JOIN_LIMIT), expected);
     }
 
     @Test
@@ -200,6 +186,13 @@ public class TestJoinNodeFlattener
                 ImmutableList.of(equiJoinClause(a1, b1)),
                 ImmutableList.of(a1, b1, b2, c1, c2),
                 Optional.of(abcFilter));
+        /*
+        MultiJoinNode expected = new MultiJoinNode(
+                new LinkedHashSet<>(ImmutableList.of(valuesA, valuesB, valuesC)),
+                and(new ComparisonExpression(EQUAL, toSymbolReference(b1), toSymbolReference(c1)), new ComparisonExpression(EQUAL, toSymbolReference(a1), toSymbolReference(b1)), bcFilter, abcFilter),
+                ImmutableList.of(a1, b1, b2, c1, c2));
+        assertEquals(toMultiJoinNode(joinNode, noLookup(), DEFAULT_JOIN_LIMIT), expected);
+         */
     }
 
     @Test
@@ -258,15 +251,10 @@ public class TestJoinNodeFlattener
                 Optional.empty());
         MultiJoinNode expected = MultiJoinNode.builder()
                 .setSources(valuesA, valuesB, valuesC, valuesD, valuesE)
-                .setFilter(logicalRowExpressions.and(createEqualsExpression(a1, b1, p.getTypes()),
-                                                    createEqualsExpression(a1, c1, p.getTypes()),
-                                                    createEqualsExpression(d1, e1, p.getTypes()),
-                                                    createEqualsExpression(d2, e2, p.getTypes()),
-                                                    createEqualsExpression(b1, e1, p.getTypes())))
+                .setFilter(and(createEqualsExpression(a1, b1), createEqualsExpression(a1, c1), createEqualsExpression(d1, e1), createEqualsExpression(d2, e2), createEqualsExpression(b1, e1)))
                 .setOutputSymbols(a1, b1, c1, d1, d2, e1, e2)
-                .setLogicalRowExpressions(logicalRowExpressions)
                 .build();
-        assertEquals(toMultiJoinNode(joinNode, noLookup(), 5, queryRunner.getMetadata(), p.getTypes(), logicalRowExpressions), expected);
+        assertEquals(toMultiJoinNode(joinNode, noLookup(), 5), expected);
     }
 
     @Test
@@ -327,24 +315,15 @@ public class TestJoinNodeFlattener
                 Optional.empty());
         MultiJoinNode expected = MultiJoinNode.builder()
                 .setSources(join1, join2, valuesC)
-                .setFilter(logicalRowExpressions.and(createEqualsExpression(a1, c1, p.getTypes()), createEqualsExpression(b1, e1, p.getTypes())))
+                .setFilter(and(createEqualsExpression(a1, c1), createEqualsExpression(b1, e1)))
                 .setOutputSymbols(a1, b1, c1, d1, d2, e1, e2)
-                .setLogicalRowExpressions(logicalRowExpressions)
                 .build();
-        assertEquals(toMultiJoinNode(joinNode, noLookup(), 2, queryRunner.getMetadata(), p.getTypes(), logicalRowExpressions), expected);
+        assertEquals(toMultiJoinNode(joinNode, noLookup(), 2), expected);
     }
 
-    private CallExpression createEqualsExpression(Symbol left, Symbol right, TypeProvider types)
+    private ComparisonExpression createEqualsExpression(Symbol left, Symbol right)
     {
-        Signature signature = internalOperator(OperatorType.EQUAL,
-                BOOLEAN.getTypeSignature(),
-                types.get(left).getTypeSignature(),
-                types.get(right).getTypeSignature());
-        return call(OperatorType.EQUAL.getFunctionName().toString(),
-                new BuiltInFunctionHandle(signature),
-                BOOLEAN,
-                toVariableReference(left, types),
-                toVariableReference(right, types));
+        return new ComparisonExpression(EQUAL, toSymbolReference(left), toSymbolReference(right));
     }
 
     private EquiJoinClause equiJoinClause(Symbol symbol1, Symbol symbol2)

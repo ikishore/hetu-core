@@ -13,17 +13,14 @@
  */
 package io.prestosql.execution.scheduler;
 
-import com.google.common.collect.HashMultimap;
 import com.google.common.collect.ImmutableList;
 import com.google.common.collect.ImmutableMultimap;
 import com.google.common.collect.ImmutableSet;
-import com.google.common.collect.Iterables;
 import com.google.common.collect.Multimap;
 import com.google.common.util.concurrent.Futures;
 import com.google.common.util.concurrent.ListenableFuture;
 import com.google.common.util.concurrent.SettableFuture;
 import io.prestosql.Session;
-import io.prestosql.SystemSessionProperties;
 import io.prestosql.execution.Lifespan;
 import io.prestosql.execution.RemoteTask;
 import io.prestosql.execution.SqlStageExecution;
@@ -32,7 +29,6 @@ import io.prestosql.heuristicindex.HeuristicIndexerManager;
 import io.prestosql.heuristicindex.SplitFiltering;
 import io.prestosql.metadata.InternalNode;
 import io.prestosql.metadata.Split;
-import io.prestosql.snapshot.MarkerSplit;
 import io.prestosql.spi.connector.ColumnHandle;
 import io.prestosql.spi.connector.ConnectorPartitionHandle;
 import io.prestosql.spi.heuristicindex.Pair;
@@ -72,8 +68,6 @@ import static java.util.Objects.requireNonNull;
 public class SourcePartitionedScheduler
         implements SourceScheduler
 {
-    private static final double ALLOWED_PERCENT_LIMIT = 0.1;
-
     private enum State
     {
         /**
@@ -113,7 +107,6 @@ public class SourcePartitionedScheduler
     private State state = State.INITIALIZED;
 
     private SettableFuture<?> whenFinishedOrNewLifespanAdded = SettableFuture.create();
-    private int throttledSplitsCount;
 
     private SourcePartitionedScheduler(
             SqlStageExecution stage,
@@ -135,10 +128,8 @@ public class SourcePartitionedScheduler
         checkArgument(splitBatchSize > 0, "splitBatchSize must be at least one");
         this.splitBatchSize = splitBatchSize;
         this.groupedExecution = groupedExecution;
-        this.throttledSplitsCount = 0;
     }
 
-    @Override
     public PlanNodeId getPlanNodeId()
     {
         return partitionedNode;
@@ -170,13 +161,7 @@ public class SourcePartitionedScheduler
             @Override
             public ScheduleResult schedule()
             {
-                return schedule(1);
-            }
-
-            @Override
-            public ScheduleResult schedule(int maxSplitGroup)
-            {
-                ScheduleResult scheduleResult = sourcePartitionedScheduler.schedule(maxSplitGroup);
+                ScheduleResult scheduleResult = sourcePartitionedScheduler.schedule();
                 sourcePartitionedScheduler.drainCompletedLifespans();
                 return scheduleResult;
             }
@@ -238,12 +223,6 @@ public class SourcePartitionedScheduler
     @Override
     public synchronized ScheduleResult schedule()
     {
-        return schedule(1);
-    }
-
-    @Override
-    public synchronized ScheduleResult schedule(int maxSplitGroup)
-    {
         dropListenersFromWhenFinishedOrNewLifespansAdded();
 
         int overallSplitAssignmentCount = 0;
@@ -254,7 +233,6 @@ public class SourcePartitionedScheduler
         boolean anyBlockedOnNextSplitBatch = false;
         boolean anyNotBlocked = false;
         boolean applyFilter = isHeuristicIndexFilterEnabled(session) && SplitFiltering.isSplitFilterApplicable(stage);
-        boolean initialMarker = false;
 
         for (Entry<Lifespan, ScheduleGroup> entry : scheduleGroups.entrySet()) {
             Lifespan lifespan = entry.getKey();
@@ -279,20 +257,11 @@ public class SourcePartitionedScheduler
 
                     // add split filter to filter out split has no valid rows
                     Pair<Optional<RowExpression>, Map<Symbol, ColumnHandle>> pair = SplitFiltering.getExpression(stage);
-
-                    if (SystemSessionProperties.isRecoveryEnabled(session)) {
-                        List<Split> batchSplits = nextSplits.getSplits();
-                        // Don't apply filter to MarkerSplit
-                        if (batchSplits.size() == 1 && batchSplits.get(0).getConnectorSplit() instanceof MarkerSplit) {
-                            applyFilter = false;
-                        }
-                    }
-
                     List<Split> filteredSplit = applyFilter ? SplitFiltering.getFilteredSplit(pair.getFirst(),
                             SplitFiltering.getFullyQualifiedName(stage), pair.getSecond(), nextSplits, heuristicIndexerManager) : nextSplits.getSplits();
 
                     //In case of ORC small size files/splits are grouped
-                    List<Split> groupedSmallFilesList = splitSource.groupSmallSplits(filteredSplit, lifespan, maxSplitGroup);
+                    List<Split> groupedSmallFilesList = splitSource.groupSmallSplits(filteredSplit, lifespan);
                     filteredSplit = groupedSmallFilesList;
 
                     pendingSplits.addAll(filteredSplit);
@@ -333,51 +302,11 @@ public class SourcePartitionedScheduler
                     state = State.SPLITS_ADDED;
                 }
 
+                System.out.println("placement policy " + splitPlacementPolicy.getClass().toString());
+
                 // calculate placements for splits
-                SplitPlacementResult splitPlacementResult;
-                if (stage.isThrottledSchedule()) {
-                    // If asked for partial schedule incase of lesser resource, then schedule only 10% of splits.
-                    // 10% is calculated on initial number of splits and same is being used on subsequent schedule also.
-                    // But if later 10% of current pending splits more than earlier 10%, then it will schedule max of
-                    // these.
-                    // if throttledSplitsCount is more than number of pendingSplits, then it will schedule all.
-                    throttledSplitsCount = Math.max((int) Math.ceil(pendingSplits.size() * ALLOWED_PERCENT_LIMIT), throttledSplitsCount);
-                    splitPlacementResult = splitPlacementPolicy.computeAssignments(
-                                                    ImmutableSet.copyOf(Iterables.limit(pendingSplits, throttledSplitsCount)),
-                                                    this.stage);
-                }
-                else {
-                    splitPlacementResult = splitPlacementPolicy.computeAssignments(new HashSet<>(pendingSplits), this.stage);
-                }
-
+                SplitPlacementResult splitPlacementResult = splitPlacementPolicy.computeAssignments(pendingSplits, this.stage);
                 splitAssignment = splitPlacementResult.getAssignments();
-
-                if (SystemSessionProperties.isRecoveryEnabled(session)) {
-                    Split firstSplit = pendingSplits.iterator().next();
-                    if (pendingSplits.size() == 1 && firstSplit.getConnectorSplit() instanceof MarkerSplit) {
-                        // We'll create a new assignment, but still need to call computeAssignments above, and cannot modify the returned assignment map directly
-                        splitAssignment = HashMultimap.create(splitAssignment);
-                        splitAssignment.values().remove(firstSplit);
-                        //Getting all internalNodes and assigning marker splits to all of them.
-                        List<InternalNode> allNodes = splitPlacementPolicy.allNodes();
-                        for (InternalNode node : allNodes) {
-                            splitAssignment.put(node, firstSplit);
-                        }
-                        MarkerSplit markerSplit = (MarkerSplit) firstSplit.getConnectorSplit();
-                        // If stage P (probe) has table-scan that depends on stage B (build), then splits for P are not scheduled
-                        // until all splits for stage B are scheduled. This also causes the deadlock situation describe below
-                        // (where finalizeTaskCreationIfNecessary() is called).
-                        // To overcome this, we send an initial empty marker from all split sources, to trigger creation of tasks,
-                        // then set the flag below to true, so stages enter SCHEDULING_SPLITS state.
-                        if (markerSplit.isResuming() || markerSplit.getSnapshotId() == 0) {
-                            initialMarker = true;
-                        }
-                    }
-                    else {
-                        // MarkerSplit should be in its own batch.
-                        verify(pendingSplits.stream().noneMatch(split -> split.getConnectorSplit() instanceof MarkerSplit));
-                    }
-                }
 
                 // remove splits with successful placements
                 splitAssignment.values().forEach(pendingSplits::remove); // AbstractSet.removeAll performs terribly here.
@@ -448,9 +377,6 @@ public class SourcePartitionedScheduler
         }
 
         if (anyNotBlocked) {
-            if (initialMarker) {
-                stage.transitionToSchedulingSplits();
-            }
             return new ScheduleResult(false, overallNewTasks.build(), overallSplitAssignmentCount);
         }
 
@@ -566,7 +492,7 @@ public class SourcePartitionedScheduler
     private Set<RemoteTask> finalizeTaskCreationIfNecessary()
     {
         // only lock down tasks if there is a sub stage that could block waiting for this stage to create all tasks
-        if (stage.getFragment().isLeaf() || (!stage.getFragment().getFeederCTEId().isPresent() && stage.getFragment().getFeederCTEParentId().isPresent())) {
+        if (stage.getFragment().isLeaf()) {
             return ImmutableSet.of();
         }
 

@@ -39,6 +39,7 @@ import io.prestosql.spi.plan.MarkDistinctNode;
 import io.prestosql.spi.plan.OrderingScheme;
 import io.prestosql.spi.plan.PlanNode;
 import io.prestosql.spi.plan.ProjectNode;
+import io.prestosql.spi.plan.RouterNode;
 import io.prestosql.spi.plan.Symbol;
 import io.prestosql.spi.plan.TableScanNode;
 import io.prestosql.spi.plan.TopNNode;
@@ -81,12 +82,9 @@ import io.prestosql.sql.planner.plan.SpatialJoinNode;
 import io.prestosql.sql.planner.plan.StatisticsWriterNode;
 import io.prestosql.sql.planner.plan.TableDeleteNode;
 import io.prestosql.sql.planner.plan.TableFinishNode;
-import io.prestosql.sql.planner.plan.TableUpdateNode;
 import io.prestosql.sql.planner.plan.TableWriterNode;
 import io.prestosql.sql.planner.plan.TopNRankingNumberNode;
 import io.prestosql.sql.planner.plan.UnnestNode;
-import io.prestosql.sql.planner.plan.UpdateIndexNode;
-import io.prestosql.sql.planner.plan.UpdateNode;
 import io.prestosql.sql.planner.plan.VacuumTableNode;
 import io.prestosql.sql.relational.RowExpressionDomainTranslator;
 import io.prestosql.sql.tree.CoalesceExpression;
@@ -416,23 +414,9 @@ public class PropertyDerivations
         }
 
         @Override
-        public ActualProperties visitTableUpdate(TableUpdateNode node, List<ActualProperties> context)
-        {
-            return ActualProperties.builder()
-                    .global(coordinatorSingleStreamPartition())
-                    .build();
-        }
-
-        @Override
         public ActualProperties visitDelete(DeleteNode node, List<ActualProperties> inputProperties)
         {
             // drop all symbols in property because delete doesn't pass on any of the columns
-            return Iterables.getOnlyElement(inputProperties).translate(symbol -> Optional.empty());
-        }
-
-        @Override
-        public ActualProperties visitUpdate(UpdateNode node, List<ActualProperties> inputProperties)
-        {
             return Iterables.getOnlyElement(inputProperties).translate(symbol -> Optional.empty());
         }
 
@@ -826,13 +810,16 @@ public class PropertyDerivations
         }
 
         @Override
-        public ActualProperties visitUpdateIndex(UpdateIndexNode node, List<ActualProperties> inputProperties)
+        public ActualProperties visitCTEScan(CTEScanNode node, List<ActualProperties> inputProperties)
         {
-            return Iterables.getOnlyElement(inputProperties);
+            ActualProperties properties = Iterables.getOnlyElement(inputProperties);
+            return ActualProperties.builderFrom(properties)
+                    .local(LocalProperties.grouped(node.getOutputSymbols()))
+                    .build();
         }
 
         @Override
-        public ActualProperties visitCTEScan(CTEScanNode node, List<ActualProperties> inputProperties)
+        public ActualProperties visitRouter(RouterNode node, List<ActualProperties> inputProperties)
         {
             ActualProperties properties = Iterables.getOnlyElement(inputProperties);
             return ActualProperties.builderFrom(properties)

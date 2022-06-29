@@ -1,5 +1,5 @@
 /*
- * Copyright (C) 2018-2021. Huawei Technologies Co., Ltd. All rights reserved.
+ * Copyright (C) 2018-2020. Huawei Technologies Co., Ltd. All rights reserved.
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
  * You may obtain a copy of the License at
@@ -43,7 +43,6 @@ class StatusFooter
                 activeWorkers: [],
                 runningDrivers: [],
                 reservedMemory: [],
-                currentReservedMemory: 0,
                 totalMemory : 0,
                 cpuUsage:[],
                 rowInputRate: [],
@@ -93,7 +92,6 @@ class StatusFooter
                     // moving averages
                     runningDrivers: addExponentiallyWeightedToHistory(clusterState.runningDrivers, this.state.runningDrivers),
                     reservedMemory: addExponentiallyWeightedToHistory(clusterState.reservedMemory, this.state.reservedMemory),
-                    currentReservedMemory: clusterState.reservedMemory,
                     cpuUsage: addExponentiallyWeightedToHistory(clusterState.systemCpuLoad * 100, this.state.cpuUsage),
                     totalMemory : clusterState.totalMemory,
                     perWorkerCpuTimeRate: newPerWorkerCpuTimeRate,
@@ -105,7 +103,7 @@ class StatusFooter
                 });
                 this.resetTimer();
             }.bind(this))
-                .fail(function () {
+                .error(function () {
                     this.resetTimer();
                 }.bind(this));
         }
@@ -168,7 +166,7 @@ class StatusFooter
                                     <path d="M1 4a1 1 0 0 1 1-1h2a1 1 0 0 1 1 1v2a1 1 0 0 1-1 1H2a1 1 0 0 1-1-1V4zm5 0a1 1 0 0 1 1-1h2a1 1 0 0 1 1 1v2a1 1 0 0 1-1 1H7a1 1 0 0 1-1-1V4zm5 0a1 1 0 0 1 1-1h2a1 1 0 0 1 1 1v2a1 1 0 0 1-1 1h-2a1 1 0 0 1-1-1V4zM1 9a1 1 0 0 1 1-1h2a1 1 0 0 1 1 1v2a1 1 0 0 1-1 1H2a1 1 0 0 1-1-1V9zm5 0a1 1 0 0 1 1-1h2a1 1 0 0 1 1 1v2a1 1 0 0 1-1 1H7a1 1 0 0 1-1-1V9zm5 0a1 1 0 0 1 1-1h2a1 1 0 0 1 1 1v2a1 1 0 0 1-1 1h-2a1 1 0 0 1-1-1V9z" />
                                 </svg>
                             </div>
-                            <div className="clusterOverviewContent"  style={{minWidth:"100px", textAlign:"center"}}>{formatDataSizeBytes(this.state.currentReservedMemory)}<span className="seprator">/</span>{formatDataSizeBytes(this.state.totalMemory)}</div>
+                            <div className="clusterOverviewContent"  style={{minWidth:"100px", textAlign:"center"}}>{formatDataSizeBytes(this.state.reservedMemory[this.state.reservedMemory.length - 1])}<span className="seprator">/</span>{formatDataSizeBytes(this.state.totalMemory)}</div>
                             <div className="clusterOverviewGraph">
                                 <span className="sparkline" id="reserved-memory-sparkline"><div className="loader">Loading ...</div></span>
                             </div>

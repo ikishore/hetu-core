@@ -14,6 +14,7 @@
 package io.prestosql.operator;
 
 import com.google.common.annotations.VisibleForTesting;
+import com.google.common.collect.ImmutableList;
 import io.prestosql.array.IntBigArray;
 import io.prestosql.array.LongBigArray;
 import io.prestosql.spi.Page;
@@ -21,17 +22,15 @@ import io.prestosql.spi.PageBuilder;
 import io.prestosql.spi.PrestoException;
 import io.prestosql.spi.block.Block;
 import io.prestosql.spi.block.BlockBuilder;
-import io.prestosql.spi.snapshot.BlockEncodingSerdeProvider;
-import io.prestosql.spi.snapshot.RestorableConfig;
 import io.prestosql.spi.type.BigintType;
 import io.prestosql.spi.type.Type;
 import io.prestosql.type.BigintOperators;
 import org.openjdk.jol.info.ClassLayout;
 
-import java.io.Serializable;
 import java.util.List;
 
 import static com.google.common.base.Preconditions.checkArgument;
+import static com.google.common.base.Preconditions.checkState;
 import static io.prestosql.spi.StandardErrorCode.GENERIC_INSUFFICIENT_RESOURCES;
 import static io.prestosql.spi.type.BigintType.BIGINT;
 import static io.prestosql.type.TypeUtils.NULL_HASH_CODE;
@@ -41,34 +40,48 @@ import static it.unimi.dsi.fastutil.HashCommon.murmurHash3;
 import static java.lang.Math.toIntExact;
 import static java.util.Objects.requireNonNull;
 
-@RestorableConfig(uncapturedFields = {"updateMemory"})
 public class BigintGroupByHash
-        extends BigintGroupBy implements GroupByHash
+        implements GroupByHash
 {
     private static final int INSTANCE_SIZE = ClassLayout.parseClass(BigintGroupByHash.class).instanceSize();
 
+    private static final float FILL_RATIO = 0.75f;
+    private static final List<Type> TYPES = ImmutableList.of(BIGINT);
+    private static final List<Type> TYPES_WITH_RAW_HASH = ImmutableList.of(BIGINT, BIGINT);
+
+    private final int hashChannel;
+    private final boolean outputRawHash;
+
     private int hashCapacity;
+    private int maxFill;
     private int mask;
 
     // the hash table from values to groupIds
     private LongBigArray values;
     private IntBigArray groupIds;
 
+    // groupId for the null value
+    private int nullGroupId = -1;
+
     // reverse index from the groupId back to the value
     private final LongBigArray valuesByGroupId;
 
+    private int nextGroupId;
     private long hashCollisions;
     private double expectedHashCollisions;
 
     // reserve enough memory before rehash
     private final UpdateMemory updateMemory;
     private long preallocatedMemoryInBytes;
+    private long currentPageSizeInBytes;
 
     public BigintGroupByHash(int hashChannel, boolean outputRawHash, int expectedSize, UpdateMemory updateMemory)
     {
-        super(hashChannel, outputRawHash);
         checkArgument(hashChannel >= 0, "hashChannel must be at least zero");
         checkArgument(expectedSize > 0, "expectedSize must be greater than zero");
+
+        this.hashChannel = hashChannel;
+        this.outputRawHash = outputRawHash;
 
         hashCapacity = arraySize(expectedSize, FILL_RATIO);
 
@@ -85,18 +98,6 @@ public class BigintGroupByHash
         // This interface is used for actively reserving memory (push model) for rehash.
         // The caller can also query memory usage on this object (pull model)
         this.updateMemory = requireNonNull(updateMemory, "updateMemory is null");
-    }
-
-    @Override
-    public List<Type> getTypes()
-    {
-        return outputRawHash ? TYPES_WITH_RAW_HASH : TYPES;
-    }
-
-    @Override
-    public int getGroupCount()
-    {
-        return nextGroupId;
     }
 
     @Override
@@ -119,6 +120,18 @@ public class BigintGroupByHash
     public double getExpectedHashCollisions()
     {
         return expectedHashCollisions + estimateNumberOfHashCollisions(getGroupCount(), hashCapacity);
+    }
+
+    @Override
+    public List<Type> getTypes()
+    {
+        return outputRawHash ? TYPES_WITH_RAW_HASH : TYPES;
+    }
+
+    @Override
+    public int getGroupCount()
+    {
+        return nextGroupId;
     }
 
     @Override
@@ -148,14 +161,14 @@ public class BigintGroupByHash
     public Work<?> addPage(Page page)
     {
         currentPageSizeInBytes = page.getRetainedSizeInBytes();
-        return new AddPageWork(page.getBlock(hashChannel), this);
+        return new AddPageWork(page.getBlock(hashChannel));
     }
 
     @Override
     public Work<GroupByIdBlock> getGroupIds(Page page)
     {
         currentPageSizeInBytes = page.getRetainedSizeInBytes();
-        return new GetGroupIdsWork(page.getBlock(hashChannel), this);
+        return new GetGroupIdsWork(page.getBlock(hashChannel));
     }
 
     @Override
@@ -197,7 +210,7 @@ public class BigintGroupByHash
         return hashCapacity;
     }
 
-    public int putIfAbsent(int position, Block block)
+    private int putIfAbsent(int position, Block block)
     {
         if (block.isNull(position)) {
             if (nullGroupId < 0) {
@@ -205,10 +218,6 @@ public class BigintGroupByHash
                 nullGroupId = nextGroupId++;
             }
 
-            // increase capacity, if necessary. after nextGroupId++, it maybe equals maxFill, so need to check whether need rehash
-            if (needMoreCapacity()) {
-                tryToIncreaseCapacity();
-            }
             return nullGroupId;
         }
 
@@ -244,13 +253,13 @@ public class BigintGroupByHash
         groupIds.set(hashPosition, groupId);
 
         // increase capacity, if necessary
-        if (needMoreCapacity()) {
-            tryToIncreaseCapacity();
+        if (needRehash()) {
+            tryRehash();
         }
         return groupId;
     }
 
-    public boolean tryToIncreaseCapacity()
+    private boolean tryRehash()
     {
         long newCapacityLong = hashCapacity * 2L;
         if (newCapacityLong > Integer.MAX_VALUE) {
@@ -303,62 +312,114 @@ public class BigintGroupByHash
         return true;
     }
 
+    private boolean needRehash()
+    {
+        return nextGroupId >= maxFill;
+    }
+
     private static long getHashPosition(long rawHash, int mask)
     {
         return murmurHash3(rawHash) & mask;
     }
 
-    @Override
-    public Object capture(BlockEncodingSerdeProvider serdeProvider)
+    private static int calculateMaxFill(int hashSize)
     {
-        BigintGroupByHashState myState = new BigintGroupByHashState();
-        myState.hashCapacity = hashCapacity;
-        myState.maxFill = maxFill;
-        myState.mask = mask;
-        myState.values = values.capture(serdeProvider);
-        myState.groupIds = groupIds.capture(serdeProvider);
-        myState.nullGroupId = nullGroupId;
-        myState.valuesByGroupId = valuesByGroupId.capture(serdeProvider);
-        myState.nextGroupId = nextGroupId;
-        myState.hashCollisions = hashCollisions;
-        myState.expectedHashCollisions = expectedHashCollisions;
-        myState.preallocatedMemoryInBytes = preallocatedMemoryInBytes;
-        myState.currentPageSizeInBytes = currentPageSizeInBytes;
-        return myState;
+        checkArgument(hashSize > 0, "hashSize must be greater than 0");
+        int maxFill = (int) Math.ceil(hashSize * FILL_RATIO);
+        if (maxFill == hashSize) {
+            maxFill--;
+        }
+        checkArgument(hashSize > maxFill, "hashSize must be larger than maxFill");
+        return maxFill;
     }
 
-    @Override
-    public void restore(Object state, BlockEncodingSerdeProvider serdeProvider)
+    private class AddPageWork
+            implements Work<Void>
     {
-        BigintGroupByHashState myState = (BigintGroupByHashState) state;
-        this.hashCapacity = myState.hashCapacity;
-        this.maxFill = myState.maxFill;
-        this.mask = myState.mask;
-        this.values.restore(myState.values, serdeProvider);
-        this.groupIds.restore(myState.groupIds, serdeProvider);
-        this.nullGroupId = myState.nullGroupId;
-        this.valuesByGroupId.restore(myState.valuesByGroupId, serdeProvider);
-        this.nextGroupId = myState.nextGroupId;
-        this.hashCollisions = myState.hashCollisions;
-        this.expectedHashCollisions = myState.expectedHashCollisions;
-        this.preallocatedMemoryInBytes = myState.preallocatedMemoryInBytes;
-        this.currentPageSizeInBytes = myState.currentPageSizeInBytes;
+        private final Block block;
+
+        private int lastPosition;
+
+        public AddPageWork(Block block)
+        {
+            this.block = requireNonNull(block, "block is null");
+        }
+
+        @Override
+        public boolean process()
+        {
+            int positionCount = block.getPositionCount();
+            checkState(lastPosition < positionCount, "position count out of bound");
+
+            // needRehash() == false indicates we have reached capacity boundary and a rehash is needed.
+            // We can only proceed if tryRehash() successfully did a rehash.
+            if (needRehash() && !tryRehash()) {
+                return false;
+            }
+
+            // putIfAbsent will rehash automatically if rehash is needed, unless there isn't enough memory to do so.
+            // Therefore needRehash will not generally return true even if we have just crossed the capacity boundary.
+            while (lastPosition < positionCount && !needRehash()) {
+                // get the group for the current row
+                putIfAbsent(lastPosition, block);
+                lastPosition++;
+            }
+            return lastPosition == positionCount;
+        }
+
+        @Override
+        public Void getResult()
+        {
+            throw new UnsupportedOperationException();
+        }
     }
 
-    private static class BigintGroupByHashState
-            implements Serializable
+    private class GetGroupIdsWork
+            implements Work<GroupByIdBlock>
     {
-        private int hashCapacity;
-        private int maxFill;
-        private int mask;
-        private Object values;
-        private Object groupIds;
-        private int nullGroupId;
-        private Object valuesByGroupId;
-        private int nextGroupId;
-        private long hashCollisions;
-        private double expectedHashCollisions;
-        private long preallocatedMemoryInBytes;
-        private long currentPageSizeInBytes;
+        private final BlockBuilder blockBuilder;
+        private final Block block;
+
+        private boolean finished;
+        private int lastPosition;
+
+        public GetGroupIdsWork(Block block)
+        {
+            this.block = requireNonNull(block, "block is null");
+            // we know the exact size required for the block
+            this.blockBuilder = BIGINT.createFixedSizeBlockBuilder(block.getPositionCount());
+        }
+
+        @Override
+        public boolean process()
+        {
+            int positionCount = block.getPositionCount();
+            checkState(lastPosition < positionCount, "position count out of bound");
+            checkState(!finished);
+
+            // needRehash() == false indicates we have reached capacity boundary and a rehash is needed.
+            // We can only proceed if tryRehash() successfully did a rehash.
+            if (needRehash() && !tryRehash()) {
+                return false;
+            }
+
+            // putIfAbsent will rehash automatically if rehash is needed, unless there isn't enough memory to do so.
+            // Therefore needRehash will not generally return true even if we have just crossed the capacity boundary.
+            while (lastPosition < positionCount && !needRehash()) {
+                // output the group id for this row
+                BIGINT.writeLong(blockBuilder, putIfAbsent(lastPosition, block));
+                lastPosition++;
+            }
+            return lastPosition == positionCount;
+        }
+
+        @Override
+        public GroupByIdBlock getResult()
+        {
+            checkState(lastPosition == block.getPositionCount(), "process has not yet finished");
+            checkState(!finished, "result has produced");
+            finished = true;
+            return new GroupByIdBlock(nextGroupId, blockBuilder.build());
+        }
     }
 }

@@ -75,7 +75,6 @@ public class TestElasticsearchIntegrationSmokeTest
     }
 
     @Test
-    @Override
     public void testSelectAll()
     {
         // List columns explicitly, as there's no defined order in Elasticsearch
@@ -83,7 +82,6 @@ public class TestElasticsearchIntegrationSmokeTest
     }
 
     @Test
-    @Override
     public void testRangePredicate()
     {
         // List columns explicitly, as there's no defined order in Elasticsearch
@@ -94,7 +92,6 @@ public class TestElasticsearchIntegrationSmokeTest
     }
 
     @Test
-    @Override
     public void testMultipleRangesPredicate()
     {
         assertQuery("" +
@@ -454,56 +451,6 @@ public class TestElasticsearchIntegrationSmokeTest
         assertQuery(
                 "SELECT a.b.y[1], c.f[1].g[2], c.f[2].g[1], j[2], k[1] FROM test_arrays",
                 "VALUES ('hello', 20, 30, 60, NULL)");
-    }
-
-    @Test
-    public void testMixedArray()
-            throws IOException
-    {
-        String indexName = "test_mixed_arrays";
-
-        embeddedElasticsearchNode.getClient()
-                .admin()
-                .indices()
-                .prepareCreate(indexName)
-                .addMapping("doc", "" +
-                                "{" +
-                                "      \"_meta\": {" +
-                                "        \"presto\": {" +
-                                "          \"a\": {" +
-                                "                \"isArray\": true" +
-                                "          }" +
-                                "        }" +
-                                "      }," +
-                                "      \"properties\": {" +
-                                "        \"a\": {" +
-                                "          \"type\": \"keyword\"" +
-                                "        }" +
-                                "      }" +
-                                "}",
-                        XContentType.JSON)
-                .get();
-
-        index(indexName, ImmutableMap.<String, Object>builder()
-                .build());
-
-        index(indexName, ImmutableMap.<String, Object>builder()
-                .put("a", "hello")
-                .build());
-
-        index(indexName, ImmutableMap.<String, Object>builder()
-                .put("a", ImmutableList.of("foo", "bar"))
-                .build());
-
-        embeddedElasticsearchNode.getClient()
-                .admin()
-                .indices()
-                .refresh(refreshRequest(indexName))
-                .actionGet();
-
-        assertQuery(
-                "SELECT a FROM test_mixed_arrays",
-                "VALUES NULL, ARRAY['hello'], ARRAY['foo', 'bar']");
     }
 
     @Test

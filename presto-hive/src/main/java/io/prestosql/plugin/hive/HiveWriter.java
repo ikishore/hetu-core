@@ -35,7 +35,6 @@ public class HiveWriter
     private final String fileName;
     private final String writePath;
     private final String targetPath;
-    private final String filePath;
     private final Consumer<HiveWriter> onCommit;
     private final HiveWriterStats hiveWriterStats;
 
@@ -51,7 +50,6 @@ public class HiveWriter
             String fileName,
             String writePath,
             String targetPath,
-            String filePath,
             Consumer<HiveWriter> onCommit,
             HiveWriterStats hiveWriterStats,
             List<String> extraPartitionFiles)
@@ -62,16 +60,10 @@ public class HiveWriter
         this.fileName = requireNonNull(fileName, "fileName is null");
         this.writePath = requireNonNull(writePath, "writePath is null");
         this.targetPath = requireNonNull(targetPath, "targetPath is null");
-        this.filePath = requireNonNull(filePath, "filePath is null");
         this.onCommit = requireNonNull(onCommit, "onCommit is null");
-        this.hiveWriterStats = hiveWriterStats;
+        this.hiveWriterStats = requireNonNull(hiveWriterStats, "hiveWriterStats is null");
         this.extraPartitionFiles = (extraPartitionFiles != null) ? ImmutableList.copyOf(extraPartitionFiles) : Collections.emptyList();
         this.miscData = Collections.emptyList();
-    }
-
-    public String getFilePath()
-    {
-        return filePath;
     }
 
     public long getWrittenBytes()
@@ -92,9 +84,7 @@ public class HiveWriter
     public void append(Page dataPage)
     {
         // getRegionSizeInBytes for each row can be expensive; use getRetainedSizeInBytes for estimation
-        if (hiveWriterStats != null) {
-            hiveWriterStats.addInputPageSizesInBytes(dataPage.getRetainedSizeInBytes());
-        }
+        hiveWriterStats.addInputPageSizesInBytes(dataPage.getRetainedSizeInBytes());
         fileWriter.appendRows(dataPage);
         rowCount += dataPage.getPositionCount();
         inputSizeInBytes += dataPage.getSizeInBytes();
@@ -125,14 +115,9 @@ public class HiveWriter
         return fileWriter.getVerificationTask();
     }
 
-    public void rollback(boolean isCancel)
+    public void rollback()
     {
-        if (isCancel) {
-            fileWriter.cancel();
-        }
-        else {
-            fileWriter.rollback();
-        }
+        fileWriter.rollback();
     }
 
     public PartitionUpdate getPartitionUpdate()

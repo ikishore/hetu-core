@@ -1,5 +1,5 @@
 /*
- * Copyright (C) 2018-2021. Huawei Technologies Co., Ltd. All rights reserved.
+ * Copyright (C) 2018-2020. Huawei Technologies Co., Ltd. All rights reserved.
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
  * You may obtain a copy of the License at
@@ -24,7 +24,7 @@ import java.io.InputStream;
 import java.io.InputStreamReader;
 import java.io.OutputStream;
 import java.io.UncheckedIOException;
-import java.nio.charset.StandardCharsets;
+import java.nio.charset.Charset;
 import java.nio.file.FileAlreadyExistsException;
 import java.nio.file.NoSuchFileException;
 import java.nio.file.Path;
@@ -107,10 +107,10 @@ public class FileBasedLock
         }
         Path lockFileDir = Paths.get(lockDir);
         long timeout = (timeoutRead == null) ? DEFAULT_LOCK_FILE_TIMEOUT : Long.parseLong(timeoutRead);
-        long retryInterval1 = (retryIntervalRead == null) ? DEFAULT_RETRY_INTERVAL : Long.parseLong(retryIntervalRead);
-        long refreshRate1 = (refreshRateRead == null) ? DEFAULT_REFRESH_RATE : Long.parseLong(refreshRateRead);
+        long retryInterval = (retryIntervalRead == null) ? DEFAULT_RETRY_INTERVAL : Long.parseLong(retryIntervalRead);
+        long refreshRate = (refreshRateRead == null) ? DEFAULT_REFRESH_RATE : Long.parseLong(refreshRateRead);
 
-        return new FileBasedLock(fs, lockFileDir, timeout, retryInterval1, refreshRate1);
+        return new FileBasedLock(fs, lockFileDir, timeout, retryInterval, refreshRate);
     }
 
     /**
@@ -318,7 +318,7 @@ public class FileBasedLock
             LOG.debug("Exception thrown during lock.release(): %s", e.getMessage());
         }
         catch (InterruptedException e) {
-            LOG.error("Load pdbo table error : ", e.getMessage());
+            e.printStackTrace();
         }
     }
 
@@ -372,7 +372,7 @@ public class FileBasedLock
                 }
                 else {
                     try (InputStream is = fs.newInputStream(lockInfoPath);
-                            InputStreamReader reader = new InputStreamReader(is, StandardCharsets.UTF_8)) {
+                            InputStreamReader reader = new InputStreamReader(is, Charset.forName("utf8"))) {
                         int idLength = uuid.toString().length();
                         char[] firstIdChars = new char[idLength];
                         return reader.read(firstIdChars, 0, idLength) > 0
@@ -407,10 +407,10 @@ public class FileBasedLock
             // get current filesystem time
             Path tmp = Paths.get(String.format("%s.%s.tmp", this.lockFilePath, this.uuid));
             writeToFile(tmp, "checkTime", true);
-            long cur = Long.parseLong(fs.getAttribute(tmp, "lastModifiedTime").toString());
+            long cur = Long.valueOf(fs.getAttribute(tmp, "lastModifiedTime").toString());
             fs.delete(tmp);
 
-            long lockTime = Long.parseLong(fs.getAttribute(lockPath, "lastModifiedTime").toString());
+            long lockTime = Long.valueOf(fs.getAttribute(lockPath, "lastModifiedTime").toString());
             if (cur - lockTime >= lockFileTimeout) {
                 return true;
             }
@@ -454,7 +454,7 @@ public class FileBasedLock
             throws IOException
     {
         try (OutputStream os = (overwrite) ? fs.newOutputStream(file) : fs.newOutputStream(file, CREATE_NEW)) {
-            os.write(content.getBytes(StandardCharsets.UTF_8));
+            os.write(content.getBytes());
         }
     }
 

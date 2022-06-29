@@ -135,9 +135,9 @@ public class CostCalculatorUsingExchanges
                         .add(node.getRowNumberSymbol())
                         .build();
             }
-            PlanNodeStatsEstimate tmpStats = getStats(node);
-            double cpuCost = tmpStats.getOutputSizeInBytes(symbols, types);
-            double memoryCost = node.getPartitionBy().isEmpty() ? 0 : tmpStats.getOutputSizeInBytes(node.getSource().getOutputSymbols(), types);
+            PlanNodeStatsEstimate stats = getStats(node);
+            double cpuCost = stats.getOutputSizeInBytes(symbols, types);
+            double memoryCost = node.getPartitionBy().isEmpty() ? 0 : stats.getOutputSizeInBytes(node.getSource().getOutputSymbols(), types);
             LocalCostEstimate localCost = LocalCostEstimate.of(cpuCost, memoryCost, 0);
             return costForStreaming(node, localCost);
         }
@@ -214,21 +214,7 @@ public class CostCalculatorUsingExchanges
             PlanNodeStatsEstimate aggregationStats = getStats(node);
             PlanNodeStatsEstimate sourceStats = getStats(node.getSource());
             double cpuCost = sourceStats.getOutputSizeInBytes(node.getSource().getOutputSymbols(), types);
-            double hashTableCost = 0;
-            double maxDistinctValuesCount = 0;
-            if (!node.getAggregationType().equals(AggregationNode.AggregationType.SORT_BASED)) {
-                double values;
-                for (Symbol groupingKeys : node.getGroupingKeys()) {
-                    values = aggregationStats.getSymbolStatistics(groupingKeys).getDistinctValuesCount();
-                    if (Double.isNaN(values)) {
-                        continue;
-                    }
-                    maxDistinctValuesCount = max(maxDistinctValuesCount, values);
-                }
-                /*the hash table type is long and it will store distinct values so distinct values * hash size(long) */
-                hashTableCost = maxDistinctValuesCount * Long.BYTES;
-            }
-            double memoryCost = aggregationStats.getOutputSizeInBytes(node.getOutputSymbols(), types) + hashTableCost;
+            double memoryCost = aggregationStats.getOutputSizeInBytes(node.getOutputSymbols(), types);
             LocalCostEstimate localCost = LocalCostEstimate.of(cpuCost, memoryCost, 0);
             return costForAccumulation(node, localCost);
         }
@@ -402,10 +388,10 @@ public class CostCalculatorUsingExchanges
         private PlanCostEstimate costForLookupJoin(PlanNode node, LocalCostEstimate localCost)
         {
             verify(node.getSources().size() == 2, "Unexpected number of sources for %s: %s", node, node.getSources());
-            List<PlanCostEstimate> tmpSourcesCosts = getSourcesEstimations(node).collect(toImmutableList());
-            verify(tmpSourcesCosts.size() == 2);
-            PlanCostEstimate probeCost = tmpSourcesCosts.get(0);
-            PlanCostEstimate buildCost = tmpSourcesCosts.get(1);
+            List<PlanCostEstimate> sourcesCosts = getSourcesEstimations(node).collect(toImmutableList());
+            verify(sourcesCosts.size() == 2);
+            PlanCostEstimate probeCost = sourcesCosts.get(0);
+            PlanCostEstimate buildCost = sourcesCosts.get(1);
 
             return new PlanCostEstimate(
                     probeCost.getCpuCost() + buildCost.getCpuCost() + localCost.getCpuCost(),

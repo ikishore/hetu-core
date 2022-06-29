@@ -23,8 +23,7 @@ public enum MemoryErrorCode
         implements ErrorCodeSupplier
 {
     MISSING_DATA(0, EXTERNAL),
-    MEMORY_LIMIT_EXCEEDED(1, EXTERNAL),
-    MEMORY_INVALID_METADATA(2, EXTERNAL);
+    MEMORY_LIMIT_EXCEEDED(1, EXTERNAL);
 
     private final ErrorCode errorCode;
 

@@ -25,7 +25,6 @@ import io.prestosql.Session;
 import io.prestosql.SystemSessionProperties;
 import io.prestosql.execution.warnings.WarningCollector;
 import io.prestosql.metadata.Metadata;
-import io.prestosql.spi.connector.QualifiedObjectName;
 import io.prestosql.spi.function.OperatorType;
 import io.prestosql.spi.function.Signature;
 import io.prestosql.spi.plan.AggregationNode;
@@ -91,7 +90,6 @@ import static com.google.common.base.Verify.verify;
 import static com.google.common.collect.ImmutableList.toImmutableList;
 import static com.google.common.collect.ImmutableMap.toImmutableMap;
 import static com.google.common.collect.ImmutableSet.toImmutableSet;
-import static io.prestosql.spi.connector.CatalogSchemaName.DEFAULT_NAMESPACE;
 import static io.prestosql.spi.function.FunctionKind.SCALAR;
 import static io.prestosql.spi.function.Signature.mangleOperatorName;
 import static io.prestosql.spi.operator.ReuseExchangeOperator.STRATEGY.REUSE_STRATEGY_DEFAULT;
@@ -115,7 +113,7 @@ public class HashGenerationOptimizer
     public static final long INITIAL_HASH_VALUE = 0;
     private static final String HASH_CODE = mangleOperatorName(OperatorType.HASH_CODE);
     private static final Signature COMBINE_HASH = new Signature(
-            QualifiedObjectName.valueOf(DEFAULT_NAMESPACE, "combine_hash"),
+            "combine_hash",
             SCALAR,
             BIGINT.getTypeSignature(),
             ImmutableList.of(BIGINT.getTypeSignature(), BIGINT.getTypeSignature()));
@@ -206,6 +204,7 @@ public class HashGenerationOptimizer
             PlanWithProperties child = planAndEnforce(node.getSource(), requiredHashes, false, requiredHashes);
 
             Optional<Symbol> hashSymbol = groupByHash.map(child::getRequiredHashSymbol);
+
             return new PlanWithProperties(
                     new AggregationNode(
                             node.getId(),
@@ -215,9 +214,7 @@ public class HashGenerationOptimizer
                             node.getPreGroupedSymbols(),
                             node.getStep(),
                             hashSymbol,
-                            node.getGroupIdSymbol(),
-                            node.getAggregationType(),
-                            node.getFinalizeSymbol()),
+                            node.getGroupIdSymbol()),
                     hashSymbol.isPresent() ? ImmutableMap.of(groupByHash.get(), hashSymbol.get()) : ImmutableMap.of());
         }
 
@@ -597,18 +594,16 @@ public class HashGenerationOptimizer
                             partitioningScheme,
                             newSources.build(),
                             newInputs.build(),
-                            node.getOrderingScheme(),
-                            node.getAggregationType()),
+                            node.getOrderingScheme()),
                     newHashSymbols);
         }
 
-        private PlanWithProperties visitExchangeForCTE(ExchangeNode node, HashComputationSet inputSourceContext)
+        private PlanWithProperties visitExchangeForCTE(ExchangeNode node, HashComputationSet sourceContext)
         {
             Assignments.Builder assignments = Assignments.builder();
             for (Symbol symbol : node.getOutputSymbols()) {
                 assignments.put(symbol, toVariableReference(symbol, planSymbolAllocator.getTypes().get(symbol)));
             }
-            HashComputationSet sourceContext = inputSourceContext;
             for (HashComputation hashComputation : sourceContext.getHashes()) {
                 Symbol hashSymbol = planSymbolAllocator.newHashSymbol();
                 assignments.put(hashSymbol, hashComputation.getHashExpression());
@@ -622,8 +617,7 @@ public class HashGenerationOptimizer
                     node.getPartitioningScheme(),
                     ImmutableList.of(child.getNode()),
                     node.getInputs(),
-                    node.getOrderingScheme(),
-                    node.getAggregationType());
+                    node.getOrderingScheme());
             return new PlanWithProperties(new ProjectNode(idAllocator.getNextId(),
                     exchangeNode,
                     assignments.build()),
@@ -1043,9 +1037,10 @@ public class HashGenerationOptimizer
 
         private RowExpression getHashFunctionCall(RowExpression previousHashValue, Symbol symbol)
         {
-            CallExpression functionCall = call(metadata.getFunctionAndTypeManager(), OperatorType.HASH_CODE.getFunctionName().getObjectName(),
-                    BIGINT, toVariableReference(symbol, planSymbolAllocator.getTypes().get(symbol)));
-            return call(metadata.getFunctionAndTypeManager(), "combine_hash", BIGINT, previousHashValue, orNullHashCode(functionCall));
+            Signature signature = Signature.internalOperator(OperatorType.HASH_CODE, BIGINT, ImmutableList.of(planSymbolAllocator.getTypes().get(symbol)));
+            CallExpression functionCall = call(signature, BIGINT, toVariableReference(symbol, planSymbolAllocator.getTypes().get(symbol)));
+
+            return call(COMBINE_HASH, BIGINT, previousHashValue, orNullHashCode(functionCall));
         }
 
         private static RowExpression orNullHashCode(RowExpression expression)

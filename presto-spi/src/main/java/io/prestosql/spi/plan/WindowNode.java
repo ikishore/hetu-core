@@ -19,8 +19,7 @@ import com.google.common.collect.ImmutableList;
 import com.google.common.collect.ImmutableMap;
 import com.google.common.collect.ImmutableSet;
 import com.google.common.collect.Iterables;
-import io.prestosql.spi.function.FunctionHandle;
-import io.prestosql.spi.relation.CallExpression;
+import io.prestosql.spi.function.Signature;
 import io.prestosql.spi.relation.RowExpression;
 import io.prestosql.spi.sql.expression.Types.FrameBoundType;
 import io.prestosql.spi.sql.expression.Types.WindowFrameType;
@@ -323,31 +322,25 @@ public class WindowNode
     @Immutable
     public static final class Function
     {
-        private final CallExpression functionCall;
+        private final Signature signature;
         private final List<RowExpression> arguments;
         private final Frame frame;
 
         @JsonCreator
         public Function(
-                @JsonProperty("functionCall") CallExpression functionCall,
+                @JsonProperty("signature") Signature signature,
                 @JsonProperty("arguments") List<RowExpression> arguments,
                 @JsonProperty("frame") Frame frame)
         {
-            this.functionCall = requireNonNull(functionCall, "functionCall is null");
+            this.signature = requireNonNull(signature, "Signature is null");
             this.arguments = requireNonNull(arguments, "arguments is null");
             this.frame = requireNonNull(frame, "Frame is null");
         }
 
         @JsonProperty
-        public CallExpression getFunctionCall()
+        public Signature getSignature()
         {
-            return functionCall;
-        }
-
-        @JsonProperty
-        public FunctionHandle getFunctionHandle()
-        {
-            return functionCall.getFunctionHandle();
+            return signature;
         }
 
         @JsonProperty
@@ -365,7 +358,7 @@ public class WindowNode
         @Override
         public int hashCode()
         {
-            return Objects.hash(functionCall, arguments, frame);
+            return Objects.hash(signature, arguments, frame);
         }
 
         @Override
@@ -378,7 +371,7 @@ public class WindowNode
                 return false;
             }
             Function other = (Function) obj;
-            return Objects.equals(this.functionCall, other.functionCall) &&
+            return Objects.equals(this.signature, other.signature) &&
                     Objects.equals(this.arguments, other.arguments) &&
                     Objects.equals(this.frame, other.frame);
         }

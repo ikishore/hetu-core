@@ -124,17 +124,17 @@ public class BenchmarkUnnestOperator
             ImmutableList.Builder<Type> typesBuilder = ImmutableList.builder();
             ImmutableList.Builder<Integer> channelsBuilder = ImmutableList.builder();
 
-            Type localReplicateType = getType(metadata, this.replicateType).get();
-            typesBuilder.add(localReplicateType);
+            Type replicateType = getType(metadata, this.replicateType).get();
+            typesBuilder.add(replicateType);
             channelsBuilder.add(0);
 
-            Type localNestedTypeOne = getType(metadata, this.nestedTypeOne).get();
-            typesBuilder.add(localNestedTypeOne);
+            Type nestedTypeOne = getType(metadata, this.nestedTypeOne).get();
+            typesBuilder.add(nestedTypeOne);
             channelsBuilder.add(1);
 
             if (!nestedTypeTwo.equals("NONE")) {
-                Type localNestedTypeTwo = getType(metadata, this.nestedTypeTwo).get();
-                typesBuilder.add(localNestedTypeTwo);
+                Type nestedTypeTwo = getType(metadata, this.nestedTypeTwo).get();
+                typesBuilder.add(nestedTypeTwo);
                 channelsBuilder.add(2);
             }
 
@@ -187,7 +187,7 @@ public class BenchmarkUnnestOperator
 
         private static List<Page> createInputPages(int positionsPerPage, List<Type> types, InputGenerator inputGenerator, double primitiveNullsRatioUnnest, double rowNullsRatioUnnest)
         {
-            ImmutableList.Builder<Page> localPages = ImmutableList.builder();
+            ImmutableList.Builder<Page> pages = ImmutableList.builder();
             int pageCount = TOTAL_POSITIONS / positionsPerPage;
 
             for (int i = 0; i < pageCount; i++) {
@@ -197,10 +197,10 @@ public class BenchmarkUnnestOperator
                 if (blocks.length == 3) {
                     blocks[2] = inputGenerator.produceBlock(types.get(2), positionsPerPage, 0.0, 0.0);
                 }
-                localPages.add(new Page(blocks));
+                pages.add(new Page(blocks));
             }
 
-            return localPages.build();
+            return pages.build();
         }
     }
 

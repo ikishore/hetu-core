@@ -17,8 +17,11 @@ import com.google.common.base.Joiner;
 import com.google.common.collect.ImmutableList;
 import io.airlift.slice.Slice;
 import io.prestosql.Session;
-import io.prestosql.spi.PartialAndFinalAggregationType;
+import io.prestosql.operator.aggregation.InternalAggregationFunction;
+import io.prestosql.operator.window.WindowFunctionSupplier;
 import io.prestosql.spi.PrestoException;
+import io.prestosql.spi.block.BlockEncoding;
+import io.prestosql.spi.block.BlockEncodingSerde;
 import io.prestosql.spi.connector.CatalogName;
 import io.prestosql.spi.connector.CatalogSchemaName;
 import io.prestosql.spi.connector.ColumnHandle;
@@ -32,12 +35,12 @@ import io.prestosql.spi.connector.Constraint;
 import io.prestosql.spi.connector.ConstraintApplicationResult;
 import io.prestosql.spi.connector.LimitApplicationResult;
 import io.prestosql.spi.connector.ProjectionApplicationResult;
-import io.prestosql.spi.connector.QualifiedObjectName;
 import io.prestosql.spi.connector.SampleType;
 import io.prestosql.spi.connector.SystemTable;
 import io.prestosql.spi.expression.ConnectorExpression;
 import io.prestosql.spi.function.FunctionKind;
 import io.prestosql.spi.function.OperatorType;
+import io.prestosql.spi.function.ScalarFunctionImplementation;
 import io.prestosql.spi.function.Signature;
 import io.prestosql.spi.function.SqlFunction;
 import io.prestosql.spi.metadata.TableHandle;
@@ -49,8 +52,10 @@ import io.prestosql.spi.security.RoleGrant;
 import io.prestosql.spi.statistics.ComputedStatistics;
 import io.prestosql.spi.statistics.TableStatistics;
 import io.prestosql.spi.statistics.TableStatisticsMetadata;
+import io.prestosql.spi.type.ParametricType;
 import io.prestosql.spi.type.Type;
 import io.prestosql.spi.type.TypeSignature;
+import io.prestosql.spi.type.TypeSignatureParameter;
 import io.prestosql.sql.analyzer.TypeSignatureProvider;
 import io.prestosql.sql.planner.PartitioningHandle;
 import io.prestosql.sql.tree.QualifiedName;
@@ -63,7 +68,6 @@ import java.util.OptionalLong;
 import java.util.Set;
 
 import static io.prestosql.spi.StandardErrorCode.FUNCTION_NOT_FOUND;
-import static io.prestosql.spi.connector.CatalogSchemaName.DEFAULT_NAMESPACE;
 import static io.prestosql.spi.type.DoubleType.DOUBLE;
 
 public abstract class AbstractMockMetadata
@@ -76,6 +80,12 @@ public abstract class AbstractMockMetadata
 
     @Override
     public Set<ConnectorCapabilities> getConnectorCapabilities(Session session, CatalogName catalogName)
+    {
+        throw new UnsupportedOperationException();
+    }
+
+    @Override
+    public Type getParameterizedType(String baseTypeName, List<TypeSignatureParameter> typeParameters)
     {
         throw new UnsupportedOperationException();
     }
@@ -153,7 +163,7 @@ public abstract class AbstractMockMetadata
     }
 
     @Override
-    public TableStatistics getTableStatistics(Session session, TableHandle tableHandle, Constraint constraint, boolean includeColumnStatistics)
+    public TableStatistics getTableStatistics(Session session, TableHandle tableHandle, Constraint constraint)
     {
         throw new UnsupportedOperationException();
     }
@@ -309,13 +319,7 @@ public abstract class AbstractMockMetadata
     }
 
     @Override
-    public ColumnHandle getDeleteRowIdColumnHandle(Session session, TableHandle tableHandle)
-    {
-        throw new UnsupportedOperationException();
-    }
-
-    @Override
-    public ColumnHandle getUpdateRowIdColumnHandle(Session session, TableHandle tableHandle, List<ColumnHandle> updatedColumns)
+    public ColumnHandle getUpdateRowIdColumnHandle(Session session, TableHandle tableHandle)
     {
         throw new UnsupportedOperationException();
     }
@@ -352,24 +356,6 @@ public abstract class AbstractMockMetadata
 
     @Override
     public void finishDelete(Session session, TableHandle tableHandle, Collection<Slice> fragments)
-    {
-        throw new UnsupportedOperationException();
-    }
-
-    @Override
-    public TableHandle beginUpdate(Session session, TableHandle tableHandle, List<Type> updatedColumnTypes)
-    {
-        throw new UnsupportedOperationException();
-    }
-
-    @Override
-    public void finishUpdate(Session session, TableHandle tableHandle, Collection<Slice> fragments)
-    {
-        throw new UnsupportedOperationException();
-    }
-
-    @Override
-    public OptionalLong executeUpdate(Session session, TableHandle tableHandle)
     {
         throw new UnsupportedOperationException();
     }
@@ -532,44 +518,105 @@ public abstract class AbstractMockMetadata
         throw new UnsupportedOperationException();
     }
 
+    @Override
+    public Collection<Type> getTypes()
+    {
+        throw new UnsupportedOperationException();
+    }
+
+    @Override
+    public Collection<ParametricType> getParametricTypes()
+    {
+        throw new UnsupportedOperationException();
+    }
+
     //
     // Functions
     //
 
     @Override
-    public List<SqlFunction> listFunctions(Optional<Session> session)
+    public void addFunctions(List<? extends SqlFunction> functions)
     {
         throw new UnsupportedOperationException();
     }
 
     @Override
-    public List<SqlFunction> listFunctionsWithoutFilterOut(Optional<Session> session)
+    public List<SqlFunction> listFunctions()
     {
         throw new UnsupportedOperationException();
     }
 
+    @Override
+    public FunctionInvokerProvider getFunctionInvokerProvider()
+    {
+        throw new UnsupportedOperationException();
+    }
+
+    @Override
     public Signature resolveFunction(QualifiedName name, List<TypeSignatureProvider> parameterTypes)
     {
         String nameSuffix = name.getSuffix();
         if (nameSuffix.equals("rand") && parameterTypes.isEmpty()) {
-            return new Signature(QualifiedObjectName.valueOf(DEFAULT_NAMESPACE, nameSuffix), FunctionKind.SCALAR, DOUBLE.getTypeSignature(), ImmutableList.of());
+            return new Signature(nameSuffix, FunctionKind.SCALAR, DOUBLE.getTypeSignature(), ImmutableList.of());
         }
         throw new PrestoException(FUNCTION_NOT_FOUND, name + "(" + Joiner.on(", ").join(parameterTypes) + ")");
     }
 
+    @Override
     public Signature resolveOperator(OperatorType operatorType, List<? extends Type> argumentTypes)
             throws OperatorNotFoundException
     {
         throw new UnsupportedOperationException();
     }
 
-    public FunctionAndTypeManager getFunctionAndTypeManager()
+    @Override
+    public Signature getCoercion(TypeSignature fromType, TypeSignature toType)
+    {
+        throw new UnsupportedOperationException();
+    }
+
+    @Override
+    public boolean isAggregationFunction(QualifiedName name)
+    {
+        throw new UnsupportedOperationException();
+    }
+
+    @Override
+    public WindowFunctionSupplier getWindowFunctionImplementation(Signature signature)
+    {
+        throw new UnsupportedOperationException();
+    }
+
+    @Override
+    public InternalAggregationFunction getAggregateFunctionImplementation(Signature signature)
+    {
+        throw new UnsupportedOperationException();
+    }
+
+    @Override
+    public ScalarFunctionImplementation getScalarFunctionImplementation(Signature signature)
     {
         throw new UnsupportedOperationException();
     }
 
     @Override
     public ProcedureRegistry getProcedureRegistry()
+    {
+        throw new UnsupportedOperationException();
+    }
+
+    //
+    // Blocks
+    //
+
+    @Override
+    public BlockEncoding getBlockEncoding(String encodingName)
+    {
+        throw new UnsupportedOperationException();
+    }
+
+    @Override
+    public BlockEncodingSerde getBlockEncodingSerde()
     {
         throw new UnsupportedOperationException();
     }
@@ -643,70 +690,5 @@ public abstract class AbstractMockMetadata
     public boolean isHeuristicIndexSupported(Session session, QualifiedObjectName tableName)
     {
         return true;
-    }
-
-    /**
-     * Whether this table can be used as input for snapshot-enabled query executions.
-     * This method overrides {@link ConnectorMetadata} returns true to indicate
-     * snapshot feature is enabled for testing connectors.
-     *
-     * @param session Presto session
-     * @param table Connector specific table handle
-     */
-    @Override
-    public boolean isSnapshotSupportedAsInput(Session session, TableHandle table)
-    {
-        return true;
-    }
-
-    /**
-     * Whether this table can be used as output for snapshot-enabled query executions.
-     * This method overrides {@link ConnectorMetadata} returns true to indicate
-     * snapshot feature is enabled for testing connectors.
-     *
-     * @param session Presto session
-     * @param table Connector specific table handle
-     */
-    @Override
-    public boolean isSnapshotSupportedAsOutput(Session session, TableHandle table)
-    {
-        return true;
-    }
-
-    /**
-     * Whether new table with specified format can be used as output for snapshot-enabled.
-     * This method overrides {@link ConnectorMetadata} returns true to indicate
-     * snapshot feature is enabled for testing connectors.
-     *
-     * @param session Presto session
-     * @param catalogName Catalog name
-     * @param tableProperties Table properties
-     */
-    @Override
-    public boolean isSnapshotSupportedAsNewTable(Session session, CatalogName catalogName, Map<String, Object> tableProperties)
-    {
-        return true;
-    }
-
-    @Override
-    public void resetInsertForRerun(Session session, InsertTableHandle tableHandle, OptionalLong snapshotIndex)
-    {
-    }
-
-    @Override
-    public void resetCreateForRerun(Session session, OutputTableHandle tableHandle, OptionalLong snapshotIndex)
-    {
-    }
-
-    @Override
-    public PartialAndFinalAggregationType validateAndGetSortAggregationType(Session session, TableHandle tableHandle, List<String> keyNames)
-    {
-        throw new UnsupportedOperationException();
-    }
-
-    @Override
-    public void refreshMetadataCache(Session session, Optional<String> catalogName)
-    {
-        throw new UnsupportedOperationException();
     }
 }

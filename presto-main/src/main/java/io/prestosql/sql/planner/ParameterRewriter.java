@@ -66,14 +66,13 @@ public class ParameterRewriter
         }
 
         Type coercion = analysis.getCoercion(original);
-        Expression rewrittenExpression = rewritten;
         if (coercion != null) {
-            rewrittenExpression = new Cast(
-                    rewrittenExpression,
+            rewritten = new Cast(
+                    rewritten,
                     coercion.getTypeSignature().toString(),
                     false,
                     analysis.isTypeOnlyCoercion(original));
         }
-        return rewrittenExpression;
+        return rewritten;
     }
 }

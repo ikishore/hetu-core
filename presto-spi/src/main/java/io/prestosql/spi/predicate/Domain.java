@@ -201,16 +201,16 @@ public final class Domain
             return domains.get(0);
         }
 
-        boolean isAllowNull = false;
+        boolean nullAllowed = false;
         List<ValueSet> valueSets = new ArrayList<>(domains.size());
         for (Domain domain : domains) {
             valueSets.add(domain.getValues());
-            isAllowNull = isAllowNull || domain.nullAllowed;
+            nullAllowed = nullAllowed || domain.nullAllowed;
         }
 
         ValueSet unionedValues = valueSets.get(0).union(valueSets.subList(1, valueSets.size()));
 
-        return new Domain(unionedValues, isAllowNull);
+        return new Domain(unionedValues, nullAllowed);
     }
 
     public Domain complement()

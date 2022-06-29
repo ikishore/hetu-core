@@ -15,21 +15,19 @@ package io.prestosql.plugin.hive;
 
 import io.airlift.concurrent.BoundedExecutor;
 import io.airlift.json.JsonCodec;
+import io.airlift.log.Logger;
 import io.airlift.units.Duration;
 import io.prestosql.plugin.hive.metastore.CachingHiveMetastore;
 import io.prestosql.plugin.hive.metastore.HiveMetastore;
 import io.prestosql.plugin.hive.metastore.SemiTransactionalHiveMetastore;
-import io.prestosql.plugin.hive.metastore.Table;
 import io.prestosql.plugin.hive.security.AccessControlMetadataFactory;
 import io.prestosql.plugin.hive.statistics.MetastoreHiveStatisticsProvider;
-import io.prestosql.plugin.hive.statistics.TableColumnStatistics;
 import io.prestosql.spi.type.TypeManager;
+import org.joda.time.DateTimeZone;
 
 import javax.inject.Inject;
 
-import java.util.Map;
 import java.util.Optional;
-import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.ScheduledExecutorService;
 import java.util.function.Supplier;
@@ -39,9 +37,9 @@ import static java.util.Objects.requireNonNull;
 public class HiveMetadataFactory
         implements Supplier<TransactionalMetadata>
 {
-    protected final Map<String, TableColumnStatistics> statsCache = new ConcurrentHashMap();
-    protected final Map<Table, MetastoreHiveStatisticsProvider.SamplePartition> samplePartitionCache = new ConcurrentHashMap();
+    private static final Logger log = Logger.get(HiveMetadataFactory.class);
 
+    private final boolean allowCorruptWritesForTesting;
     private final boolean skipDeletionForAlter;
     private final boolean skipTargetCleanupOnRollback;
     private final boolean writesToNonManagedTablesEnabled;
@@ -51,6 +49,7 @@ public class HiveMetadataFactory
     private final HiveMetastore metastore;
     private final HdfsEnvironment hdfsEnvironment;
     private final HivePartitionManager partitionManager;
+    private final DateTimeZone timeZone;
     private final TypeManager typeManager;
     private final LocationService locationService;
     private final JsonCodec<PartitionUpdate> partitionUpdateCodec;
@@ -67,7 +66,6 @@ public class HiveMetadataFactory
     private final double vacuumDeltaPercentThreshold;
     private final boolean autoVacuumEnabled;
     private Optional<Duration> vacuumCollectorInterval;
-    protected final int hmsWriteBatchSize;
 
     @Inject
     @SuppressWarnings("deprecation")
@@ -91,7 +89,9 @@ public class HiveMetadataFactory
                 metastore,
                 hdfsEnvironment,
                 partitionManager,
+                hiveConfig.getDateTimeZone(),
                 hiveConfig.getMaxConcurrentFileRenames(),
+                hiveConfig.getAllowCorruptWritesForTesting(),
                 hiveConfig.isSkipDeletionForAlter(),
                 hiveConfig.isSkipTargetCleanupOnRollback(),
                 hiveConfig.getWritesToNonManagedTablesEnabled(),
@@ -113,15 +113,16 @@ public class HiveMetadataFactory
                 hiveConfig.getVacuumDeltaNumThreshold(),
                 hiveConfig.getVacuumDeltaPercentThreshold(),
                 hiveConfig.getAutoVacuumEnabled(),
-                hiveConfig.getVacuumCollectorInterval(),
-                hiveConfig.getMetastoreWriteBatchSize());
+                hiveConfig.getVacuumCollectorInterval());
     }
 
     public HiveMetadataFactory(
             HiveMetastore metastore,
             HdfsEnvironment hdfsEnvironment,
             HivePartitionManager partitionManager,
+            DateTimeZone timeZone,
             int maxConcurrentFileRenames,
+            boolean allowCorruptWritesForTesting,
             boolean skipDeletionForAlter,
             boolean skipTargetCleanupOnRollback,
             boolean writesToNonManagedTablesEnabled,
@@ -143,9 +144,9 @@ public class HiveMetadataFactory
             int vacuumDeltaNumThreshold,
             double vacuumDeltaPercentThreshold,
             boolean autoVacuumEnabled,
-            Optional<Duration> vacuumCollectorInterval,
-            int hmsWriteBatchSize)
+            Optional<Duration> vacuumCollectorInterval)
     {
+        this.allowCorruptWritesForTesting = allowCorruptWritesForTesting;
         this.skipDeletionForAlter = skipDeletionForAlter;
         this.skipTargetCleanupOnRollback = skipTargetCleanupOnRollback;
         this.writesToNonManagedTablesEnabled = writesToNonManagedTablesEnabled;
@@ -156,6 +157,7 @@ public class HiveMetadataFactory
         this.metastore = requireNonNull(metastore, "metastore is null");
         this.hdfsEnvironment = requireNonNull(hdfsEnvironment, "hdfsEnvironment is null");
         this.partitionManager = requireNonNull(partitionManager, "partitionManager is null");
+        this.timeZone = requireNonNull(timeZone, "timeZone is null");
         this.typeManager = requireNonNull(typeManager, "typeManager is null");
         this.locationService = requireNonNull(locationService, "locationService is null");
         this.partitionUpdateCodec = requireNonNull(partitionUpdateCodec, "partitionUpdateCodec is null");
@@ -165,6 +167,13 @@ public class HiveMetadataFactory
         this.hiveTransactionHeartbeatInterval = requireNonNull(hiveTransactionHeartbeatInterval, "hiveTransactionHeartbeatInterval is null");
         this.vacuumCleanupRecheckInterval = requireNonNull(vacuumCleanupRecheckInterval, "vacuumCleanupInterval is null");
 
+        if (!allowCorruptWritesForTesting && !timeZone.equals(DateTimeZone.getDefault())) {
+            log.warn("Hive writes are disabled. " +
+                            "To write data to Hive, your JVM timezone must match the Hive storage timezone. " +
+                            "Add -Duser.timezone=%s to your JVM arguments",
+                    timeZone.getID());
+        }
+
         renameExecution = new BoundedExecutor(executorService, maxConcurrentFileRenames);
         this.hiveVacuumService = requireNonNull(hiveVacuumService, "hiveVacuumService is null");
         this.heartbeatService = requireNonNull(heartbeatService, "heartbeatService is null");
@@ -173,13 +182,12 @@ public class HiveMetadataFactory
         this.vacuumDeltaPercentThreshold = vacuumDeltaPercentThreshold;
         this.autoVacuumEnabled = autoVacuumEnabled;
         this.vacuumCollectorInterval = vacuumCollectorInterval;
-        this.hmsWriteBatchSize = hmsWriteBatchSize;
     }
 
     @Override
     public HiveMetadata get()
     {
-        SemiTransactionalHiveMetastore localMetastore = new SemiTransactionalHiveMetastore(
+        SemiTransactionalHiveMetastore metastore = new SemiTransactionalHiveMetastore(
                 hdfsEnvironment,
                 CachingHiveMetastore.memoizeMetastore(this.metastore, perTransactionCacheMaximumSize), // per-transaction cache
                 renameExecution,
@@ -189,13 +197,14 @@ public class HiveMetadataFactory
                 skipTargetCleanupOnRollback,
                 hiveTransactionHeartbeatInterval,
                 heartbeatService,
-                hiveMetastoreClientService,
-                hmsWriteBatchSize);
+                hiveMetastoreClientService);
 
         return new HiveMetadata(
-                localMetastore,
+                metastore,
                 hdfsEnvironment,
                 partitionManager,
+                timeZone,
+                allowCorruptWritesForTesting,
                 writesToNonManagedTablesEnabled,
                 createsOfNonManagedTablesEnabled,
                 tableCreatesWithLocationAllowed,
@@ -204,8 +213,8 @@ public class HiveMetadataFactory
                 partitionUpdateCodec,
                 typeTranslator,
                 prestoVersion,
-                new MetastoreHiveStatisticsProvider(localMetastore, statsCache, samplePartitionCache),
-                accessControlMetadataFactory.create(localMetastore),
+                new MetastoreHiveStatisticsProvider(metastore),
+                accessControlMetadataFactory.create(metastore),
                 autoVacuumEnabled,
                 vacuumDeltaNumThreshold,
                 vacuumDeltaPercentThreshold,

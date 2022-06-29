@@ -24,11 +24,6 @@ public interface SourceScheduler
 {
     ScheduleResult schedule();
 
-    default ScheduleResult schedule(int maxSplitGroupSize)
-    {
-        return schedule();
-    }
-
     void close();
 
     PlanNodeId getPlanNodeId();

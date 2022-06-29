@@ -37,6 +37,4 @@ public interface InternalNodeManager
     void addNodeChangeListener(Consumer<AllNodes> listener);
 
     void removeNodeChangeListener(Consumer<AllNodes> listener);
-
-    void refreshWorkerStates();
 }

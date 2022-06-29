@@ -59,12 +59,10 @@ import static io.prestosql.execution.StageState.CANCELED;
 import static io.prestosql.execution.StageState.FAILED;
 import static io.prestosql.execution.StageState.FINISHED;
 import static io.prestosql.execution.StageState.PLANNED;
-import static io.prestosql.execution.StageState.RECOVERING;
 import static io.prestosql.execution.StageState.RUNNING;
 import static io.prestosql.execution.StageState.SCHEDULED;
 import static io.prestosql.execution.StageState.SCHEDULING;
 import static io.prestosql.execution.StageState.SCHEDULING_SPLITS;
-import static io.prestosql.execution.StageState.SUSPENDED;
 import static io.prestosql.execution.StageState.TERMINAL_STAGE_STATES;
 import static io.prestosql.spi.operator.ReuseExchangeOperator.STRATEGY.REUSE_STRATEGY_CONSUMER;
 import static io.prestosql.spi.operator.ReuseExchangeOperator.STRATEGY.REUSE_STRATEGY_PRODUCER;
@@ -236,19 +234,6 @@ public class StageStateMachine
         return failed;
     }
 
-    public boolean transitionToRecovering()
-    {
-        log.debug("Moving stage %s to Recovering state", stageId);
-        // Force it, even when the stage is in FINISHED state, which was before the resume occurred
-        return stageState.forceSet(RECOVERING) == RECOVERING;
-    }
-
-    public boolean transitionToSuspend()
-    {
-        log.debug("Moving stage %s to Suspended state", stageId);
-        return stageState.setIf(SUSPENDED, currentState -> !currentState.isDone());
-    }
-
     /**
      * Add a listener for the final stage info.  This notification is guaranteed to be fired only once.
      * Listener is always notified asynchronously using a dedicated notification thread pool so, care should
@@ -266,11 +251,11 @@ public class StageStateMachine
         finalStageInfo.addStateChangeListener(fireOnceStateChangeListener);
     }
 
-    public void setAllTasksFinal(Iterable<TaskInfo> finalTaskInfos, boolean restoreInProgress, long captureSnapshotId)
+    public void setAllTasksFinal(Iterable<TaskInfo> finalTaskInfos)
     {
         requireNonNull(finalTaskInfos, "finalTaskInfos is null");
         checkState(stageState.get().isDone());
-        StageInfo stageInfo = getStageInfo(() -> finalTaskInfos, restoreInProgress, captureSnapshotId);
+        StageInfo stageInfo = getStageInfo(() -> finalTaskInfos);
         checkArgument(stageInfo.isCompleteInfo(), "finalTaskInfos are not all done");
         finalStageInfo.compareAndSet(Optional.empty(), Optional.of(stageInfo));
     }
@@ -296,11 +281,11 @@ public class StageStateMachine
 
     public BasicStageStats getBasicStageStats(Supplier<Iterable<TaskInfo>> taskInfosSupplier)
     {
-        Optional<StageInfo> localFinalStageInfo = this.finalStageInfo.get();
-        if (localFinalStageInfo.isPresent()) {
-            return localFinalStageInfo.get()
+        Optional<StageInfo> finalStageInfo = this.finalStageInfo.get();
+        if (finalStageInfo.isPresent()) {
+            return finalStageInfo.get()
                     .getStageStats()
-                    .toBasicStageStats(localFinalStageInfo.get().getState());
+                    .toBasicStageStats(finalStageInfo.get().getState());
         }
 
         // stage state must be captured first in order to provide a
@@ -308,8 +293,7 @@ public class StageStateMachine
         // information, the stage could finish, and the task states would
         // never be visible.
         StageState state = stageState.get();
-        // Snapshot: RESCHEDULING, although a done state for stage, should not be deemed as "scheduled".
-        boolean isScheduled = (state == RUNNING) || state.isDone() && state != RECOVERING;
+        boolean isScheduled = (state == RUNNING) || state.isDone();
 
         List<TaskInfo> taskInfos = ImmutableList.copyOf(taskInfosSupplier.get());
 
@@ -408,11 +392,11 @@ public class StageStateMachine
                 progressPercentage);
     }
 
-    public StageInfo getStageInfo(Supplier<Iterable<TaskInfo>> taskInfosSupplier, boolean restoreInProgress, long snapshotId)
+    public StageInfo getStageInfo(Supplier<Iterable<TaskInfo>> taskInfosSupplier)
     {
-        Optional<StageInfo> localFinalStageInfo = this.finalStageInfo.get();
-        if (localFinalStageInfo.isPresent()) {
-            return localFinalStageInfo.get();
+        Optional<StageInfo> finalStageInfo = this.finalStageInfo.get();
+        if (finalStageInfo.isPresent()) {
+            return finalStageInfo.get();
         }
 
         // stage state must be captured first in order to provide a
@@ -599,8 +583,6 @@ public class StageStateMachine
         }
         return new StageInfo(stageId,
                 state,
-                restoreInProgress,
-                snapshotId,
                 location,
                 fragment,
                 fragment.getTypes(),

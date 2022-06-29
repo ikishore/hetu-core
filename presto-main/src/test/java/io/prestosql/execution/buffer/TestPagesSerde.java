@@ -21,7 +21,6 @@ import io.prestosql.spi.Page;
 import io.prestosql.spi.block.Block;
 import io.prestosql.spi.block.BlockBuilder;
 import io.prestosql.spi.type.Type;
-import io.prestosql.testing.TestingPagesSerdeFactory;
 import org.testng.annotations.Test;
 
 import java.util.Iterator;

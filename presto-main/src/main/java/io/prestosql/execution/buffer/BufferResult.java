@@ -20,22 +20,28 @@ import java.util.List;
 import java.util.Objects;
 
 import static com.google.common.base.MoreObjects.toStringHelper;
+import static com.google.common.base.Preconditions.checkArgument;
+import static com.google.common.base.Strings.isNullOrEmpty;
 import static java.util.Objects.requireNonNull;
 
 public class BufferResult
 {
-    public static BufferResult emptyResults(long token, boolean bufferComplete)
+    public static BufferResult emptyResults(String taskInstanceId, long token, boolean bufferComplete)
     {
-        return new BufferResult(token, token, bufferComplete, ImmutableList.of());
+        return new BufferResult(taskInstanceId, token, token, bufferComplete, ImmutableList.of());
     }
 
+    private final String taskInstanceId;
     private final long token;
     private final long nextToken;
     private final boolean bufferComplete;
     private final List<SerializedPage> serializedPages;
 
-    public BufferResult(long token, long nextToken, boolean bufferComplete, List<SerializedPage> serializedPages)
+    public BufferResult(String taskInstanceId, long token, long nextToken, boolean bufferComplete, List<SerializedPage> serializedPages)
     {
+        checkArgument(!isNullOrEmpty(taskInstanceId), "taskInstanceId is null");
+
+        this.taskInstanceId = taskInstanceId;
         this.token = token;
         this.nextToken = nextToken;
         this.bufferComplete = bufferComplete;
@@ -72,6 +78,11 @@ public class BufferResult
         return serializedPages.isEmpty();
     }
 
+    public String getTaskInstanceId()
+    {
+        return taskInstanceId;
+    }
+
     @Override
     public boolean equals(Object o)
     {
@@ -84,6 +95,7 @@ public class BufferResult
         BufferResult that = (BufferResult) o;
         return Objects.equals(token, that.token) &&
                 Objects.equals(nextToken, that.nextToken) &&
+                Objects.equals(taskInstanceId, that.taskInstanceId) &&
                 Objects.equals(bufferComplete, that.bufferComplete) &&
                 Objects.equals(serializedPages, that.serializedPages);
     }
@@ -91,7 +103,7 @@ public class BufferResult
     @Override
     public int hashCode()
     {
-        return Objects.hash(token, nextToken, bufferComplete, serializedPages);
+        return Objects.hash(token, nextToken, taskInstanceId, bufferComplete, serializedPages);
     }
 
     @Override
@@ -100,6 +112,7 @@ public class BufferResult
         return toStringHelper(this)
                 .add("token", token)
                 .add("nextToken", nextToken)
+                .add("taskInstanceId", taskInstanceId)
                 .add("bufferComplete", bufferComplete)
                 .add("serializedPages", serializedPages)
                 .toString();

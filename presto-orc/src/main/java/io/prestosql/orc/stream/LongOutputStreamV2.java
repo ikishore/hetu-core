@@ -47,18 +47,11 @@ public class LongOutputStreamV2
 {
     private enum EncodingType
     {
-        SHORT_REPEAT(0), DIRECT(1), PATCHED_BASE(2), DELTA(3);
-
-        private final int opCode;
-
-        EncodingType(int code)
-        {
-            opCode = code;
-        }
+        SHORT_REPEAT, DIRECT, PATCHED_BASE, DELTA;
 
         private int getOpCode()
         {
-            return (opCode << 6);
+            return ordinal() << 6;
         }
     }
 
@@ -795,9 +788,8 @@ public class LongOutputStreamV2
         private static final int BUFFER_SIZE = 64;
         private final byte[] writeBuffer = new byte[BUFFER_SIZE];
 
-        static void writeVulong(SliceOutput output, long inputValue)
+        static void writeVulong(SliceOutput output, long value)
         {
-            long value = inputValue;
             while (true) {
                 if ((value & ~0x7f) == 0) {
                     output.write((byte) value);
@@ -818,9 +810,8 @@ public class LongOutputStreamV2
         /**
          * Count the number of bits required to encode the given value
          */
-        static int findClosestNumBits(long inputValue)
+        static int findClosestNumBits(long value)
         {
-            long value = inputValue;
             int count = 0;
             while (value != 0) {
                 count++;
@@ -954,12 +945,11 @@ public class LongOutputStreamV2
          * Finds the closest available fixed bit width match and returns its encoded
          * value (ordinal)
          *
-         * @param nBits - fixed bit width to encode
+         * @param n - fixed bit width to encode
          * @return encoded fixed bit width
          */
-        static int encodeBitWidth(int nBits)
+        static int encodeBitWidth(int n)
         {
-            int n = nBits;
             n = getClosestFixedBits(n);
 
             if (n >= 1 && n <= 24) {
@@ -1067,8 +1057,6 @@ public class LongOutputStreamV2
                 case 64:
                     unrolledBitPack64(input, offset, length, output);
                     return;
-                default:
-                    break; // do nothing
             }
 
             // this is used by the patch base code
@@ -1245,9 +1233,8 @@ public class LongOutputStreamV2
             }
         }
 
-        private void writeRemainingLongs(SliceOutput output, int offset, long[] input, int remainder0, int numBytes)
+        private void writeRemainingLongs(SliceOutput output, int offset, long[] input, int remainder, int numBytes)
         {
-            int remainder = remainder0;
             final int numHops = remainder;
 
             int idx = 0;

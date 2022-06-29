@@ -34,7 +34,6 @@ import io.prestosql.metadata.Split;
 import io.prestosql.spi.HetuConstant;
 import io.prestosql.spi.HostAddress;
 import io.prestosql.spi.connector.CatalogName;
-import io.prestosql.spi.plan.PlanNodeId;
 import io.prestosql.spi.service.PropertyService;
 
 import javax.annotation.PreDestroy;
@@ -134,7 +133,7 @@ public class NodeScheduler
         return counters.build();
     }
 
-    public NodeSelector createNodeSelector(CatalogName catalogName, boolean keepConsumerOnFeederNodes, Map<PlanNodeId, FixedNodeScheduleData> feederScheduledNodes)
+    public NodeSelector createNodeSelector(CatalogName catalogName)
     {
         // this supplier is thread-safe. TODO: this logic should probably move to the scheduler since the choice of which node to run in should be
         // done as close to when the the split is about to be scheduled
@@ -142,6 +141,8 @@ public class NodeScheduler
             ImmutableSetMultimap.Builder<HostAddress, InternalNode> byHostAndPort = ImmutableSetMultimap.builder();
             ImmutableSetMultimap.Builder<InetAddress, InternalNode> byHost = ImmutableSetMultimap.builder();
             ImmutableSetMultimap.Builder<NetworkLocation, InternalNode> workersByNetworkPath = ImmutableSetMultimap.builder();
+
+            System.out.println(nodeManager.getClass().toString());
 
             Set<InternalNode> nodes;
             if (catalogName != null) {
@@ -180,10 +181,6 @@ public class NodeScheduler
             return new NodeMap(byHostAndPort.build(), byHost.build(), workersByNetworkPath.build(), coordinatorNodeIds);
         }, 2, TimeUnit.SECONDS);
 
-        if (keepConsumerOnFeederNodes) {
-            return new SimpleFixedNodeSelector(nodeManager, nodeTaskMap, includeCoordinator, nodeMap, minCandidates, maxSplitsPerNode, maxPendingSplitsPerTask, optimizedLocalScheduling, feederScheduledNodes);
-        }
-
         NodeSelector defaultNodeSelector = null;
         if (useNetworkTopology) {
             defaultNodeSelector = new TopologyAwareNodeSelector(
@@ -196,11 +193,10 @@ public class NodeScheduler
                     maxPendingSplitsPerTask,
                     topologicalSplitCounters,
                     networkLocationSegmentNames,
-                    networkLocationCache,
-                    feederScheduledNodes);
+                    networkLocationCache);
         }
         else {
-            defaultNodeSelector = new SimpleNodeSelector(nodeManager, nodeTaskMap, includeCoordinator, nodeMap, minCandidates, maxSplitsPerNode, maxPendingSplitsPerTask, optimizedLocalScheduling, feederScheduledNodes);
+            defaultNodeSelector = new SimpleNodeSelector(nodeManager, nodeTaskMap, includeCoordinator, nodeMap, minCandidates, maxSplitsPerNode, maxPendingSplitsPerTask, optimizedLocalScheduling);
         }
 
         if (PropertyService.getBooleanProperty(HetuConstant.SPLIT_CACHE_MAP_ENABLED)) {
@@ -212,8 +208,7 @@ public class NodeScheduler
                     minCandidates,
                     maxSplitsPerNode,
                     maxPendingSplitsPerTask,
-                    defaultNodeSelector,
-                    feederScheduledNodes);
+                    defaultNodeSelector);
         }
         else {
             return defaultNodeSelector;
@@ -232,10 +227,10 @@ public class NodeScheduler
         return selected;
     }
 
-    public static ResettableRandomizedIterator<InternalNode> randomizedNodes(NodeMap nodeMap, Set<InternalNode> excludedNodes)
+    public static ResettableRandomizedIterator<InternalNode> randomizedNodes(NodeMap nodeMap, boolean includeCoordinator, Set<InternalNode> excludedNodes)
     {
         ImmutableList<InternalNode> nodes = nodeMap.getNodesByHostAndPort().values().stream()
-                .filter(InternalNode::isWorker)
+                .filter(node -> includeCoordinator || !nodeMap.getCoordinatorNodeIds().contains(node.getNodeIdentifier()))
                 .filter(node -> !excludedNodes.contains(node))
                 .collect(toImmutableList());
         return new ResettableRandomizedIterator<>(nodes);
@@ -244,10 +239,11 @@ public class NodeScheduler
     public static List<InternalNode> selectExactNodes(NodeMap nodeMap, List<HostAddress> hosts, boolean includeCoordinator)
     {
         Set<InternalNode> chosen = new LinkedHashSet<>();
+        Set<String> coordinatorIds = nodeMap.getCoordinatorNodeIds();
 
         for (HostAddress host : hosts) {
             nodeMap.getNodesByHostAndPort().get(host).stream()
-                    .filter(InternalNode::isWorker)
+                    .filter(node -> includeCoordinator || !coordinatorIds.contains(node.getNodeIdentifier()))
                     .forEach(chosen::add);
 
             InetAddress address;
@@ -262,7 +258,7 @@ public class NodeScheduler
             // consider a split with a host without a port as being accessible by all nodes in that host
             if (!host.hasPort()) {
                 nodeMap.getNodesByHost().get(address).stream()
-                        .filter(InternalNode::isWorker)
+                        .filter(node -> includeCoordinator || !coordinatorIds.contains(node.getNodeIdentifier()))
                         .forEach(chosen::add);
             }
         }
@@ -309,6 +305,7 @@ public class NodeScheduler
 
         Set<InternalNode> blockedNodes = new HashSet<>();
         for (Split split : splits) {
+            System.out.println(split.getClass().toString());
             // node placement is forced by the bucket to node map
             InternalNode node = bucketNodeMap.getAssignedNode(split).get();
 
@@ -362,10 +359,5 @@ public class NodeScheduler
                 .map(remoteTask -> remoteTask.whenSplitQueueHasSpace(spaceThreshold))
                 .collect(toImmutableList());
         return whenAnyCompleteCancelOthers(stateChangeFutures);
-    }
-
-    public void refreshNodeStates()
-    {
-        nodeManager.refreshWorkerStates();
     }
 }

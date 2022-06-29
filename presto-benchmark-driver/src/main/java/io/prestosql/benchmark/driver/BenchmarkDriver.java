@@ -52,8 +52,8 @@ public class BenchmarkDriver
     public void run(Suite suite)
     {
         // select queries to run
-        List<BenchmarkQuery> benchmarkQueries = suite.selectQueries(this.queries);
-        if (benchmarkQueries.isEmpty()) {
+        List<BenchmarkQuery> queries = suite.selectQueries(this.queries);
+        if (queries.isEmpty()) {
             return;
         }
 
@@ -78,7 +78,7 @@ public class BenchmarkDriver
         }
 
         for (BenchmarkSchema benchmarkSchema : benchmarkSchemas) {
-            for (BenchmarkQuery benchmarkQuery : benchmarkQueries) {
+            for (BenchmarkQuery benchmarkQuery : queries) {
                 session = ClientSession.builder(session)
                         .withCatalog(session.getCatalog())
                         .withSchema(benchmarkSchema.getName())

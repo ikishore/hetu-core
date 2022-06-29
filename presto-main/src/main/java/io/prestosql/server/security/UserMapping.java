@@ -40,8 +40,8 @@ public final class UserMapping
             return new UserMapping(ImmutableList.of(new Rule(userMappingPattern.get())));
         }
         if (userMappingFile.isPresent()) {
-            List<Rule> tmpRules = parseJson(userMappingFile.get().toPath(), UserMappingRules.class).getRules();
-            return new UserMapping(tmpRules);
+            List<Rule> rules = parseJson(userMappingFile.get().toPath(), UserMappingRules.class).getRules();
+            return new UserMapping(rules);
         }
         return new UserMapping(ImmutableList.of(new Rule("(.*)")));
     }

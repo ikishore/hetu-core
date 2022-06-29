@@ -118,11 +118,11 @@ public class DeleteDeltaLocations
 
         public Optional<DeleteDeltaLocations> build()
         {
-            List<WriteIdInfo> localDeleteDeltas = deleteDeltaInfoBuilder.build();
-            if (localDeleteDeltas.isEmpty()) {
+            List<WriteIdInfo> deleteDeltas = deleteDeltaInfoBuilder.build();
+            if (deleteDeltas.isEmpty()) {
                 return Optional.empty();
             }
-            return Optional.of(new DeleteDeltaLocations(partitionLocation.toString(), localDeleteDeltas));
+            return Optional.of(new DeleteDeltaLocations(partitionLocation.toString(), deleteDeltas));
         }
     }
 }

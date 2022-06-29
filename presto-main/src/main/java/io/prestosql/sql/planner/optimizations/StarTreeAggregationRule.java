@@ -1,5 +1,5 @@
 /*
- * Copyright (C) 2018-2021. Huawei Technologies Co., Ltd. All rights reserved.
+ * Copyright (C) 2018-2020. Huawei Technologies Co., Ltd. All rights reserved.
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
  * You may obtain a copy of the License at
@@ -15,11 +15,10 @@
 
 package io.prestosql.sql.planner.optimizations;
 
+import com.google.common.collect.ImmutableSet;
 import io.airlift.log.Logger;
-import io.hetu.core.spi.cube.CubeFilter;
 import io.hetu.core.spi.cube.CubeMetadata;
 import io.hetu.core.spi.cube.CubeStatement;
-import io.hetu.core.spi.cube.aggregator.AggregationSignature;
 import io.hetu.core.spi.cube.io.CubeMetaStore;
 import io.prestosql.Session;
 import io.prestosql.SystemSessionProperties;
@@ -31,7 +30,9 @@ import io.prestosql.matching.Captures;
 import io.prestosql.matching.Pattern;
 import io.prestosql.metadata.Metadata;
 import io.prestosql.metadata.TableMetadata;
+import io.prestosql.spi.PrestoException;
 import io.prestosql.spi.PrestoWarning;
+import io.prestosql.spi.connector.ColumnHandle;
 import io.prestosql.spi.metadata.TableHandle;
 import io.prestosql.spi.plan.AggregationNode;
 import io.prestosql.spi.plan.FilterNode;
@@ -40,7 +41,9 @@ import io.prestosql.spi.plan.PlanNodeIdAllocator;
 import io.prestosql.spi.plan.ProjectNode;
 import io.prestosql.spi.plan.Symbol;
 import io.prestosql.spi.plan.TableScanNode;
-import io.prestosql.spi.predicate.TupleDomain;
+import io.prestosql.spi.relation.CallExpression;
+import io.prestosql.spi.relation.RowExpression;
+import io.prestosql.spi.relation.VariableReferenceExpression;
 import io.prestosql.sql.ExpressionUtils;
 import io.prestosql.sql.analyzer.FeaturesConfig;
 import io.prestosql.sql.parser.ParsingOptions;
@@ -50,15 +53,15 @@ import io.prestosql.sql.planner.PlanSymbolAllocator;
 import io.prestosql.sql.planner.SymbolsExtractor;
 import io.prestosql.sql.planner.TypeProvider;
 import io.prestosql.sql.planner.iterative.Rule;
+import io.prestosql.sql.relational.OriginalExpressionUtils;
 import io.prestosql.sql.tree.BooleanLiteral;
+import io.prestosql.sql.tree.Cast;
 import io.prestosql.sql.tree.Expression;
-import io.prestosql.sql.tree.Identifier;
-import org.apache.commons.lang3.tuple.ImmutablePair;
-import org.apache.commons.lang3.tuple.Pair;
+import io.prestosql.sql.tree.Literal;
+import io.prestosql.sql.tree.SymbolReference;
 
-import java.util.ArrayList;
 import java.util.Comparator;
-import java.util.HashSet;
+import java.util.HashMap;
 import java.util.LinkedList;
 import java.util.List;
 import java.util.Map;
@@ -77,7 +80,7 @@ import static io.prestosql.sql.planner.plan.Patterns.optionalSource;
 import static io.prestosql.sql.planner.plan.Patterns.source;
 import static io.prestosql.sql.planner.plan.Patterns.tableScan;
 import static io.prestosql.sql.relational.OriginalExpressionUtils.castToExpression;
-import static io.prestosql.sql.relational.OriginalExpressionUtils.castToRowExpression;
+import static io.prestosql.sql.relational.OriginalExpressionUtils.isExpression;
 import static java.util.Objects.requireNonNull;
 
 /**
@@ -97,6 +100,21 @@ public class StarTreeAggregationRule
         implements Rule<AggregationNode>
 {
     private static final Logger LOGGER = Logger.get(StarTreeAggregationRule.class);
+
+    public static final String AVG = "avg";
+
+    public static final String COUNT = "count";
+
+    public static final String SUM = "sum";
+
+    public static final String MIN = "min";
+
+    public static final String MAX = "max";
+
+    /**
+     * Aggregation functions supported by the Star-Tree index.
+     */
+    private static final Set<String> SUPPORTED_FUNCTIONS = ImmutableSet.of(AVG, COUNT, SUM, MIN, MAX);
 
     private static final Capture<Optional<PlanNode>> OPTIONAL_PRE_PROJECT_ONE = newCapture();
 
@@ -121,7 +139,7 @@ public class StarTreeAggregationRule
      * .  .  .  .  |- TableScanNode
      */
     private static final Pattern<AggregationNode> PATTERN = aggregation()
-            .matching(CubeOptimizerUtil::isSupportedAggregation)
+            .matching(StarTreeAggregationRule::isSupportedAggregation)
             .with(optionalSource(ProjectNode.class)
                     .matching(anyPlan().capturedAsIf(node -> node instanceof ProjectNode, OPTIONAL_PRE_PROJECT_ONE)
                             .with(optionalSource(ProjectNode.class)
@@ -186,9 +204,9 @@ public class StarTreeAggregationRule
         TableScanNode tableScanNode = captures.get(TABLE_SCAN);
 
         // Check if project nodes are supported
-        if (!CubeOptimizerUtil.supportedProjectNode(preProjectNodeOne) ||
-                !CubeOptimizerUtil.supportedProjectNode(preProjectNodeTwo) ||
-                !CubeOptimizerUtil.supportedProjectNode(postProjectNode)) {
+        if (!supportedProjectNode(preProjectNodeOne) ||
+                !supportedProjectNode(preProjectNodeTwo) ||
+                !supportedProjectNode(postProjectNode)) {
             // Unsupported ProjectNode is detected
             return Result.empty();
         }
@@ -197,11 +215,12 @@ public class StarTreeAggregationRule
         preProjectNodeOne.ifPresent(planNode -> projectNodes.add((ProjectNode) planNode));
         preProjectNodeTwo.ifPresent(planNode -> projectNodes.add((ProjectNode) planNode));
         postProjectNode.ifPresent(planNode -> projectNodes.add((ProjectNode) planNode));
-        TableMetadata tableMetadata = metadata.getTableMetadata(context.getSession(), tableScanNode.getTable());
-        Map<String, Object> symbolMappings = CubeOptimizerUtil.buildSymbolMappings(node, projectNodes, filterNode, tableScanNode, tableMetadata);
+
+        Map<String, Object> symbolMappings = buildSymbolMappings(node, projectNodes, filterNode, tableScanNode);
+
         try {
             return optimize(node,
-                    filterNode.orElse(null),
+                    filterNode,
                     tableScanNode,
                     symbolMappings,
                     context.getSession(),
@@ -209,7 +228,7 @@ public class StarTreeAggregationRule
                     context.getIdAllocator(),
                     context.getWarningCollector());
         }
-        catch (RuntimeException ex) {
+        catch (UnsupportedOperationException | IllegalArgumentException | IllegalStateException | PrestoException ex) {
             LOGGER.warn("Encountered exception '" + ex.getMessage() + "' while applying the StartTreeAggregationRule", ex);
             return Result.empty();
         }
@@ -220,7 +239,7 @@ public class StarTreeAggregationRule
     }
 
     public Result optimize(AggregationNode aggregationNode,
-            final PlanNode filterNode,
+            Optional<PlanNode> filterNode,
             TableScanNode tableScanNode,
             Map<String, Object> symbolMapping,
             Session session,
@@ -234,17 +253,11 @@ public class StarTreeAggregationRule
         CubeStatement statement = CubeStatementGenerator.generate(
                 tableName,
                 aggregationNode,
+                filterNode.map(FilterNode.class::cast).orElse(null),
                 symbolMapping);
 
         // Don't use star-tree for non-aggregate queries
         if (statement.getAggregations().isEmpty()) {
-            return Result.empty();
-        }
-        boolean hasDistinct = statement.getAggregations().stream().anyMatch(AggregationSignature::isDistinct);
-        // Do not use cube for queries that contains only count distinct aggregation and no group by clause
-        // Example: SELECT COUNT(DISTINCT userid) FROM usage_history WHERE day BETWEEN 1 AND 7
-        // Since cube is pre-aggregated, utilising it for such queries could return incorrect result
-        if (aggregationNode.hasEmptyGroupingSet() && hasDistinct) {
             return Result.empty();
         }
 
@@ -252,7 +265,7 @@ public class StarTreeAggregationRule
 
         //Compare FilterNode predicate with Cube predicates to evaluate which cube can be used.
         List<CubeMetadata> matchedCubeMetadataList = cubeMetadataList.stream()
-                .filter(cubeMetadata -> filterPredicateMatches((FilterNode) filterNode, cubeMetadata, session, symbolAllocator.getTypes()))
+                .filter(cubeMetadata -> filterPredicateMatches(filterNode.map(FilterNode.class::cast), cubeMetadata, session, symbolAllocator.getTypes()))
                 .collect(Collectors.toList());
 
         //Match based on filter conditions
@@ -261,20 +274,12 @@ public class StarTreeAggregationRule
         }
 
         LongSupplier lastModifiedTimeSupplier = metadata.getTableLastModifiedTimeSupplier(session, tableHandle);
-        if (lastModifiedTimeSupplier == null) {
-            warningCollector.add(new PrestoWarning(EXPIRED_CUBE, "Unable to identify last modified time of " + tableName + ". Ignoring star tree cubes."));
-            return Result.empty();
+        if (lastModifiedTimeSupplier != null) {
+            long lastModifiedTime = lastModifiedTimeSupplier.getAsLong();
+            matchedCubeMetadataList = matchedCubeMetadataList.stream()
+                    .filter(cubeMetadata -> cubeMetadata.getLastUpdated() > lastModifiedTime)
+                    .collect(Collectors.toList());
         }
-
-        //Filter out cubes that were created before the source table was updated
-        long lastModifiedTime = lastModifiedTimeSupplier.getAsLong();
-        //There was a problem retrieving last modified time, we should skip using star tree rather than failing the query
-        if (lastModifiedTime == -1L) {
-            return Result.empty();
-        }
-        matchedCubeMetadataList = matchedCubeMetadataList.stream()
-                .filter(cubeMetadata -> cubeMetadata.getSourceTableLastUpdatedTime() >= lastModifiedTime)
-                .collect(Collectors.toList());
 
         if (matchedCubeMetadataList.isEmpty()) {
             warningCollector.add(new PrestoWarning(EXPIRED_CUBE, tableName + " has been modified after creating cubes. Ignoring expired cubes."));
@@ -283,152 +288,187 @@ public class StarTreeAggregationRule
 
         //If multiple cubes are matching then lets select the recent built cube
         //so sort the cube based on the last updated time stamp
-        matchedCubeMetadataList.sort(Comparator.comparingLong(CubeMetadata::getLastUpdatedTime).reversed());
-        CubeMetadata matchedCubeMetadata = matchedCubeMetadataList.get(0);
-        AggregationRewriteWithCube aggregationRewriteWithCube = new AggregationRewriteWithCube(metadata, session, symbolAllocator, idAllocator, symbolMapping, matchedCubeMetadata);
-        return Result.ofPlanNode(aggregationRewriteWithCube.rewrite(aggregationNode, rewriteByRemovingSourceFilter(filterNode, matchedCubeMetadata)));
+        matchedCubeMetadataList.sort(Comparator.comparingLong(CubeMetadata::getLastUpdated).reversed());
+
+        AggregationRewriteWithCube aggregationRewriteWithCube = new AggregationRewriteWithCube(metadata, session, symbolAllocator, idAllocator, symbolMapping, matchedCubeMetadataList.get(0));
+        return Result.ofPlanNode(aggregationRewriteWithCube.rewrite(aggregationNode, filterNode.orElse(null)));
     }
 
-    private FilterNode rewriteByRemovingSourceFilter(PlanNode filterNode, CubeMetadata matchedCubeMetadata)
+    private boolean filterPredicateMatches(Optional<FilterNode> filterNode, CubeMetadata cubeMetadata, Session session, TypeProvider types)
     {
-        FilterNode rewritten = (FilterNode) filterNode;
-        if (filterNode != null && matchedCubeMetadata.getCubeFilter() != null && matchedCubeMetadata.getCubeFilter().getSourceTablePredicate() != null) {
-            //rewrite the expression by removing source filter predicate as cube would not have those columns necessarily
-            Expression predicate = castToExpression(((FilterNode) filterNode).getPredicate());
-            SqlParser sqlParser = new SqlParser();
-            Set<Identifier> sourceFilterPredicateColumns = ExpressionUtils.getIdentifiers(sqlParser.createExpression(matchedCubeMetadata.getCubeFilter().getSourceTablePredicate(), new ParsingOptions()));
-            predicate = ExpressionUtils.filterConjuncts(predicate,
-                    conjunct -> !sourceFilterPredicateColumns.containsAll(SymbolsExtractor.extractUnique(conjunct)
-                            .stream()
-                            .map(Symbol::getName)
-                            .map(Identifier::new)
-                            .collect(Collectors.toList())));
-            rewritten = new FilterNode(filterNode.getId(), ((FilterNode) filterNode).getSource(), castToRowExpression(predicate));
-        }
-        return rewritten;
-    }
-
-    private boolean atLeastMatchesOne(List<Expression> cubePredicates, TupleDomain<Symbol> queryPredicate, Session session, TypeProvider types)
-    {
-        return cubePredicates.stream().anyMatch(cubePredicate -> {
-            ExpressionDomainTranslator.ExtractionResult decomposedCubePredicate = ExpressionDomainTranslator.fromPredicate(metadata, session, cubePredicate, types);
-            return BooleanLiteral.TRUE_LITERAL.equals(decomposedCubePredicate.getRemainingExpression())
-                    && decomposedCubePredicate.getTupleDomain().contains(queryPredicate);
-        });
-    }
-
-    private boolean filterPredicateMatches(FilterNode filterNode, CubeMetadata cubeMetadata, Session session, TypeProvider types)
-    {
-        CubeFilter cubeFilter = cubeMetadata.getCubeFilter();
-
-        if (cubeFilter == null) {
-            //Cube was built for entire table
-            return filterNode == null || doesCubeContainQueryPredicateColumns(castToExpression(filterNode.getPredicate()), cubeMetadata);
-        }
-
-        if (filterNode == null) {
-            //Query statement has no WHERE clause but CUBE was built for subset of original data
-            return false;
-        }
-
-        SqlParser sqlParser = new SqlParser();
-        Expression queryPredicate = castToExpression(filterNode.getPredicate());
-        Expression sourceTablePredicate = cubeFilter.getSourceTablePredicate() == null ? null : sqlParser.createExpression(cubeFilter.getSourceTablePredicate(), new ParsingOptions());
-        Pair<Expression, Expression> splitQueryPredicate = splitQueryPredicate(queryPredicate, sourceTablePredicate);
-        if (!arePredicatesEqual(splitQueryPredicate.getLeft(), sourceTablePredicate, metadata, session, types)) {
-            LOGGER.debug("Cube source table predicate %s not matching query predicate %s", sourceTablePredicate, queryPredicate);
-            return false;
-        }
-        //Check if columns in query predicate are all part of the Cube.
-        if ((cubeFilter.getCubePredicate() != null && splitQueryPredicate.getRight() == null)
-                || (splitQueryPredicate.getRight() != null && !doesCubeContainQueryPredicateColumns(splitQueryPredicate.getRight(), cubeMetadata))) {
-            // Query predicate does not exactly match Cube predicate
-            // OR
-            // Cube does not contain all columns in the remaining predicate
-            return false;
-        }
-        if (cubeFilter.getCubePredicate() == null) {
-            //Cube has no additional predicates to compare with. i.e. Cube can be used to optimize the query
+        if (cubeMetadata.getPredicateString() == null) {
             return true;
         }
-        Expression cubePredicate = ExpressionUtils.rewriteIdentifiersToSymbolReferences(sqlParser.createExpression(cubeFilter.getCubePredicate(), new ParsingOptions()));
-        ExpressionDomainTranslator.ExtractionResult decomposedQueryPredicate = ExpressionDomainTranslator.fromPredicate(metadata, session, splitQueryPredicate.getRight(), types);
-        if (!BooleanLiteral.TRUE_LITERAL.equals(decomposedQueryPredicate.getRemainingExpression())) {
-            LOGGER.error("StarTree cube cannot support predicate %s", castToExpression(filterNode.getPredicate()));
+        if (!filterNode.isPresent()) {
             return false;
         }
-        ExpressionDomainTranslator.ExtractionResult decomposedCubePredicate = ExpressionDomainTranslator.fromPredicate(metadata, session, cubePredicate, types);
-        if (!BooleanLiteral.TRUE_LITERAL.equals(decomposedCubePredicate.getRemainingExpression())) {
-            //Can't create TupleDomain construct for this query predicate.
-            //eg: (col1 = 1 AND col2 = 1) OR (col1 > 1 and col2 = 2)
-            //Extract disjuncts from the Expression expression and evaluate separately
-            return atLeastMatchesOne(ExpressionUtils.extractDisjuncts(cubePredicate), decomposedQueryPredicate.getTupleDomain(), session, types);
-        }
-        return decomposedCubePredicate.getTupleDomain().contains(decomposedQueryPredicate.getTupleDomain());
-    }
+        SqlParser sqlParser = new SqlParser();
+        Expression cubePredicateAsExpr = sqlParser.createExpression(cubeMetadata.getPredicateString(), new ParsingOptions());
+        cubePredicateAsExpr = ExpressionUtils.rewriteIdentifiersToSymbolReferences(cubePredicateAsExpr);
 
-    private boolean doesCubeContainQueryPredicateColumns(Expression queryPredicate, CubeMetadata cubeMetadata)
-    {
-        Set<Identifier> cubeColumns = new HashSet<>();
-        cubeMetadata.getDimensions().stream().map(Identifier::new).forEach(cubeColumns::add);
-        Set<Identifier> queryPredicateColumns = SymbolsExtractor.extractUnique(queryPredicate)
-                .stream()
-                .map(Symbol::getName)
-                .map(Identifier::new)
-                .collect(Collectors.toSet());
-        return cubeColumns.containsAll(queryPredicateColumns);
+        RowExpression statementPredicate = filterNode.get().getPredicate();
+        if (isExpression(statementPredicate)) {
+            Expression statementPredicateAsExpr = castToExpression(statementPredicate);
+            statementPredicateAsExpr = ExpressionUtils.rewriteIdentifiersToSymbolReferences(statementPredicateAsExpr);
+            ExpressionDomainTranslator.ExtractionResult decomposeStatementPredicate = ExpressionDomainTranslator.fromPredicate(metadata, session, statementPredicateAsExpr, types);
+            if (!BooleanLiteral.TRUE_LITERAL.equals(decomposeStatementPredicate.getRemainingExpression())) {
+                LOGGER.error("StarTree index cannot support predicate %s", statementPredicate);
+                return false;
+            }
+            ExpressionDomainTranslator.ExtractionResult decomposedCubePredicate = ExpressionDomainTranslator.fromPredicate(metadata, session, cubePredicateAsExpr, types);
+            return decomposedCubePredicate.getTupleDomain().contains(decomposeStatementPredicate.getTupleDomain());
+        }
+        else {
+            LOGGER.error("StarTree index cannot support predicate %s", statementPredicate);
+            return false;
+        }
     }
 
     /**
-     * Split query predicate into two different expressions.
-     * First expression that can be compared with source table.
-     * Second expression is compared with Cube data range(defined as another predicate)
+     * Construct a map of symbols mapping to constant value or the underlying column name.
+     *
+     * @param projections the list of ProjectNodes in between the aggregation node and the tableScan node
+     * @param tableScanNode the table scan node
+     * @return output symbols to constant or actual column name mapping
      */
-    private Pair<Expression, Expression> splitQueryPredicate(Expression queryPredicate, Expression sourceTablePredicate)
+    public static Map<String, Object> buildSymbolMappings(AggregationNode aggregationNode,
+            List<ProjectNode> projections,
+            Optional<PlanNode> filterNode,
+            TableScanNode tableScanNode)
     {
-        if (sourceTablePredicate == null) {
-            return new ImmutablePair<>(null, queryPredicate);
+        // Initialize a map with outputSymbols mapping to themselves
+        Map<String, Object> symbolMapping = new HashMap<>();
+        aggregationNode.getOutputSymbols().stream().map(Symbol::getName).forEach(symbol -> symbolMapping.put(symbol, symbol));
+        aggregationNode.getAggregations().values().forEach(aggregation -> SymbolsExtractor.extractUnique(aggregation).stream().map(Symbol::getName)
+                .forEach(symbol -> symbolMapping.put(symbol, symbol)));
+        filterNode.ifPresent(planNode -> (SymbolsExtractor.extractUnique(((FilterNode) planNode).getPredicate())).stream()
+                .map(Symbol::getName)
+                .forEach(symbol -> symbolMapping.put(symbol, symbol)));
+
+        // Track how a symbol name is renamed throughout all project nodes
+        for (ProjectNode node : projections) {
+            Map<Symbol, RowExpression> assignments = node.getAssignments().getMap();
+            // ProjectNode is identity
+            for (Map.Entry<String, Object> symbolEntry : symbolMapping.entrySet()) {
+                RowExpression rowExpression = assignments.get(new Symbol(String.valueOf(symbolEntry.getValue())));
+                if (rowExpression == null) {
+                    continue;
+                }
+                if (OriginalExpressionUtils.isExpression(rowExpression)) {
+                    Expression expression = castToExpression(rowExpression);
+                    if (expression instanceof Cast) {
+                        expression = ((Cast) expression).getExpression();
+                    }
+
+                    if (expression instanceof SymbolReference) {
+                        symbolEntry.setValue(((SymbolReference) expression).getName());
+                    }
+                    else if (expression instanceof Literal) {
+                        symbolEntry.setValue(expression);
+                    }
+                }
+                else {
+                    if (rowExpression instanceof CallExpression) {
+                        // Extract the column symbols from CAST expressions
+                        while (rowExpression instanceof CallExpression) {
+                            rowExpression = ((CallExpression) rowExpression).getArguments().get(0);
+                        }
+                    }
+
+                    if (!(rowExpression instanceof VariableReferenceExpression)) {
+                        continue;
+                    }
+                    symbolEntry.setValue(((VariableReferenceExpression) rowExpression).getName());
+                }
+            }
         }
-        Set<Identifier> sourceFilterPredicateColumns = ExpressionUtils.getIdentifiers(sourceTablePredicate);
-        List<Expression> conjuncts = ExpressionUtils.extractConjuncts(queryPredicate);
-        List<Expression> sourceFilterPredicates = new ArrayList<>();
-        List<Expression> remainingPredicates = new ArrayList<>();
-        conjuncts.forEach(conjunct -> {
-            List<Identifier> identifiers = SymbolsExtractor.extractUnique(conjunct)
-                    .stream()
-                    .map(Symbol::getName)
-                    .map(Identifier::new)
-                    .collect(Collectors.toList());
-            if (sourceFilterPredicateColumns.containsAll(identifiers)) {
-                sourceFilterPredicates.add(conjunct);
+
+        // Update the map by actual outputSymbols being mapped by the symbol
+        Map<Symbol, ColumnHandle> assignments = tableScanNode.getAssignments();
+        for (Map.Entry<String, Object> symbolMappingEntry : symbolMapping.entrySet()) {
+            Object symbolName = symbolMappingEntry.getValue();
+            //read remaining Symbol name entries from map
+            if (symbolName instanceof String) {
+                ColumnHandle columnHandle = assignments.get(new Symbol((String) symbolName));
+                if (columnHandle != null) {
+                    symbolMappingEntry.setValue(columnHandle);
+                }
             }
-            else {
-                remainingPredicates.add(conjunct);
-            }
-        });
-        Expression cubePredicate1 = sourceFilterPredicateColumns.isEmpty() ? null : ExpressionUtils.combineConjuncts(sourceFilterPredicates);
-        Expression cubePredicate2 = remainingPredicates.isEmpty() ? null : ExpressionUtils.combineConjuncts(remainingPredicates);
-        return new ImmutablePair<>(cubePredicate1, cubePredicate2);
+        }
+        return symbolMapping;
     }
 
-    private boolean arePredicatesEqual(Expression inputLeft, Expression inputRight, Metadata metadata, Session session, TypeProvider types)
+    /**
+     * Checks if aggregation node can be optimized by this rule. Only if the AggregationNode has
+     * supporting functions, it will return true.
+     *
+     * @param aggregationNode the aggregation node
+     * @return true if aggregators are supported
+     */
+    static boolean isSupportedAggregation(AggregationNode aggregationNode)
     {
-        Expression left = inputLeft;
-        Expression right = inputRight;
-        if (left == null && right == null) {
+        if (aggregationNode.getOutputSymbols().isEmpty()) {
+            return false;
+        }
+
+        return aggregationNode.getAggregations()
+                .values()
+                .stream()
+                .allMatch(StarTreeAggregationRule::isSupported);
+    }
+
+    static boolean isSupported(AggregationNode.Aggregation aggregation)
+    {
+        return SUPPORTED_FUNCTIONS.contains(aggregation.getSignature().getName()) &&
+                aggregation.getSignature().getArgumentTypes().size() <= 1 &&
+                (!aggregation.isDistinct() || aggregation.getSignature().getName().equals(COUNT));
+    }
+
+    /**
+     * Checks if projection node can be optimized by this rule. Only if the PlanNode is a ProjectNode
+     * and only has SymbolReference or Literal expressions in projections.
+     *
+     * @param planNode the ProjectNode
+     * @return true if the planNode meets the requirements of ProjectNode
+     */
+    static boolean supportedProjectNode(Optional<PlanNode> planNode)
+    {
+        if (!planNode.isPresent()) {
+            // Project node is optional
             return true;
         }
-        else if (left == null || right == null) {
+
+        if (!(planNode.get() instanceof ProjectNode)) {
             return false;
         }
-        left = ExpressionUtils.rewriteIdentifiersToSymbolReferences(left);
-        right = ExpressionUtils.rewriteIdentifiersToSymbolReferences(right);
-        ExpressionDomainTranslator.ExtractionResult leftDecomposed = ExpressionDomainTranslator.fromPredicate(metadata, session, left, types);
-        ExpressionDomainTranslator.ExtractionResult rightDecomposed = ExpressionDomainTranslator.fromPredicate(metadata, session, right, types);
-        if (!BooleanLiteral.TRUE_LITERAL.equals(leftDecomposed.getRemainingExpression()) || !BooleanLiteral.TRUE_LITERAL.equals(rightDecomposed.getRemainingExpression())) {
-            LOGGER.error("Star tree cube cannot support predicate %s", left);
+
+        for (Map.Entry<Symbol, RowExpression> assignment : ((ProjectNode) planNode.get()).getAssignments().entrySet()) {
+            RowExpression rowExpression = assignment.getValue();
+            if (OriginalExpressionUtils.isExpression(rowExpression)) {
+                Expression expression = castToExpression(assignment.getValue());
+                if (expression instanceof SymbolReference || expression instanceof Literal) {
+                    continue;
+                }
+
+                if (expression instanceof Cast) {
+                    expression = ((Cast) expression).getExpression();
+                    return (expression instanceof SymbolReference || expression instanceof Literal);
+                }
+            }
+            else {
+                if (rowExpression instanceof VariableReferenceExpression) {
+                    continue;
+                }
+                if (rowExpression instanceof CallExpression) {
+                    // Extract the column symbols from CAST expressions
+                    while (rowExpression instanceof CallExpression) {
+                        rowExpression = ((CallExpression) rowExpression).getArguments().get(0);
+                    }
+                    return rowExpression instanceof VariableReferenceExpression;
+                }
+            }
             return false;
         }
-        return leftDecomposed.getTupleDomain().equals(rightDecomposed.getTupleDomain());
+        return true;
     }
 }

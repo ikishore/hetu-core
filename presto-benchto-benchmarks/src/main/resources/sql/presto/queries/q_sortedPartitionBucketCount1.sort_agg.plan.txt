@@ -1,5 +1,0 @@
-remote exchange (GATHER, SINGLE, [])
-    final hashaggregation over (wr_return_quantity)
-        local exchange (GATHER, SINGLE, [])
-            partial hashaggregation over (wr_return_quantity)
-                scan web_returns_partition_bucketcount1

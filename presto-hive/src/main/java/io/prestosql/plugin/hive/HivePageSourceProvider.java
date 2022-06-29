@@ -14,7 +14,6 @@
 package io.prestosql.plugin.hive;
 
 import com.google.common.collect.ImmutableList;
-import com.google.common.collect.ImmutableMap;
 import com.google.common.collect.ImmutableSet;
 import io.airlift.slice.Slice;
 import io.airlift.slice.Slices;
@@ -32,33 +31,21 @@ import io.prestosql.spi.connector.ConnectorTransactionHandle;
 import io.prestosql.spi.connector.FixedPageSource;
 import io.prestosql.spi.connector.RecordCursor;
 import io.prestosql.spi.connector.RecordPageSource;
-import io.prestosql.spi.dynamicfilter.CombinedDynamicFilter;
 import io.prestosql.spi.dynamicfilter.DynamicFilter;
 import io.prestosql.spi.dynamicfilter.DynamicFilterSupplier;
-import io.prestosql.spi.dynamicfilter.FilteredDynamicFilter;
-import io.prestosql.spi.function.BuiltInFunctionHandle;
-import io.prestosql.spi.function.Signature;
 import io.prestosql.spi.heuristicindex.IndexMetadata;
 import io.prestosql.spi.heuristicindex.SplitMetadata;
-import io.prestosql.spi.predicate.Domain;
-import io.prestosql.spi.predicate.Range;
 import io.prestosql.spi.predicate.TupleDomain;
-import io.prestosql.spi.predicate.ValueSet;
-import io.prestosql.spi.relation.CallExpression;
-import io.prestosql.spi.relation.RowExpression;
 import io.prestosql.spi.type.Type;
 import io.prestosql.spi.type.TypeManager;
 import org.apache.hadoop.conf.Configuration;
 import org.apache.hadoop.fs.Path;
-import org.apache.hadoop.hive.serde.serdeConstants;
-import org.apache.hadoop.hive.serde2.SerDeUtils;
-import org.eclipse.jetty.util.URIUtil;
+import org.joda.time.DateTimeZone;
 
 import javax.inject.Inject;
 
 import java.net.URI;
 import java.util.ArrayList;
-import java.util.Arrays;
 import java.util.HashSet;
 import java.util.List;
 import java.util.Map;
@@ -66,7 +53,6 @@ import java.util.Optional;
 import java.util.OptionalInt;
 import java.util.Properties;
 import java.util.Set;
-import java.util.stream.Collectors;
 
 import static com.google.common.base.Preconditions.checkArgument;
 import static com.google.common.base.Preconditions.checkState;
@@ -78,14 +64,13 @@ import static io.prestosql.plugin.hive.HiveColumnHandle.MAX_PARTITION_KEY_COLUMN
 import static io.prestosql.plugin.hive.HivePageSourceProvider.ColumnMapping.toColumnHandles;
 import static io.prestosql.plugin.hive.HiveUtil.isPartitionFiltered;
 import static io.prestosql.plugin.hive.coercions.HiveCoercer.createCoercer;
-import static io.prestosql.plugin.hive.metastore.MetastoreUtil.META_PARTITION_COLUMNS;
 import static java.util.Objects.requireNonNull;
 import static java.util.stream.Collectors.toList;
-import static org.apache.hadoop.hive.metastore.api.hive_metastoreConstants.META_TABLE_COLUMNS;
 
 public class HivePageSourceProvider
         implements ConnectorPageSourceProvider
 {
+    private final DateTimeZone hiveStorageTimeZone;
     private final HdfsEnvironment hdfsEnvironment;
     private final Set<HiveRecordCursorProvider> cursorProviders;
     private final TypeManager typeManager;
@@ -107,6 +92,7 @@ public class HivePageSourceProvider
             Set<HiveSelectivePageSourceFactory> selectivePageSourceFactories)
     {
         requireNonNull(hiveConfig, "hiveConfig is null");
+        this.hiveStorageTimeZone = hiveConfig.getDateTimeZone();
         this.hdfsEnvironment = requireNonNull(hdfsEnvironment, "hdfsEnvironment is null");
         this.cursorProviders = ImmutableSet.copyOf(requireNonNull(cursorProviders, "cursorProviders is null"));
         this.pageSourceFactories = ImmutableSet.copyOf(
@@ -128,7 +114,7 @@ public class HivePageSourceProvider
             ConnectorSplit split, ConnectorTableHandle table, List<ColumnHandle> columns,
             Optional<DynamicFilterSupplier> dynamicFilterSupplier)
     {
-        List<Map<ColumnHandle, DynamicFilter>> dynamicFilters = null;
+        Map<ColumnHandle, DynamicFilter> dynamicFilters = null;
         if (dynamicFilterSupplier.isPresent()) {
             dynamicFilters = dynamicFilterSupplier.get().getDynamicFilters();
         }
@@ -144,7 +130,7 @@ public class HivePageSourceProvider
             HiveSplit hiveSplit = hiveSplits.get(0);
             return createPageSourceInternal(session, dynamicFilterSupplier, dynamicFilters, hiveTable, hiveColumns, hiveSplit);
         }
-        List<Map<ColumnHandle, DynamicFilter>> finalDynamicFilters = dynamicFilters;
+        Map<ColumnHandle, DynamicFilter> finalDynamicFilters = dynamicFilters;
         List<ConnectorPageSource> pageSources = hiveSplits.stream()
                 .map(hiveSplit -> createPageSourceInternal(session, dynamicFilterSupplier, finalDynamicFilters, hiveTable, hiveColumns, hiveSplit))
                 .collect(toList());
@@ -153,45 +139,20 @@ public class HivePageSourceProvider
 
     private ConnectorPageSource createPageSourceInternal(ConnectorSession session,
             Optional<DynamicFilterSupplier> dynamicFilterSupplier,
-            List<Map<ColumnHandle, DynamicFilter>> dynamicFilters,
+            Map<ColumnHandle, DynamicFilter> dynamicFilters,
             HiveTableHandle hiveTable,
             List<HiveColumnHandle> hiveColumns,
             HiveSplit hiveSplit)
     {
         Path path = new Path(hiveSplit.getPath());
 
-        List<Set<DynamicFilter>> dynamicFilterList = new ArrayList();
-        if (dynamicFilters != null) {
-            for (Map<ColumnHandle, DynamicFilter> df : dynamicFilters) {
-                Set<DynamicFilter> values = df.values().stream().collect(Collectors.toSet());
-                dynamicFilterList.add(values);
-            }
-        }
         // Filter out splits using partition values and dynamic filters
-        if (dynamicFilters != null && !dynamicFilters.isEmpty() && isPartitionFiltered(hiveSplit.getPartitionKeys(), dynamicFilterList, typeManager)) {
+        if (dynamicFilters != null && !dynamicFilters.isEmpty() && isPartitionFiltered(hiveSplit.getPartitionKeys(), new HashSet(dynamicFilters.values()), typeManager)) {
             return new FixedPageSource(ImmutableList.of());
         }
 
         Configuration configuration = hdfsEnvironment.getConfiguration(
                 new HdfsEnvironment.HdfsContext(session, hiveSplit.getDatabase(), hiveSplit.getTable()), path);
-
-        Properties schema = hiveSplit.getSchema();
-        String columnNameDelimiter = schema.containsKey(serdeConstants.COLUMN_NAME_DELIMITER) ? schema
-                .getProperty(serdeConstants.COLUMN_NAME_DELIMITER) : String.valueOf(SerDeUtils.COMMA);
-        List<String> partitionColumnNames;
-        if (schema.containsKey(META_PARTITION_COLUMNS)) {
-            partitionColumnNames = Arrays.asList(schema.getProperty(META_PARTITION_COLUMNS).split(columnNameDelimiter));
-        }
-        else if (schema.containsKey(META_TABLE_COLUMNS)) {
-            partitionColumnNames = Arrays.asList(schema.getProperty(META_TABLE_COLUMNS).split(columnNameDelimiter));
-        }
-        else {
-            partitionColumnNames = new ArrayList<>();
-        }
-
-        List<String> tableColumns = hiveColumns.stream().map(cols -> cols.getName()).collect(toList());
-
-        List<String> missingColumns = tableColumns.stream().skip(partitionColumnNames.size()).collect(toList());
 
         List<IndexMetadata> indexes = new ArrayList<>();
         if (indexCache != null && session.isHeuristicIndexFilterEnabled()) {
@@ -211,21 +172,9 @@ public class HivePageSourceProvider
         }
         Optional<List<IndexMetadata>> indexOptional =
                 indexes == null || indexes.isEmpty() ? Optional.empty() : Optional.of(indexes);
-        URI splitUri = URI.create(URIUtil.encodePath(hiveSplit.getPath()));
-        SplitMetadata splitMetadata = new SplitMetadata(splitUri.getRawPath(), hiveSplit.getLastModifiedTime());
 
-        TupleDomain<HiveColumnHandle> predicate = TupleDomain.all();
-        if (dynamicFilterSupplier.isPresent() && dynamicFilters != null && !dynamicFilters.isEmpty()) {
-            if (dynamicFilters.size() == 1) {
-                List<HiveColumnHandle> filteredHiveColumnHandles = hiveColumns.stream().filter(column -> dynamicFilters.get(0).containsKey(column)).collect(toList());
-                HiveColumnHandle hiveColumnHandle = filteredHiveColumnHandles.get(0);
-                Type type = hiveColumnHandle.getColumnMetadata(typeManager).getType();
-                predicate = getPredicate(dynamicFilters.get(0).get(hiveColumnHandle), type, hiveColumnHandle);
-                if (predicate.isNone()) {
-                    predicate = TupleDomain.all();
-                }
-            }
-        }
+        URI splitUri = URI.create(hiveSplit.getPath().replaceAll(" ", "%20"));
+        SplitMetadata splitMetadata = new SplitMetadata(splitUri.getRawPath(), hiveSplit.getLastModifiedTime());
 
         /**
          * This is main logical division point to process filter pushdown enabled case (aka as selective read flow).
@@ -235,7 +184,7 @@ public class HivePageSourceProvider
          */
         if (hiveTable.isSuitableToPush()) {
             return createSelectivePageSource(selectivePageSourceFactories, configuration,
-                    session, hiveSplit, assignUniqueIndicesToPartitionColumns(hiveColumns), typeManager,
+                    session, hiveSplit, assignUniqueIndicesToPartitionColumns(hiveColumns), hiveStorageTimeZone, typeManager,
                     dynamicFilterSupplier, hiveSplit.getDeleteDeltaLocations(),
                     hiveSplit.getStartRowOffsetOfFile(),
                     indexOptional, hiveSplit.isCacheable(),
@@ -243,8 +192,7 @@ public class HivePageSourceProvider
                     hiveTable.getPredicateColumns(),
                     hiveTable.getDisjunctCompactEffectivePredicate(),
                     hiveSplit.getBucketConversion(),
-                    hiveSplit.getBucketNumber(),
-                    hiveSplit.getLastModifiedTime(), missingColumns);
+                    hiveSplit.getBucketNumber());
         }
 
         Optional<ConnectorPageSource> pageSource = createHivePageSource(
@@ -258,9 +206,10 @@ public class HivePageSourceProvider
                 hiveSplit.getLength(),
                 hiveSplit.getFileSize(),
                 hiveSplit.getSchema(),
-                hiveTable.getCompactEffectivePredicate().intersect(predicate),
+                hiveTable.getCompactEffectivePredicate(),
                 hiveColumns,
                 hiveSplit.getPartitionKeys(),
+                hiveStorageTimeZone,
                 typeManager,
                 hiveSplit.getColumnCoercions(),
                 hiveSplit.getBucketConversion(),
@@ -270,9 +219,7 @@ public class HivePageSourceProvider
                 hiveSplit.getStartRowOffsetOfFile(),
                 indexOptional,
                 splitMetadata,
-                hiveSplit.isCacheable(),
-                hiveSplit.getLastModifiedTime(),
-                hiveSplit.getCustomSplitInfo(), missingColumns);
+                hiveSplit.isCacheable());
         if (pageSource.isPresent()) {
             return pageSource.get();
         }
@@ -314,7 +261,6 @@ public class HivePageSourceProvider
      * @param predicateColumns Map of all columns handles being part of predicate
      * @param additionPredicates Predicates related to OR clause.
      * Remaining columns are same as for createHivePageSource.
-     * @param missingColumns
      * @return
      */
     private static ConnectorPageSource createSelectivePageSource(
@@ -323,6 +269,7 @@ public class HivePageSourceProvider
             ConnectorSession session,
             HiveSplit split,
             List<HiveColumnHandle> columns,
+            DateTimeZone hiveStorageTimeZone,
             TypeManager typeManager,
             Optional<DynamicFilterSupplier> dynamicFilterSupplier,
             Optional<DeleteDeltaLocations> deleteDeltaLocations,
@@ -333,8 +280,7 @@ public class HivePageSourceProvider
             Map<String, HiveColumnHandle> predicateColumns,
             Optional<List<TupleDomain<HiveColumnHandle>>> additionPredicates,
             Optional<HiveSplit.BucketConversion> bucketConversion,
-            OptionalInt bucketNumber,
-            long dataSourceLastModifiedTime, List<String> missingColumns)
+            OptionalInt bucketNumber)
     {
         Set<HiveColumnHandle> interimColumns = ImmutableSet.<HiveColumnHandle>builder()
                 .addAll(predicateColumns.values())
@@ -349,7 +295,7 @@ public class HivePageSourceProvider
                 split.getColumnCoercions(),
                 path,
                 bucketNumber,
-                true, missingColumns);
+                true);
 
         List<ColumnMapping> regularAndInterimColumnMappings = ColumnMapping.extractRegularAndInterimColumnMappings(
                 columnMappings);
@@ -388,17 +334,18 @@ public class HivePageSourceProvider
                     outputColumns,
                     effectivePredicate,
                     additionPredicates,
+                    hiveStorageTimeZone,
                     deleteDeltaLocations,
                     startRowOffsetOfFile,
                     indexes,
                     splitCacheable,
                     columnMappings,
-                    coercers,
-                    dataSourceLastModifiedTime);
+                    coercers);
             if (pageSource.isPresent()) {
                 return new HivePageSource(
                                 columnMappings,
                                 Optional.empty(),
+                                hiveStorageTimeZone,
                                 typeManager,
                                 pageSource.get(),
                                 dynamicFilterSupplier,
@@ -424,6 +371,7 @@ public class HivePageSourceProvider
             TupleDomain<HiveColumnHandle> effectivePredicate,
             List<HiveColumnHandle> hiveColumns,
             List<HivePartitionKey> partitionKeys,
+            DateTimeZone hiveStorageTimeZone,
             TypeManager typeManager,
             Map<Integer, HiveType> columnCoercions,
             Optional<HiveSplit.BucketConversion> bucketConversion,
@@ -433,9 +381,7 @@ public class HivePageSourceProvider
             Optional<Long> startRowOffsetOfFile,
             Optional<List<IndexMetadata>> indexes,
             SplitMetadata splitMetadata,
-            boolean splitCacheable,
-            long dataSourceLastModifiedTime,
-            Map<String, String> customSplitInfo, List<String> missingColumns)
+            boolean splitCacheable)
     {
         List<ColumnMapping> columnMappings = ColumnMapping.buildColumnMappings(
                 partitionKeys,
@@ -444,7 +390,7 @@ public class HivePageSourceProvider
                 columnCoercions,
                 path,
                 bucketNumber,
-                true, missingColumns);
+                true);
         List<ColumnMapping> regularAndInterimColumnMappings = ColumnMapping.extractRegularAndInterimColumnMappings(
                 columnMappings);
 
@@ -461,18 +407,19 @@ public class HivePageSourceProvider
                     schema,
                     toColumnHandles(regularAndInterimColumnMappings, true),
                     effectivePredicate,
+                    hiveStorageTimeZone,
                     dynamicFilterSupplier,
                     deleteDeltaLocations,
                     startRowOffsetOfFile,
                     indexes,
                     splitMetadata,
-                    splitCacheable,
-                    dataSourceLastModifiedTime);
+                    splitCacheable);
             if (pageSource.isPresent()) {
                 return Optional.of(
                         new HivePageSource(
                                 columnMappings,
                                 bucketAdaptation,
+                                hiveStorageTimeZone,
                                 typeManager,
                                 pageSource.get(),
                                 dynamicFilterSupplier,
@@ -495,9 +442,9 @@ public class HivePageSourceProvider
                     schema,
                     toColumnHandles(regularAndInterimColumnMappings, doCoercion),
                     effectivePredicate,
+                    hiveStorageTimeZone,
                     typeManager,
-                    s3SelectPushdownEnabled,
-                    customSplitInfo);
+                    s3SelectPushdownEnabled);
 
             if (cursor.isPresent()) {
                 RecordCursor delegate = cursor.get();
@@ -523,6 +470,7 @@ public class HivePageSourceProvider
 
                 HiveRecordCursor hiveRecordCursor = new HiveRecordCursor(
                         columnMappings,
+                        hiveStorageTimeZone,
                         typeManager,
                         delegate);
                 List<Type> columnTypes = hiveColumns.stream()
@@ -627,7 +575,7 @@ public class HivePageSourceProvider
         public String getPrefilledValue()
         {
             checkState(kind == ColumnMappingKind.PREFILLED);
-            return prefilledValue.isPresent() ? prefilledValue.get() : HIVE_DEFAULT_PARTITION_VALUE;
+            return prefilledValue.get();
         }
 
         public HiveColumnHandle getHiveColumnHandle()
@@ -652,7 +600,6 @@ public class HivePageSourceProvider
          * @param requiredInterimColumns columns that are needed for processing, but shouldn't be returned to engine (may overlaps with columns)
          * @param columnCoercions map from hive column index to hive type
          * @param bucketNumber empty if table is not bucketed, a number within [0, # bucket in table) otherwise
-         * @param missingColumns
          */
         public static List<ColumnMapping> buildColumnMappings(
                 List<HivePartitionKey> partitionKeys,
@@ -661,27 +608,22 @@ public class HivePageSourceProvider
                 Map<Integer, HiveType> columnCoercions,
                 Path path,
                 OptionalInt bucketNumber,
-                boolean filterPushDown, List<String> missingColumns)
+                boolean filterPushDown)
         {
             Map<String, HivePartitionKey> partitionKeysByName = uniqueIndex(partitionKeys, HivePartitionKey::getName);
             int regularIndex = 0;
             Set<Integer> regularColumnIndices = new HashSet<>();
             ImmutableList.Builder<ColumnMapping> columnMappings = ImmutableList.builder();
             for (HiveColumnHandle column : columns) {
-                Optional<HiveType> localCoercionFrom = Optional.ofNullable(columnCoercions.get(column.getHiveColumnIndex()));
+                Optional<HiveType> coercionFrom = Optional.ofNullable(columnCoercions.get(column.getHiveColumnIndex()));
                 if (column.getColumnType() == REGULAR) {
-                    if (missingColumns.contains(column.getColumnName())) {
-                        columnMappings.add(new ColumnMapping(ColumnMappingKind.PREFILLED, column, Optional.empty(),
-                                OptionalInt.empty(), localCoercionFrom));
-                        continue;
-                    }
                     checkArgument(regularColumnIndices.add(column.getHiveColumnIndex()), "duplicate hiveColumnIndex in columns list");
 
-                    columnMappings.add(regular(column, regularIndex, localCoercionFrom));
+                    columnMappings.add(regular(column, regularIndex, coercionFrom));
                     regularIndex++;
                 }
                 else if (HiveColumnHandle.isUpdateColumnHandle(column)) {
-                    columnMappings.add(transaction(column, regularIndex, localCoercionFrom));
+                    columnMappings.add(transaction(column, regularIndex, coercionFrom));
                     regularIndex++;
                 }
                 else {
@@ -689,7 +631,7 @@ public class HivePageSourceProvider
                             column,
                             HiveUtil.getPrefilledColumnValue(column, partitionKeysByName.get(column.getName()), path,
                                     bucketNumber),
-                            localCoercionFrom));
+                            coercionFrom));
                 }
             }
             for (HiveColumnHandle column : requiredInterimColumns) {
@@ -751,52 +693,6 @@ public class HivePageSourceProvider
             return Slices.utf8Slice(partitionValue);
         }
         return partitionValue;
-    }
-
-    protected static Domain modifyDomain(Domain inputDomain, Optional<RowExpression> filter)
-    {
-        Domain domain = inputDomain;
-        Range range = domain.getValues().getRanges().getSpan();
-        if (filter.isPresent() && filter.get() instanceof CallExpression) {
-            CallExpression call = (CallExpression) filter.get();
-            BuiltInFunctionHandle builtInFunctionHandle = (BuiltInFunctionHandle) call.getFunctionHandle();
-            String name = builtInFunctionHandle.getSignature().getNameSuffix();
-            if (name.contains("$operator$") && Signature.unmangleOperator(name).isComparisonOperator()) {
-                switch (Signature.unmangleOperator(name)) {
-                    case LESS_THAN:
-                        range = Range.lessThan(domain.getType(), range.getHigh().getValue());
-                        break;
-                    case GREATER_THAN:
-                        range = Range.greaterThan(domain.getType(), range.getLow().getValue());
-                        break;
-                    case LESS_THAN_OR_EQUAL:
-                        range = Range.lessThanOrEqual(domain.getType(), range.getHigh().getValue());
-                        break;
-                    case GREATER_THAN_OR_EQUAL:
-                        range = Range.greaterThanOrEqual(domain.getType(), range.getLow().getValue());
-                        break;
-                    default:
-                        return domain;
-                }
-                domain = Domain.create(ValueSet.ofRanges(range), false);
-            }
-        }
-        return domain;
-    }
-
-    private static TupleDomain<HiveColumnHandle> getPredicate(DynamicFilter dynamicFilter, Type type, HiveColumnHandle hiveColumnHandle)
-    {
-        if (dynamicFilter instanceof CombinedDynamicFilter) {
-            List<DynamicFilter> filters = ((CombinedDynamicFilter) dynamicFilter).getFilters();
-            List<TupleDomain<HiveColumnHandle>> predicates = filters.stream().map(filter -> getPredicate(filter, type, hiveColumnHandle)).collect(toList());
-            return predicates.stream().reduce(TupleDomain.all(), TupleDomain::intersect);
-        }
-        if (dynamicFilter instanceof FilteredDynamicFilter && !((FilteredDynamicFilter) dynamicFilter).getSetValues().isEmpty()) {
-            Domain domain = Domain.create(ValueSet.copyOf(type, ((FilteredDynamicFilter) dynamicFilter).getSetValues()), false);
-            domain = modifyDomain(domain, ((FilteredDynamicFilter) dynamicFilter).getFilterExpression());
-            return TupleDomain.withColumnDomains(ImmutableMap.of(hiveColumnHandle, domain));
-        }
-        return TupleDomain.all();
     }
 
     public enum ColumnMappingKind

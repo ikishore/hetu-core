@@ -18,7 +18,7 @@ import com.google.gson.Gson;
 import io.prestosql.plugin.hive.HiveACIDWriteType;
 import io.prestosql.plugin.hive.HiveFileWriter;
 import io.prestosql.plugin.hive.HiveType;
-import io.prestosql.plugin.hive.util.FieldSetterFactory;
+import io.prestosql.plugin.hive.HiveWriteUtils;
 import io.prestosql.spi.Page;
 import io.prestosql.spi.PrestoException;
 import io.prestosql.spi.block.Block;
@@ -64,7 +64,6 @@ import org.apache.hadoop.mapred.Reporter;
 import org.apache.hadoop.mapred.TaskAttemptID;
 import org.apache.hadoop.mapreduce.TaskType;
 import org.apache.log4j.Logger;
-import org.joda.time.DateTimeZone;
 
 import java.io.IOException;
 import java.io.UncheckedIOException;
@@ -94,7 +93,6 @@ public class CarbondataFileWriter
 {
     private static final Logger LOG =
             LogServiceFactory.getLogService(CarbondataFileWriter.class.getName());
-    private static final io.airlift.log.Logger AIR_LOG = io.airlift.log.Logger.get(CarbondataFileWriter.class);
 
     private static final String LOAD_MODEL = "mapreduce.carbontable.load.model";
 
@@ -105,7 +103,7 @@ public class CarbondataFileWriter
     private final Object row;
     private final SettableStructObjectInspector tableInspector;
     private final List<StructField> structFields;
-    private final FieldSetterFactory.FieldSetter[] setters;
+    private final HiveWriteUtils.FieldSetter[] setters;
     private final Properties properties;
     private final Optional<AcidOutputFormat.Options> acidOptions;
     private final HiveACIDWriteType acidWriteType;
@@ -127,16 +125,15 @@ public class CarbondataFileWriter
     private boolean isInitDone;
     private boolean isCommitDone;
 
-    public CarbondataFileWriter(Path paramOutPutPath, List<String> inputColumnNames, Properties properties,
+    public CarbondataFileWriter(Path outPutPath, List<String> inputColumnNames, Properties properties,
                                 JobConf configuration, TypeManager typeManager, Optional<AcidOutputFormat.Options> acidOptions,
                                 Optional<HiveACIDWriteType> acidWriteType, OptionalInt taskId) throws SerDeException
     {
-        Path localOutPutPath = paramOutPutPath;
-        this.outPutPath = requireNonNull(localOutPutPath, "path is null");
+        this.outPutPath = requireNonNull(outPutPath, "path is null");
         // in table creation this can be null
         if (null != properties.getProperty("location")) {
             this.outPutPath = new Path(properties.getProperty("location"));
-            localOutPutPath = new Path(properties.getProperty("location"));
+            outPutPath = new Path(properties.getProperty("location"));
         }
         this.configuration = requireNonNull(configuration, "conf is null");
         this.properties = requireNonNull(properties, "Properties is null");
@@ -146,7 +143,6 @@ public class CarbondataFileWriter
                 Long.toString(System.currentTimeMillis()));
         this.taskId = taskId.orElseGet(() -> 0);
 
-        AIR_LOG.debug("[carbonWriterTask] taskId: " + this.taskId + ", outputPath: " + this.outPutPath);
         try {
             if (HiveACIDWriteType.isUpdateOrDelete(this.acidWriteType)) {
                 String encodedCarbonTable = configuration.get(CarbondataConstants.CarbonTable);
@@ -185,16 +181,13 @@ public class CarbondataFileWriter
 
         row = tableInspector.create();
 
-        setters = new FieldSetterFactory.FieldSetter[structFields.size()];
-
-        FieldSetterFactory fieldSetterFactory = new FieldSetterFactory(DateTimeZone.UTC);
-
+        setters = new HiveWriteUtils.FieldSetter[structFields.size()];
         for (int i = 0; i < setters.length; i++) {
-            setters[i] = fieldSetterFactory.create(tableInspector, row, structFields.get(i),
+            setters[i] = HiveWriteUtils.createFieldSetter(tableInspector, row, structFields.get(i),
                     fileColumnTypes.get(structFields.get(i).getFieldID()));
         }
 
-        if (this.acidWriteType == HiveACIDWriteType.INSERT || this.acidWriteType == HiveACIDWriteType.INSERT_OVERWRITE) {
+        if (this.acidWriteType == HiveACIDWriteType.INSERT | this.acidWriteType == HiveACIDWriteType.INSERT_OVERWRITE) {
             try {
                 boolean compress = HiveConf.getBoolVar(configuration, COMPRESSRESULT);
 
@@ -212,7 +205,7 @@ public class CarbondataFileWriter
                     Object writer =
                             Class.forName(MapredCarbonOutputFormat.class.getName()).getConstructor().newInstance();
                     recordWriter = ((MapredCarbonOutputFormat<?>) writer)
-                            .getHiveRecordWriter(this.configuration, localOutPutPath, Text.class, compress,
+                            .getHiveRecordWriter(this.configuration, outPutPath, Text.class, compress,
                                     properties, Reporter.NULL);
                 }
 
@@ -227,25 +220,25 @@ public class CarbondataFileWriter
 
     private FileSinkOperator.RecordWriter getHiveWriter(String segmentId, long taskNo) throws Exception
     {
-        Path finalOutPutPath = this.outPutPath;
-        Properties finalProperties = this.properties;
-        JobConf finalConfiguration = this.configuration;
-        boolean compress = HiveConf.getBoolVar(finalConfiguration, COMPRESSRESULT);
+        Path outPutPath = this.outPutPath;
+        Properties properties = this.properties;
+        JobConf configuration = this.configuration;
+        boolean compress = HiveConf.getBoolVar(configuration, COMPRESSRESULT);
 
-        CarbonLoadModel carbonLoadModel = HiveCarbonUtil.getCarbonLoadModel(finalProperties, finalConfiguration);
+        CarbonLoadModel carbonLoadModel = HiveCarbonUtil.getCarbonLoadModel(properties, configuration);
         carbonLoadModel.setSegmentId(segmentId);
         carbonLoadModel.setTaskNo(String.valueOf(taskNo));
         carbonLoadModel.setFactTimeStamp(Long.parseLong(txnTimeStamp));
         carbonLoadModel.setBadRecordsAction(TableOptionConstant.BAD_RECORDS_ACTION.getName() + ",force");
 
-        CarbonTableOutputFormat.setLoadModel(finalConfiguration, carbonLoadModel);
+        CarbonTableOutputFormat.setLoadModel(configuration, carbonLoadModel);
         this.configuration.set(CarbondataConstants.TaskId, getTaskAttemptId(String.valueOf(taskNo)));
 
         Object writer =
                 Class.forName(MapredCarbonOutputFormat.class.getName()).getConstructor().newInstance();
         return ((MapredCarbonOutputFormat<?>) writer)
-                .getHiveRecordWriter(finalConfiguration, finalOutPutPath, Text.class, compress,
-                        finalProperties, Reporter.NULL);
+                .getHiveRecordWriter(configuration, outPutPath, Text.class, compress,
+                        properties, Reporter.NULL);
     }
 
     @Override
@@ -286,7 +279,7 @@ public class CarbondataFileWriter
 
     public void appendRow(Page dataPage, int position)
     {
-        FileSinkOperator.RecordWriter finalRecordWriter = null;
+        FileSinkOperator.RecordWriter recordWriter = null;
         if (HiveACIDWriteType.isUpdateOrDelete(acidWriteType)) {
             try {
                 DeleteDeltaBlockDetails deleteDeltaBlockDetails = null;
@@ -335,7 +328,7 @@ public class CarbondataFileWriter
                     return;
                 }
 
-                finalRecordWriter = segmentRecordWriterMap.computeIfAbsent(segmentId, v ->
+                recordWriter = segmentRecordWriterMap.computeIfAbsent(segmentId, v ->
                 {
                     try {
                         return getHiveWriter(segmentId, CarbonUpdateUtil.getLatestTaskIdForSegment(new Segment(segmentId), tablePath) + 1);
@@ -352,7 +345,7 @@ public class CarbondataFileWriter
             }
         }
         else {
-            finalRecordWriter = this.recordWriter;
+            recordWriter = this.recordWriter;
         }
 
         for (int field = 0; field < fieldCount; field++) {
@@ -366,8 +359,8 @@ public class CarbondataFileWriter
         }
 
         try {
-            if (finalRecordWriter != null) {
-                finalRecordWriter.write(serDe.serialize(row, tableInspector));
+            if (recordWriter != null) {
+                recordWriter.write(serDe.serialize(row, tableInspector));
             }
         }
         catch (SerDeException | IOException e) {

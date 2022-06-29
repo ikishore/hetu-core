@@ -52,7 +52,7 @@ import static java.util.stream.Collectors.toList;
 public class RcFileFileWriterFactory
         implements HiveFileWriterFactory
 {
-    private final DateTimeZone timeZone;
+    private final DateTimeZone hiveStorageTimeZone;
     private final HdfsEnvironment hdfsEnvironment;
     private final TypeManager typeManager;
     private final NodeVersion nodeVersion;
@@ -66,20 +66,20 @@ public class RcFileFileWriterFactory
             HiveConfig hiveConfig,
             FileFormatDataSourceStats stats)
     {
-        this(hdfsEnvironment, typeManager, nodeVersion, requireNonNull(hiveConfig, "hiveConfig is null").getRcfileDateTimeZone(), stats);
+        this(hdfsEnvironment, typeManager, nodeVersion, requireNonNull(hiveConfig, "hiveConfig is null").getDateTimeZone(), stats);
     }
 
     public RcFileFileWriterFactory(
             HdfsEnvironment hdfsEnvironment,
             TypeManager typeManager,
             NodeVersion nodeVersion,
-            DateTimeZone timeZone,
+            DateTimeZone hiveStorageTimeZone,
             FileFormatDataSourceStats stats)
     {
         this.hdfsEnvironment = requireNonNull(hdfsEnvironment, "hdfsEnvironment is null");
         this.typeManager = requireNonNull(typeManager, "typeManager is null");
         this.nodeVersion = requireNonNull(nodeVersion, "nodeVersion is null");
-        this.timeZone = requireNonNull(timeZone, "timeZone is null");
+        this.hiveStorageTimeZone = requireNonNull(hiveStorageTimeZone, "hiveStorageTimeZone is null");
         this.stats = requireNonNull(stats, "stats is null");
     }
 
@@ -98,10 +98,10 @@ public class RcFileFileWriterFactory
 
         RcFileEncoding rcFileEncoding;
         if (LazyBinaryColumnarSerDe.class.getName().equals(storageFormat.getSerDe())) {
-            rcFileEncoding = new BinaryRcFileEncoding(timeZone);
+            rcFileEncoding = new BinaryRcFileEncoding();
         }
         else if (ColumnarSerDe.class.getName().equals(storageFormat.getSerDe())) {
-            rcFileEncoding = RcFilePageSourceFactory.createTextVectorEncoding(schema);
+            rcFileEncoding = RcFilePageSourceFactory.createTextVectorEncoding(schema, hiveStorageTimeZone);
         }
         else {
             return Optional.empty();

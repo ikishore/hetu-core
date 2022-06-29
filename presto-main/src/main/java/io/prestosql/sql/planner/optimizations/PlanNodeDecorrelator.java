@@ -177,8 +177,6 @@ public class PlanNodeDecorrelator
                     ImmutableList.of(),
                     AggregationNode.Step.SINGLE,
                     Optional.empty(),
-                    Optional.empty(),
-                    AggregationNode.AggregationType.HASH,
                     Optional.empty());
 
             return Optional.of(new DecorrelationResult(
@@ -234,9 +232,7 @@ public class PlanNodeDecorrelator
                     ImmutableList.of(),
                     decorrelatedAggregation.getStep(),
                     decorrelatedAggregation.getHashSymbol(),
-                    decorrelatedAggregation.getGroupIdSymbol(),
-                    decorrelatedAggregation.getAggregationType(),
-                    decorrelatedAggregation.getFinalizeSymbol());
+                    decorrelatedAggregation.getGroupIdSymbol());
 
             boolean atMostSingleRow = newAggregation.getGroupingSetCount() == 1
                     && constantSymbols.containsAll(newAggregation.getGroupingKeys());

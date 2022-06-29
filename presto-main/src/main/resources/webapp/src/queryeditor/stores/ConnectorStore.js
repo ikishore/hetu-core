@@ -1,5 +1,5 @@
 /*
- * Copyright (C) 2018-2021. Huawei Technologies Co., Ltd. All rights reserved.
+ * Copyright (C) 2018-2020. Huawei Technologies Co., Ltd. All rights reserved.
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
  * You may obtain a copy of the License at
@@ -21,8 +21,7 @@ class ConnectorStore {
     // handle store listeners
     this.bindListeners({
       onReceivedConnectors: ConnectorActions.RECEIVED_CONNECTORS,
-      onReceivedConnector: ConnectorActions.RECEIVED_CONNECTOR,
-      onReceivedOriginalConnectors: ConnectorActions.RECEIVED_ORIGINAL_CONNECTORS
+      onReceivedConnector: ConnectorActions.RECEIVED_CONNECTOR
     });
 
     // export methods we can use
@@ -42,10 +41,6 @@ class ConnectorStore {
 
   onReceivedConnectors(connectors) {
     this.collection.add(connectors);
-  }
-
-  onReceivedOriginalConnectors(connectors) {
-    this.collection.add(connectors,{update:true});
   }
 
   getCollection() {

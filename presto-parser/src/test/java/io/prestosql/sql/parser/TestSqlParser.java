@@ -16,7 +16,6 @@ package io.prestosql.sql.parser;
 import com.google.common.collect.ImmutableList;
 import com.google.common.collect.ImmutableSet;
 import com.google.common.collect.Lists;
-import io.airlift.log.Logger;
 import io.prestosql.sql.tree.AddColumn;
 import io.prestosql.sql.tree.AliasedRelation;
 import io.prestosql.sql.tree.AllColumns;
@@ -37,7 +36,6 @@ import io.prestosql.sql.tree.ColumnDefinition;
 import io.prestosql.sql.tree.Comment;
 import io.prestosql.sql.tree.Commit;
 import io.prestosql.sql.tree.ComparisonExpression;
-import io.prestosql.sql.tree.CreateCube;
 import io.prestosql.sql.tree.CreateRole;
 import io.prestosql.sql.tree.CreateSchema;
 import io.prestosql.sql.tree.CreateTable;
@@ -78,7 +76,6 @@ import io.prestosql.sql.tree.GroupingSets;
 import io.prestosql.sql.tree.Identifier;
 import io.prestosql.sql.tree.IfExpression;
 import io.prestosql.sql.tree.Insert;
-import io.prestosql.sql.tree.InsertCube;
 import io.prestosql.sql.tree.Intersect;
 import io.prestosql.sql.tree.IntervalLiteral;
 import io.prestosql.sql.tree.IntervalLiteral.IntervalField;
@@ -111,7 +108,6 @@ import io.prestosql.sql.tree.QualifiedName;
 import io.prestosql.sql.tree.QuantifiedComparisonExpression;
 import io.prestosql.sql.tree.Query;
 import io.prestosql.sql.tree.QuerySpecification;
-import io.prestosql.sql.tree.RefreshMetadataCache;
 import io.prestosql.sql.tree.RenameColumn;
 import io.prestosql.sql.tree.RenameSchema;
 import io.prestosql.sql.tree.RenameTable;
@@ -130,8 +126,6 @@ import io.prestosql.sql.tree.ShowCache;
 import io.prestosql.sql.tree.ShowCatalogs;
 import io.prestosql.sql.tree.ShowColumns;
 import io.prestosql.sql.tree.ShowCubes;
-import io.prestosql.sql.tree.ShowExternalFunction;
-import io.prestosql.sql.tree.ShowFunctions;
 import io.prestosql.sql.tree.ShowGrants;
 import io.prestosql.sql.tree.ShowRoleGrants;
 import io.prestosql.sql.tree.ShowRoles;
@@ -179,7 +173,6 @@ import static io.prestosql.sql.parser.IdentifierSymbol.AT_SIGN;
 import static io.prestosql.sql.parser.IdentifierSymbol.COLON;
 import static io.prestosql.sql.parser.ParsingOptions.DecimalLiteralTreatment.AS_DECIMAL;
 import static io.prestosql.sql.testing.TreeAssertions.assertFormattedSql;
-import static io.prestosql.sql.tree.ArithmeticBinaryExpression.Operator.DIVIDE;
 import static io.prestosql.sql.tree.ArithmeticUnaryExpression.negative;
 import static io.prestosql.sql.tree.ArithmeticUnaryExpression.positive;
 import static io.prestosql.sql.tree.ComparisonExpression.Operator.GREATER_THAN;
@@ -196,7 +189,6 @@ import static org.testng.Assert.fail;
 
 public class TestSqlParser
 {
-    private static final Logger log = Logger.get(TestSqlParser.class);
     private static final SqlParser SQL_PARSER = new SqlParser();
 
     @Test
@@ -338,7 +330,6 @@ public class TestSqlParser
         }
         catch (RuntimeException e) {
             // Expected
-            log.error("test array subScript fail : ", e.getMessage());
         }
     }
 
@@ -685,8 +676,8 @@ public class TestSqlParser
                         new LongLiteral("2")),
                 new LongLiteral("3")));
 
-        assertExpression("1 / 2 / 3", new ArithmeticBinaryExpression(DIVIDE,
-                new ArithmeticBinaryExpression(DIVIDE,
+        assertExpression("1 / 2 / 3", new ArithmeticBinaryExpression(ArithmeticBinaryExpression.Operator.DIVIDE,
+                new ArithmeticBinaryExpression(ArithmeticBinaryExpression.Operator.DIVIDE,
                         new LongLiteral("1"),
                         new LongLiteral("2")),
                 new LongLiteral("3")));
@@ -791,14 +782,6 @@ public class TestSqlParser
     }
 
     @Test
-    public void testShowFunctions()
-    {
-        assertStatement("SHOW FUNCTIONS", new ShowFunctions(Optional.empty(), Optional.empty()));
-        assertStatement("SHOW FUNCTIONS LIKE '%'", new ShowFunctions(Optional.of("%"), Optional.empty()));
-        assertStatement("SHOW FUNCTIONS LIKE '%$_%' ESCAPE '$'", new ShowFunctions(Optional.of("%$_%"), Optional.of("$")));
-    }
-
-    @Test
     public void testShowSession()
     {
         assertStatement("SHOW SESSION", new ShowSession());
@@ -834,13 +817,6 @@ public class TestSqlParser
     {
         assertStatement("SHOW CACHE", new ShowCache(Optional.empty(), Optional.empty()));
         assertStatement("SHOW CACHE a", new ShowCache(new NodeLocation(0, 0), QualifiedName.of("a")));
-    }
-
-    @Test
-    public void testRefreshMetastoreCache()
-    {
-        assertStatement("REFRESH META CACHE", new RefreshMetadataCache(Optional.empty(), Optional.empty()));
-        assertStatement("REFRESH META CACHE FOR foo", new RefreshMetadataCache(Optional.empty(), Optional.of(new Identifier("foo"))));
     }
 
     @Test
@@ -1407,6 +1383,38 @@ public class TestSqlParser
     }
 
     @Test
+    public void testCreateCube()
+    {
+//        assertStatement("CREATE CUBE foo ON bar WITH (DIMENSIONS=key,val, AGGREGATIONS=count(\"*\"))",
+//                new CreateCube(QualifiedName.of("foo"),
+//                        QualifiedName.of("bar"),
+//                        ImmutableList.of(
+//                                new Identifier("key"),
+//                                new Identifier("val")),
+//                        false,
+//                        ImmutableList.of(new FunctionCall(QualifiedName.of("COUNT"), ImmutableList.of(new Identifier("*")))),
+//                        Optional.empty()));
+//        assertStatement("CREATE CUBE foo ON bar WITH (DIMENSIONS=key,val, AGGREGATIONS=sum(cost))",
+//                new CreateCube(QualifiedName.of("foo"),
+//                        QualifiedName.of("bar"),
+//                        ImmutableList.of(
+//                                new Identifier("key"),
+//                                new Identifier("val")),
+//                        false,
+//                        ImmutableList.of(new FunctionCall(QualifiedName.of("SUM"), ImmutableList.of(new Identifier("cost")))),
+//                        Optional.empty()));
+//        assertStatement("CREATE CUBE IF NOT EXISTS foo ON bar WITH (DIMENSIONS=key,val, AGGREGATIONS=sum(cost))",
+//                new CreateCube(QualifiedName.of("foo"),
+//                        QualifiedName.of("bar"),
+//                        ImmutableList.of(
+//                                new Identifier("key"),
+//                                new Identifier("val")),
+//                        true,
+//                        ImmutableList.of(new FunctionCall(QualifiedName.of("SUM"), ImmutableList.of(new Identifier("cost")))),
+//                        Optional.empty()));
+    }
+
+    @Test
     public void testCreateTable()
     {
         assertStatement("CREATE TABLE foo (a VARCHAR, b BIGINT COMMENT 'hello world', c IPADDRESS)",
@@ -1652,128 +1660,6 @@ public class TestSqlParser
     }
 
     @Test
-    public void testCreateCube()
-    {
-        assertStatement("CREATE CUBE foo ON bar WITH (AGGREGATIONS=(count(c)), GROUP = (a, b)) WHERE d1 > 10",
-                new CreateCube(QualifiedName.of("foo"),
-                        QualifiedName.of("bar"),
-                        ImmutableList.of(
-                                new Identifier("a"),
-                                new Identifier("b")),
-                        ImmutableSet.of(
-                                new FunctionCall(QualifiedName.of("count"), ImmutableList.of(new Identifier("c")))),
-                        false,
-                        ImmutableList.of(),
-                        Optional.of(new ComparisonExpression(GREATER_THAN, new Identifier("d1"), new LongLiteral("10"))),
-                        null));
-
-        assertStatement("CREATE CUBE foo ON bar WITH (AGGREGATIONS=(count(distinct c), sum(e)), GROUP = (a, b), FILTER = (f between 1 and 10)) WHERE d1 > 10",
-                new CreateCube(QualifiedName.of("foo"),
-                        QualifiedName.of("bar"),
-                        ImmutableList.of(
-                                new Identifier("a"),
-                                new Identifier("b")),
-                        ImmutableSet.of(
-                                new FunctionCall(QualifiedName.of("count"), true, ImmutableList.of(new Identifier("c"))),
-                                new FunctionCall(QualifiedName.of("sum"), ImmutableList.of(new Identifier("e")))),
-                        false,
-                        ImmutableList.of(),
-                        Optional.of(new ComparisonExpression(GREATER_THAN, new Identifier("d1"), new LongLiteral("10"))),
-                        new BetweenPredicate(new Identifier("f"), new LongLiteral("1"), new LongLiteral("10"))));
-
-        assertStatement("CREATE CUBE foo ON bar WITH (AGGREGATIONS=(count(c), sum(d), avg(e)), GROUP = (a, b)) WHERE d1 > 10",
-                new CreateCube(QualifiedName.of("foo"),
-                        QualifiedName.of("bar"),
-                        ImmutableList.of(
-                                new Identifier("a"),
-                                new Identifier("b")),
-                        ImmutableSet.of(
-                                new FunctionCall(QualifiedName.of("count"), ImmutableList.of(new Identifier("c"))),
-                                new FunctionCall(QualifiedName.of("sum"), ImmutableList.of(new Identifier("d"))),
-                                new FunctionCall(QualifiedName.of("avg"), ImmutableList.of(new Identifier("e"))),
-                                new FunctionCall(QualifiedName.of("sum"), ImmutableList.of(new Identifier("e"))),
-                                new FunctionCall(QualifiedName.of("count"), ImmutableList.of(new Identifier("e")))),
-                        false,
-                        ImmutableList.of(),
-                        Optional.of(new ComparisonExpression(GREATER_THAN, new Identifier("d1"), new LongLiteral("10"))),
-                        null));
-
-        assertStatement("CREATE CUBE avgtestcube ON bar WITH (AGGREGATIONS=(count(c), sum(d), avg(e), avg(f)), GROUP = (a, b)) WHERE d1 > 10",
-                new CreateCube(QualifiedName.of("avgtestcube"),
-                        QualifiedName.of("bar"),
-                        ImmutableList.of(
-                                new Identifier("a"),
-                                new Identifier("b")),
-                        ImmutableSet.of(
-                                new FunctionCall(QualifiedName.of("count"), ImmutableList.of(new Identifier("c"))),
-                                new FunctionCall(QualifiedName.of("sum"), ImmutableList.of(new Identifier("d"))),
-                                new FunctionCall(QualifiedName.of("avg"), ImmutableList.of(new Identifier("e"))),
-                                new FunctionCall(QualifiedName.of("sum"), ImmutableList.of(new Identifier("e"))),
-                                new FunctionCall(QualifiedName.of("count"), ImmutableList.of(new Identifier("e"))),
-                                new FunctionCall(QualifiedName.of("avg"), ImmutableList.of(new Identifier("f"))),
-                                new FunctionCall(QualifiedName.of("sum"), ImmutableList.of(new Identifier("f"))),
-                                new FunctionCall(QualifiedName.of("count"), ImmutableList.of(new Identifier("f")))),
-                        false,
-                        ImmutableList.of(),
-                        Optional.of(new ComparisonExpression(GREATER_THAN, new Identifier("d1"), new LongLiteral("10"))),
-                        null));
-
-        assertStatement("CREATE CUBE c1.s1.foo ON c2.s2.bar WITH (AGGREGATIONS=(count(c)), GROUP = (a, b)) WHERE d1 > 10",
-                new CreateCube(QualifiedName.of("c1", "s1", "foo"),
-                        QualifiedName.of("c2", "s2", "bar"),
-                        ImmutableList.of(
-                                new Identifier("a"),
-                                new Identifier("b")),
-                        ImmutableSet.of(
-                                new FunctionCall(QualifiedName.of("count"), ImmutableList.of(new Identifier("c")))),
-                        false,
-                        ImmutableList.of(),
-                        Optional.of(new ComparisonExpression(GREATER_THAN, new Identifier("d1"), new LongLiteral("10"))),
-                        null));
-
-        assertStatement("CREATE CUBE IF NOT EXISTS foo ON bar WITH (AGGREGATIONS=(count(c)), GROUP = (a, b)) WHERE d1 > 10",
-                new CreateCube(QualifiedName.of("foo"),
-                        QualifiedName.of("bar"),
-                        ImmutableList.of(
-                                new Identifier("a"),
-                                new Identifier("b")),
-                        ImmutableSet.of(
-                                new FunctionCall(QualifiedName.of("count"), ImmutableList.of(new Identifier("c")))),
-                        true,
-                        ImmutableList.of(),
-                        Optional.of(new ComparisonExpression(GREATER_THAN, new Identifier("d1"), new LongLiteral("10"))),
-                        null));
-
-        assertStatement("CREATE CUBE IF NOT EXISTS foo ON bar WITH (AGGREGATIONS=(count(c)), GROUP = (a, b), format = 'ORC', partitioned_by = ARRAY[ 'd' ]) WHERE d1 > 10",
-                new CreateCube(QualifiedName.of("foo"),
-                        QualifiedName.of("bar"),
-                        ImmutableList.of(
-                                new Identifier("a"),
-                                new Identifier("b")),
-                        ImmutableSet.of(
-                                new FunctionCall(QualifiedName.of("count"), ImmutableList.of(new Identifier("c")))),
-                        true,
-                        ImmutableList.of(new Property(new Identifier("format"), new StringLiteral("ORC")), new Property(new Identifier("partitioned_by"),
-                        new ArrayConstructor(ImmutableList.of(new StringLiteral("d"))))),
-                        Optional.of(new ComparisonExpression(GREATER_THAN, new Identifier("d1"), new LongLiteral("10"))),
-                        null));
-
-        assertStatement("CREATE CUBE IF NOT EXISTS foo ON bar WITH (AGGREGATIONS=(count(c)), GROUP = (a, b), format = 'ORC', partitioned_by = ARRAY[ 'd' ], FILTER = (d2 > 20)) WHERE d1 > 10",
-                new CreateCube(QualifiedName.of("foo"),
-                        QualifiedName.of("bar"),
-                        ImmutableList.of(
-                                new Identifier("a"),
-                                new Identifier("b")),
-                        ImmutableSet.of(
-                                new FunctionCall(QualifiedName.of("count"), ImmutableList.of(new Identifier("c")))),
-                        true,
-                        ImmutableList.of(new Property(new Identifier("format"), new StringLiteral("ORC")), new Property(new Identifier("partitioned_by"),
-                                new ArrayConstructor(ImmutableList.of(new StringLiteral("d"))))),
-                        Optional.of(new ComparisonExpression(GREATER_THAN, new Identifier("d1"), new LongLiteral("10"))),
-                        new ComparisonExpression(GREATER_THAN, new Identifier("d2"), new LongLiteral("20"))));
-    }
-
-    @Test
     public void testDropCache()
     {
         assertStatement("DROP CACHE a", new DropCache(QualifiedName.of("a"), false));
@@ -1845,32 +1731,6 @@ public class TestSqlParser
 
         assertStatement("INSERT OVERWRITE a (c1, c2) SELECT * FROM t",
                 new Insert(table, Optional.of(ImmutableList.of(identifier("c1"), identifier("c2"))), query, true));
-    }
-
-    @Test
-    public void testInsertIntoCube()
-    {
-        assertStatement("INSERT INTO CUBE foo WHERE d1 > 10",
-                new InsertCube(QualifiedName.of("foo"),
-                        Optional.of(new ComparisonExpression(GREATER_THAN, new Identifier("d1"), new LongLiteral("10"))),
-                        false));
-        assertStatement("INSERT INTO CUBE c1.s1.foo WHERE d1 > 10",
-                new InsertCube(QualifiedName.of("c1", "s1", "foo"),
-                        Optional.of(new ComparisonExpression(GREATER_THAN, new Identifier("d1"), new LongLiteral("10"))),
-                        false));
-    }
-
-    @Test
-    public void testInsertOverwriteCube()
-    {
-        assertStatement("INSERT OVERWRITE CUBE foo WHERE d1 BETWEEN 1012020 AND 31012020",
-                new InsertCube(QualifiedName.of("foo"),
-                        Optional.of(new BetweenPredicate(new Identifier("d1"), new LongLiteral("1012020"), new LongLiteral("31012020"))),
-                        true));
-        assertStatement("INSERT OVERWRITE CUBE c1.s1.foo WHERE d1 BETWEEN 1012020 AND 31012020",
-                new InsertCube(QualifiedName.of("c1", "s1", "foo"),
-                        Optional.of(new BetweenPredicate(new Identifier("d1"), new LongLiteral("1012020"), new LongLiteral("31012020"))),
-                        true));
     }
 
     @Test
@@ -1964,16 +1824,6 @@ public class TestSqlParser
         assertStatement("CREATE VIEW bar.foo AS SELECT * FROM t", new CreateView(QualifiedName.of("bar", "foo"), query, false, Optional.empty()));
         assertStatement("CREATE VIEW \"awesome view\" AS SELECT * FROM t", new CreateView(QualifiedName.of("awesome view"), query, false, Optional.empty()));
         assertStatement("CREATE VIEW \"awesome schema\".\"awesome view\" AS SELECT * FROM t", new CreateView(QualifiedName.of("awesome schema", "awesome view"), query, false, Optional.empty()));
-    }
-
-    @Test
-    public void testShowExternalFunction()
-    {
-        assertStatement("SHOW EXTERNAL FUNCTION x.y.z", new ShowExternalFunction(QualifiedName.of("x", "y", "z"), Optional.empty()));
-        assertStatement("SHOW EXTERNAL FUNCTION x.y.z()", new ShowExternalFunction(QualifiedName.of("x", "y", "z"), Optional.of(ImmutableList.of())));
-        assertStatement(
-                "SHOW EXTERNAL FUNCTION x.y.z(int, double)",
-                new ShowExternalFunction(QualifiedName.of("x", "y", "z"), Optional.of(ImmutableList.of("int", "double"))));
     }
 
     @Test
@@ -2100,7 +1950,6 @@ public class TestSqlParser
         }
         catch (RuntimeException e) {
             //expected - schema can only be qualified by catalog
-            log.error("testSetPath error : ", e.getMessage());
         }
 
         try {
@@ -2109,7 +1958,6 @@ public class TestSqlParser
         }
         catch (RuntimeException e) {
             //expected - some form of parameter is required
-            log.error("testSetPath error : ", e.getMessage());
         }
     }
 
@@ -2596,6 +2444,7 @@ public class TestSqlParser
                         new QuerySpecification(
                                 selectList(
                                         new FunctionCall(
+                                                Optional.empty(),
                                                 QualifiedName.of("SUM"),
                                                 Optional.empty(),
                                                 Optional.of(new ComparisonExpression(
@@ -2645,6 +2494,7 @@ public class TestSqlParser
     {
         assertExpression("array_agg(x ORDER BY x DESC)",
                 new FunctionCall(
+                        Optional.empty(),
                         QualifiedName.of("array_agg"),
                         Optional.empty(),
                         Optional.empty(),
@@ -2657,6 +2507,7 @@ public class TestSqlParser
                         new QuerySpecification(
                                 selectList(
                                         new FunctionCall(
+                                                Optional.empty(),
                                                 QualifiedName.of("array_agg"),
                                                 Optional.empty(),
                                                 Optional.empty(),

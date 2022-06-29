@@ -226,92 +226,92 @@ public class BasicStageStats
 
     public static BasicStageStats aggregateBasicStageStats(Iterable<BasicStageStats> stages)
     {
-        int localTotalDrivers = 0;
-        int localQueuedDrivers = 0;
-        int localRunningDrivers = 0;
-        int localCompletedDrivers = 0;
+        int totalDrivers = 0;
+        int queuedDrivers = 0;
+        int runningDrivers = 0;
+        int completedDrivers = 0;
 
-        long localCumulativeUserMemory = 0;
-        long localUserMemoryReservation = 0;
-        long localTotalMemoryReservation = 0;
+        long cumulativeUserMemory = 0;
+        long userMemoryReservation = 0;
+        long totalMemoryReservation = 0;
 
         long totalScheduledTimeMillis = 0;
-        long localTotalCpuTime = 0;
+        long totalCpuTime = 0;
 
-        long localPhysicalInputDataSize = 0;
-        long localPhysicalInputPositions = 0;
+        long physicalInputDataSize = 0;
+        long physicalInputPositions = 0;
 
-        long localInternalNetworkInputDataSize = 0;
-        long localInternalNetworkInputPositions = 0;
+        long internalNetworkInputDataSize = 0;
+        long internalNetworkInputPositions = 0;
 
-        long localRawInputDataSize = 0;
-        long localRawInputPositions = 0;
+        long rawInputDataSize = 0;
+        long rawInputPositions = 0;
 
-        boolean localScheduled = true;
+        boolean isScheduled = true;
 
-        boolean localFullyBlocked = true;
-        Set<BlockedReason> localBlockedReasons = new HashSet<>();
+        boolean fullyBlocked = true;
+        Set<BlockedReason> blockedReasons = new HashSet<>();
 
         for (BasicStageStats stageStats : stages) {
-            localTotalDrivers += stageStats.getTotalDrivers();
-            localQueuedDrivers += stageStats.getQueuedDrivers();
-            localRunningDrivers += stageStats.getRunningDrivers();
-            localCompletedDrivers += stageStats.getCompletedDrivers();
+            totalDrivers += stageStats.getTotalDrivers();
+            queuedDrivers += stageStats.getQueuedDrivers();
+            runningDrivers += stageStats.getRunningDrivers();
+            completedDrivers += stageStats.getCompletedDrivers();
 
-            localCumulativeUserMemory += stageStats.getCumulativeUserMemory();
-            localUserMemoryReservation += stageStats.getUserMemoryReservation().toBytes();
-            localTotalMemoryReservation += stageStats.getTotalMemoryReservation().toBytes();
+            cumulativeUserMemory += stageStats.getCumulativeUserMemory();
+            userMemoryReservation += stageStats.getUserMemoryReservation().toBytes();
+            totalMemoryReservation += stageStats.getTotalMemoryReservation().toBytes();
 
             totalScheduledTimeMillis += stageStats.getTotalScheduledTime().roundTo(MILLISECONDS);
-            localTotalCpuTime += stageStats.getTotalCpuTime().roundTo(MILLISECONDS);
+            totalCpuTime += stageStats.getTotalCpuTime().roundTo(MILLISECONDS);
 
-            localScheduled &= stageStats.isScheduled();
+            isScheduled &= stageStats.isScheduled();
 
-            localFullyBlocked &= stageStats.isFullyBlocked();
-            localBlockedReasons.addAll(stageStats.getBlockedReasons());
+            fullyBlocked &= stageStats.isFullyBlocked();
+            blockedReasons.addAll(stageStats.getBlockedReasons());
 
-            localPhysicalInputDataSize += stageStats.getPhysicalInputDataSize().toBytes();
-            localPhysicalInputPositions += stageStats.getPhysicalInputPositions();
+            physicalInputDataSize += stageStats.getPhysicalInputDataSize().toBytes();
+            physicalInputPositions += stageStats.getPhysicalInputPositions();
 
-            localInternalNetworkInputDataSize += stageStats.getInternalNetworkInputDataSize().toBytes();
-            localInternalNetworkInputPositions += stageStats.getInternalNetworkInputPositions();
+            internalNetworkInputDataSize += stageStats.getInternalNetworkInputDataSize().toBytes();
+            internalNetworkInputPositions += stageStats.getInternalNetworkInputPositions();
 
-            localRawInputDataSize += stageStats.getRawInputDataSize().toBytes();
-            localRawInputPositions += stageStats.getRawInputPositions();
+            rawInputDataSize += stageStats.getRawInputDataSize().toBytes();
+            rawInputPositions += stageStats.getRawInputPositions();
         }
 
-        OptionalDouble localProgressPercentage = OptionalDouble.empty();
-        if (localScheduled && localTotalDrivers != 0) {
-            localProgressPercentage = OptionalDouble.of(min(100, (localCompletedDrivers * 100.0) / localTotalDrivers));
+        OptionalDouble progressPercentage = OptionalDouble.empty();
+        if (isScheduled && totalDrivers != 0) {
+            progressPercentage = OptionalDouble.of(min(100, (completedDrivers * 100.0) / totalDrivers));
         }
 
         return new BasicStageStats(
-                localScheduled,
+                isScheduled,
 
-                localTotalDrivers,
-                localQueuedDrivers,
-                localRunningDrivers,
-                localCompletedDrivers,
+                totalDrivers,
+                queuedDrivers,
+                runningDrivers,
+                completedDrivers,
 
-                succinctBytes(localPhysicalInputDataSize),
-                localPhysicalInputPositions,
+                succinctBytes(physicalInputDataSize),
+                physicalInputPositions,
 
-                succinctBytes(localInternalNetworkInputDataSize),
-                localInternalNetworkInputPositions,
+                succinctBytes(internalNetworkInputDataSize),
+                internalNetworkInputPositions,
 
-                succinctBytes(localRawInputDataSize),
-                localRawInputPositions,
+                succinctBytes(rawInputDataSize),
+                rawInputPositions,
 
-                localCumulativeUserMemory,
-                succinctBytes(localUserMemoryReservation),
-                succinctBytes(localTotalMemoryReservation),
+                cumulativeUserMemory,
+                succinctBytes(userMemoryReservation),
+                succinctBytes(totalMemoryReservation),
 
-                new Duration(localTotalCpuTime, MILLISECONDS).convertToMostSuccinctTimeUnit(),
+                new Duration(totalCpuTime, MILLISECONDS).convertToMostSuccinctTimeUnit(),
                 new Duration(totalScheduledTimeMillis, MILLISECONDS).convertToMostSuccinctTimeUnit(),
 
-                localFullyBlocked,
-                localBlockedReasons,
+                fullyBlocked,
+                blockedReasons,
 
-                localProgressPercentage);
+                progressPercentage);
     }
 }

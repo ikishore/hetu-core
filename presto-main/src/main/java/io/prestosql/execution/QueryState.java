@@ -41,17 +41,9 @@ public enum QueryState
      */
     STARTING(false),
     /**
-     * Query has been suspend of its execution state.
-     */
-    SUSPENDED(false),
-    /**
      * Query has at least one running task.
      */
     RUNNING(false),
-    /**
-     * State indicating that recovery is in progress
-     */
-    RECOVERING(false),
     /**
      * Query is finishing (e.g. commit for autocommit queries)
      */

@@ -1,5 +1,5 @@
 /*
- * Copyright (C) 2018-2021. Huawei Technologies Co., Ltd. All rights reserved.
+ * Copyright (C) 2018-2020. Huawei Technologies Co., Ltd. All rights reserved.
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
  * You may obtain a copy of the License at
@@ -1312,9 +1312,12 @@ public class HiveAstBuilder
     @Override
     public Node visitShowFunctions(HiveSqlParser.ShowFunctionsContext context)
     {
-        return new ShowFunctions(getLocation(context),
-                getTextIfPresent(context.pattern).map(HiveAstBuilder::unquote),
-                Optional.empty());
+        if (context.LIKE() != null) {
+            addDiff(DiffType.UNSUPPORTED, context.LIKE().getText(), "[LIKE] is not supported");
+            throw unsupportedError(ErrorType.UNSUPPORTED_STATEMENT, "Unsupported attribute: LIKE", context.pattern);
+        }
+
+        return new ShowFunctions(getLocation(context));
     }
 
     @Override
@@ -1645,18 +1648,6 @@ public class HiveAstBuilder
     @Override
     public Node visitGroupBy(HiveSqlParser.GroupByContext context)
     {
-        HiveSqlParser.GroupByContext groupingSetsContext = new HiveSqlParser.GroupByContext(context.getParent(), context.invokingState);
-        for (HiveSqlParser.GroupingElementContext groupingElementContext : context.groupingElement()) {
-            if (groupingElementContext instanceof HiveSqlParser.SingleGroupingSetContext) {
-                continue;
-            }
-            groupingSetsContext.addAnyChild(groupingElementContext);
-        }
-
-        // if there is "grouping sets", then according to the syntax rule, it only requires "grouping sets" claus, no need individual grouping columns.
-        if (groupingSetsContext.groupingElement().size() > 0) {
-            return new GroupBy(getLocation(context), isDistinct(context.setQuantifier()), visit(groupingSetsContext.groupingElement(), GroupingElement.class));
-        }
         return new GroupBy(getLocation(context), isDistinct(context.setQuantifier()), visit(context.groupingElement(), GroupingElement.class));
     }
 
@@ -2107,7 +2098,7 @@ public class HiveAstBuilder
         String fieldString = context.identifier().getText();
         Extract.Field field;
         try {
-            field = Extract.Field.valueOf(fieldString.toUpperCase(Locale.ROOT));
+            field = Extract.Field.valueOf(fieldString.toUpperCase());
         }
         catch (IllegalArgumentException e) {
             throw parseError("Invalid EXTRACT field: " + fieldString, context);
@@ -2236,7 +2227,6 @@ public class HiveAstBuilder
                 filter,
                 orderBy,
                 distinct,
-                false,
                 visit(context.expression(), Expression.class));
     }
 

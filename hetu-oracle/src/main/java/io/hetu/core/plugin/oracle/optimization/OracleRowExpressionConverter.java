@@ -1,5 +1,5 @@
 /*
- * Copyright (C) 2018-2021. Huawei Technologies Co., Ltd. All rights reserved.
+ * Copyright (C) 2018-2020. Huawei Technologies Co., Ltd. All rights reserved.
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
  * You may obtain a copy of the License at
@@ -15,14 +15,10 @@
 package io.hetu.core.plugin.oracle.optimization;
 
 import io.prestosql.plugin.jdbc.optimization.BaseJdbcRowExpressionConverter;
-import io.prestosql.plugin.jdbc.optimization.JdbcConverterContext;
 import io.prestosql.spi.PrestoException;
-import io.prestosql.spi.function.FunctionHandle;
-import io.prestosql.spi.function.FunctionMetadataManager;
-import io.prestosql.spi.function.StandardFunctionResolution;
+import io.prestosql.spi.function.Signature;
 import io.prestosql.spi.relation.CallExpression;
 import io.prestosql.spi.relation.ConstantExpression;
-import io.prestosql.spi.relation.DeterminismEvaluator;
 import io.prestosql.spi.relation.RowExpression;
 import io.prestosql.spi.relation.RowExpressionService;
 import io.prestosql.spi.relation.SpecialForm;
@@ -43,6 +39,9 @@ import static com.google.common.collect.ImmutableSet.toImmutableSet;
 import static io.hetu.core.plugin.oracle.optimization.OraclePushDownUtils.getCastExpression;
 import static io.prestosql.spi.StandardErrorCode.INVALID_FUNCTION_ARGUMENT;
 import static io.prestosql.spi.StandardErrorCode.NOT_SUPPORTED;
+import static io.prestosql.spi.function.StandardFunctionUtils.isArrayConstructor;
+import static io.prestosql.spi.function.StandardFunctionUtils.isCastFunction;
+import static io.prestosql.spi.function.StandardFunctionUtils.isSubscriptFunction;
 import static io.prestosql.spi.relation.SpecialForm.Form.IF;
 import static java.lang.String.format;
 import static java.util.Locale.ENGLISH;
@@ -56,21 +55,21 @@ public class OracleRowExpressionConverter
             .map(String::toLowerCase)
             .collect(toImmutableSet());
 
-    public OracleRowExpressionConverter(DeterminismEvaluator determinismEvaluator, RowExpressionService rowExpressionService, FunctionMetadataManager functionManager, StandardFunctionResolution functionResolution)
+    public OracleRowExpressionConverter(RowExpressionService rowExpressionService)
     {
-        super(functionManager, functionResolution, rowExpressionService, determinismEvaluator);
+        super(rowExpressionService);
     }
 
     @Override
-    public String visitCall(CallExpression call, JdbcConverterContext context)
+    public String visitCall(CallExpression call, Void context)
     {
-        FunctionHandle functionHandle = call.getFunctionHandle();
-        String functionName = functionMetadataManager.getFunctionMetadata(functionHandle).getName().getObjectName();
+        Signature signature = call.getSignature();
+        String functionName = call.getSignature().getName().toLowerCase(ENGLISH);
         if (timeExtractFields.contains(functionName)) {
             if (call.getArguments().size() == 1) {
                 try {
                     Time.ExtractField field = Time.ExtractField.valueOf(functionName.toUpperCase(ENGLISH));
-                    return format("EXTRACT(%s FROM %s)", field, call.getArguments().get(0).accept(this, context));
+                    return format("EXTRACT(%s FROM %s)", field, call.getArguments().get(0).accept(this, null));
                 }
                 catch (IllegalArgumentException e) {
                     throw new PrestoException(INVALID_FUNCTION_ARGUMENT, "Illegal argument: " + e);
@@ -83,27 +82,27 @@ public class OracleRowExpressionConverter
         if (functionName.equals(AT_TIMEZONE_FUNCTION_NAME)) {
             if (call.getArguments().size() == 2) {
                 return format("%s AT TIME ZONE %s",
-                        call.getArguments().get(0).accept(this, context),
-                        call.getArguments().get(1).accept(this, context));
+                        call.getArguments().get(0).accept(this, null),
+                        call.getArguments().get(1).accept(this, null));
             }
             else {
                 throw new PrestoException(INVALID_FUNCTION_ARGUMENT, "Illegal argument num of function " + functionName);
             }
         }
-        if (standardFunctionResolution.isArrayConstructor(functionHandle)) {
+        if (isArrayConstructor(signature)) {
             throw new PrestoException(NOT_SUPPORTED, "Oracle connector does not support array constructor");
         }
-        if (standardFunctionResolution.isSubscriptFunction(functionHandle)) {
+        if (isSubscriptFunction(signature)) {
             throw new PrestoException(NOT_SUPPORTED, "Oracle connector does not support subscript expression");
         }
-        if (standardFunctionResolution.isCastFunction(functionHandle)) {
+        if (isCastFunction(signature)) {
             // deal with literal, when generic literal expression translate to rowExpression, it will be
             // translated to a 'CAST' rowExpression with a varchar type 'CONSTANT' rowExpression, in some
             // case, 'CAST' is superfluous
             RowExpression argument = call.getArguments().get(0);
             Type type = call.getType();
             if (argument instanceof ConstantExpression && argument.getType() instanceof VarcharType) {
-                String value = argument.accept(this, context);
+                String value = argument.accept(this, null);
                 if (type instanceof DateType) {
                     return format("date %s", value);
                 }
@@ -117,22 +116,22 @@ public class OracleRowExpressionConverter
                 }
             }
             if (call.getType().getDisplayName().equals(LIKE_PATTERN_NAME)) {
-                return call.getArguments().get(0).accept(this, context);
+                return call.getArguments().get(0).accept(this, null);
             }
-            return getCastExpression(call.getArguments().get(0).accept(this, context), call.getType());
+            return getCastExpression(call.getArguments().get(0).accept(this, null), call.getType());
         }
         return super.visitCall(call, context);
     }
 
     @Override
-    public String visitSpecialForm(SpecialForm specialForm, JdbcConverterContext context)
+    public String visitSpecialForm(SpecialForm specialForm, Void context)
     {
         // Oracle sql does not support if, convert IF to [case ... when ... else] expression
         if (specialForm.getForm().equals(IF)) {
             return format("(CASE WHEN %s THEN %s ELSE %s END)",
-                    specialForm.getArguments().get(0).accept(this, context),
-                    specialForm.getArguments().get(1).accept(this, context),
-                    specialForm.getArguments().get(2).accept(this, context));
+                    specialForm.getArguments().get(0).accept(this, null),
+                    specialForm.getArguments().get(1).accept(this, null),
+                    specialForm.getArguments().get(2).accept(this, null));
         }
         return super.visitSpecialForm(specialForm, context);
     }

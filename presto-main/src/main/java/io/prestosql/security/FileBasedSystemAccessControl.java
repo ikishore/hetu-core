@@ -46,7 +46,6 @@ import static com.google.common.base.Suppliers.memoizeWithExpiration;
 import static io.prestosql.plugin.base.JsonUtils.parseJson;
 import static io.prestosql.plugin.base.security.FileBasedAccessControlConfig.SECURITY_CONFIG_FILE;
 import static io.prestosql.plugin.base.security.FileBasedAccessControlConfig.SECURITY_REFRESH_PERIOD;
-import static io.prestosql.security.CatalogAccessControlRule.AccessMode;
 import static io.prestosql.security.IndexAccessControlRule.IndexPrivilege.ALL;
 import static io.prestosql.security.IndexAccessControlRule.IndexPrivilege.CREATE;
 import static io.prestosql.security.IndexAccessControlRule.IndexPrivilege.DROP;
@@ -55,28 +54,11 @@ import static io.prestosql.security.IndexAccessControlRule.IndexPrivilege.SHOW;
 import static io.prestosql.security.IndexAccessControlRule.IndexPrivilege.UPDATE;
 import static io.prestosql.spi.StandardErrorCode.CONFIGURATION_INVALID;
 import static io.prestosql.spi.security.AccessDeniedException.denyAccessNodeInfo;
-import static io.prestosql.spi.security.AccessDeniedException.denyAddColumn;
 import static io.prestosql.spi.security.AccessDeniedException.denyCatalogAccess;
-import static io.prestosql.spi.security.AccessDeniedException.denyCommentTable;
 import static io.prestosql.spi.security.AccessDeniedException.denyCreateIndex;
-import static io.prestosql.spi.security.AccessDeniedException.denyCreateSchema;
-import static io.prestosql.spi.security.AccessDeniedException.denyCreateTable;
-import static io.prestosql.spi.security.AccessDeniedException.denyCreateView;
-import static io.prestosql.spi.security.AccessDeniedException.denyCreateViewWithSelect;
-import static io.prestosql.spi.security.AccessDeniedException.denyDeleteTable;
-import static io.prestosql.spi.security.AccessDeniedException.denyDropColumn;
 import static io.prestosql.spi.security.AccessDeniedException.denyDropIndex;
-import static io.prestosql.spi.security.AccessDeniedException.denyDropSchema;
-import static io.prestosql.spi.security.AccessDeniedException.denyDropTable;
-import static io.prestosql.spi.security.AccessDeniedException.denyDropView;
-import static io.prestosql.spi.security.AccessDeniedException.denyGrantTablePrivilege;
 import static io.prestosql.spi.security.AccessDeniedException.denyImpersonateUser;
-import static io.prestosql.spi.security.AccessDeniedException.denyInsertTable;
-import static io.prestosql.spi.security.AccessDeniedException.denyRenameColumn;
 import static io.prestosql.spi.security.AccessDeniedException.denyRenameIndex;
-import static io.prestosql.spi.security.AccessDeniedException.denyRenameSchema;
-import static io.prestosql.spi.security.AccessDeniedException.denyRenameTable;
-import static io.prestosql.spi.security.AccessDeniedException.denyRevokeTablePrivilege;
 import static io.prestosql.spi.security.AccessDeniedException.denySetUser;
 import static io.prestosql.spi.security.AccessDeniedException.denyShowIndex;
 import static io.prestosql.spi.security.AccessDeniedException.denyUpdateIndex;
@@ -89,8 +71,6 @@ public class FileBasedSystemAccessControl
 {
     public static final String NAME = "file";
     private static final Logger log = Logger.get(FileBasedSystemAccessControl.class);
-    private static final Pattern ANY = Pattern.compile(".*");
-    private static final Pattern SYSTEM = Pattern.compile("system");
     private final List<CatalogAccessControlRule> catalogRules;
     private final Optional<List<PrincipalUserMatchRule>> principalUserMatchRules;
     private final List<NodeInformationRule> nodeInfoRules;
@@ -98,10 +78,10 @@ public class FileBasedSystemAccessControl
     private final Optional<List<ImpersonationRule>> impersonationRules;
 
     private FileBasedSystemAccessControl(List<CatalogAccessControlRule> catalogRules,
-                                         Optional<List<PrincipalUserMatchRule>> principalUserMatchRules,
-                                         List<NodeInformationRule> nodeInfoRules,
-                                         List<IndexAccessControlRule> indexRules,
-                                         Optional<List<ImpersonationRule>> impersonationRules)
+            Optional<List<PrincipalUserMatchRule>> principalUserMatchRules,
+            List<NodeInformationRule> nodeInfoRules,
+            List<IndexAccessControlRule> indexRules,
+            Optional<List<ImpersonationRule>> impersonationRules)
     {
         this.catalogRules = catalogRules;
         this.principalUserMatchRules = principalUserMatchRules;
@@ -121,7 +101,7 @@ public class FileBasedSystemAccessControl
     @Override
     public void checkCanCreateCatalog(Identity identity, String catalogName)
     {
-        if (!canAccessCatalog(identity, Optional.of(catalogName), AccessMode.ALL)) {
+        if (!canAccessCatalog(identity, Optional.of(catalogName))) {
             denyCatalogAccess(catalogName);
         }
     }
@@ -129,7 +109,7 @@ public class FileBasedSystemAccessControl
     @Override
     public void checkCanDropCatalog(Identity identity, String catalogName)
     {
-        if (!canAccessCatalog(identity, Optional.of(catalogName), AccessMode.ALL)) {
+        if (!canAccessCatalog(identity, Optional.of(catalogName))) {
             denyCatalogAccess(catalogName);
         }
     }
@@ -137,7 +117,7 @@ public class FileBasedSystemAccessControl
     @Override
     public void checkCanUpdateCatalog(Identity identity, String catalogName)
     {
-        if (!canAccessCatalog(identity, Optional.of(catalogName), AccessMode.ALL)) {
+        if (!canAccessCatalog(identity, Optional.of(catalogName))) {
             denyCatalogAccess(catalogName);
         }
     }
@@ -260,7 +240,7 @@ public class FileBasedSystemAccessControl
     @Override
     public void checkCanAccessCatalog(Identity identity, String catalogName)
     {
-        if (!canAccessCatalog(identity, Optional.of(catalogName), AccessMode.READ_ONLY)) {
+        if (!canAccessCatalog(identity, Optional.of(catalogName))) {
             denyCatalogAccess(catalogName);
         }
     }
@@ -270,7 +250,7 @@ public class FileBasedSystemAccessControl
     {
         ImmutableSet.Builder<String> filteredCatalogs = ImmutableSet.builder();
         for (String catalog : catalogs) {
-            if (canAccessCatalog(identity, Optional.of(catalog), AccessMode.READ_ONLY)) {
+            if (canAccessCatalog(identity, Optional.of(catalog))) {
                 filteredCatalogs.add(catalog);
             }
         }
@@ -279,15 +259,15 @@ public class FileBasedSystemAccessControl
 
     private boolean canAccessCatalog(Identity identity)
     {
-        return canAccessCatalog(identity, Optional.empty(), AccessMode.ALL);
+        return canAccessCatalog(identity, Optional.empty());
     }
 
-    private boolean canAccessCatalog(Identity identity, Optional<String> catalogName, AccessMode requiredAccess)
+    private boolean canAccessCatalog(Identity identity, Optional<String> catalogName)
     {
         for (CatalogAccessControlRule rule : catalogRules) {
-            Optional<AccessMode> accessMode = rule.match(identity.getUser(), identity.getGroups(), catalogName);
-            if (accessMode.isPresent()) {
-                return accessMode.get().implies(requiredAccess);
+            Optional<Boolean> allowed = rule.match(identity.getUser(), catalogName);
+            if (allowed.isPresent()) {
+                return allowed.get();
             }
         }
         return false;
@@ -296,25 +276,16 @@ public class FileBasedSystemAccessControl
     @Override
     public void checkCanCreateSchema(Identity identity, CatalogSchemaName schema)
     {
-        if (!canAccessCatalog(identity, Optional.of(schema.getCatalogName()), AccessMode.ALL)) {
-            denyCreateSchema(schema.toString());
-        }
     }
 
     @Override
     public void checkCanDropSchema(Identity identity, CatalogSchemaName schema)
     {
-        if (!canAccessCatalog(identity, Optional.of(schema.getCatalogName()), AccessMode.ALL)) {
-            denyDropSchema(schema.toString());
-        }
     }
 
     @Override
     public void checkCanRenameSchema(Identity identity, CatalogSchemaName schema, String newSchemaName)
     {
-        if (!canAccessCatalog(identity, Optional.of(schema.getCatalogName()), AccessMode.ALL)) {
-            denyRenameSchema(schema.toString(), newSchemaName);
-        }
     }
 
     @Override
@@ -325,7 +296,7 @@ public class FileBasedSystemAccessControl
     @Override
     public Set<String> filterSchemas(Identity identity, String catalogName, Set<String> schemaNames)
     {
-        if (!canAccessCatalog(identity, Optional.of(catalogName), AccessMode.READ_ONLY)) {
+        if (!canAccessCatalog(identity, Optional.of(catalogName))) {
             return ImmutableSet.of();
         }
 
@@ -335,33 +306,21 @@ public class FileBasedSystemAccessControl
     @Override
     public void checkCanCreateTable(Identity identity, CatalogSchemaTableName table)
     {
-        if (!canAccessCatalog(identity, Optional.of(table.getCatalogName()), AccessMode.ALL)) {
-            denyCreateTable(table.toString());
-        }
     }
 
     @Override
     public void checkCanDropTable(Identity identity, CatalogSchemaTableName table)
     {
-        if (!canAccessCatalog(identity, Optional.of(table.getCatalogName()), AccessMode.ALL)) {
-            denyDropTable(table.toString());
-        }
     }
 
     @Override
     public void checkCanRenameTable(Identity identity, CatalogSchemaTableName table, CatalogSchemaTableName newTable)
     {
-        if (!canAccessCatalog(identity, Optional.of(table.getCatalogName()), AccessMode.ALL)) {
-            denyRenameTable(table.toString(), newTable.toString());
-        }
     }
 
     @Override
     public void checkCanSetTableComment(Identity identity, CatalogSchemaTableName table)
     {
-        if (!canAccessCatalog(identity, Optional.of(table.getCatalogName()), AccessMode.ALL)) {
-            denyCommentTable(table.toString());
-        }
     }
 
     @Override
@@ -372,7 +331,7 @@ public class FileBasedSystemAccessControl
     @Override
     public Set<SchemaTableName> filterTables(Identity identity, String catalogName, Set<SchemaTableName> tableNames)
     {
-        if (!canAccessCatalog(identity, Optional.of(catalogName), AccessMode.READ_ONLY)) {
+        if (!canAccessCatalog(identity, Optional.of(catalogName))) {
             return ImmutableSet.of();
         }
 
@@ -387,7 +346,7 @@ public class FileBasedSystemAccessControl
     @Override
     public List<ColumnMetadata> filterColumns(Identity identity, CatalogSchemaTableName tableName, List<ColumnMetadata> columns)
     {
-        if (!canAccessCatalog(identity, Optional.of(tableName.getCatalogName()), AccessMode.READ_ONLY)) {
+        if (!canAccessCatalog(identity, Optional.of(tableName.getCatalogName()))) {
             return ImmutableList.of();
         }
 
@@ -397,25 +356,16 @@ public class FileBasedSystemAccessControl
     @Override
     public void checkCanAddColumn(Identity identity, CatalogSchemaTableName table)
     {
-        if (!canAccessCatalog(identity, Optional.of(table.getCatalogName()), AccessMode.ALL)) {
-            denyAddColumn(table.toString());
-        }
     }
 
     @Override
     public void checkCanDropColumn(Identity identity, CatalogSchemaTableName table)
     {
-        if (!canAccessCatalog(identity, Optional.of(table.getCatalogName()), AccessMode.ALL)) {
-            denyDropColumn(table.toString());
-        }
     }
 
     @Override
     public void checkCanRenameColumn(Identity identity, CatalogSchemaTableName table)
     {
-        if (!canAccessCatalog(identity, Optional.of(table.getCatalogName()), AccessMode.ALL)) {
-            denyRenameColumn(table.toString());
-        }
     }
 
     @Override
@@ -426,41 +376,26 @@ public class FileBasedSystemAccessControl
     @Override
     public void checkCanInsertIntoTable(Identity identity, CatalogSchemaTableName table)
     {
-        if (!canAccessCatalog(identity, Optional.of(table.getCatalogName()), AccessMode.ALL)) {
-            denyInsertTable(table.toString());
-        }
     }
 
     @Override
     public void checkCanDeleteFromTable(Identity identity, CatalogSchemaTableName table)
     {
-        if (!canAccessCatalog(identity, Optional.of(table.getCatalogName()), AccessMode.ALL)) {
-            denyDeleteTable(table.toString());
-        }
     }
 
     @Override
     public void checkCanCreateView(Identity identity, CatalogSchemaTableName view)
     {
-        if (!canAccessCatalog(identity, Optional.of(view.getCatalogName()), AccessMode.ALL)) {
-            denyCreateView(view.toString());
-        }
     }
 
     @Override
     public void checkCanDropView(Identity identity, CatalogSchemaTableName view)
     {
-        if (!canAccessCatalog(identity, Optional.of(view.getCatalogName()), AccessMode.ALL)) {
-            denyDropView(view.toString());
-        }
     }
 
     @Override
     public void checkCanCreateViewWithSelectFromColumns(Identity identity, CatalogSchemaTableName table, Set<String> columns)
     {
-        if (!canAccessCatalog(identity, Optional.of(table.getCatalogName()), AccessMode.ALL)) {
-            denyCreateViewWithSelect(table.toString(), identity);
-        }
     }
 
     @Override
@@ -471,17 +406,11 @@ public class FileBasedSystemAccessControl
     @Override
     public void checkCanGrantTablePrivilege(Identity identity, Privilege privilege, CatalogSchemaTableName table, PrestoPrincipal grantee, boolean withGrantOption)
     {
-        if (!canAccessCatalog(identity, Optional.of(table.getCatalogName()), AccessMode.ALL)) {
-            denyGrantTablePrivilege(privilege.toString(), table.toString());
-        }
     }
 
     @Override
     public void checkCanRevokeTablePrivilege(Identity identity, Privilege privilege, CatalogSchemaTableName table, PrestoPrincipal revokee, boolean grantOptionFor)
     {
-        if (!canAccessCatalog(identity, Optional.of(table.getCatalogName()), AccessMode.ALL)) {
-            denyRevokeTablePrivilege(privilege.toString(), table.toString());
-        }
     }
 
     @Override
@@ -576,10 +505,9 @@ public class FileBasedSystemAccessControl
             // Hack to allow Presto Admin to access the "system" catalog for retrieving server status.
             // todo Change userRegex from ".*" to one particular user that Presto Admin will be restricted to run as
             catalogRulesBuilder.add(new CatalogAccessControlRule(
-                    AccessMode.ALL,
-                    Optional.of(ANY),
-                    Optional.empty(),
-                    Optional.of(SYSTEM)));
+                    true,
+                    Optional.of(Pattern.compile(".*")),
+                    Optional.of(Pattern.compile("system"))));
 
             return new FileBasedSystemAccessControl(catalogRulesBuilder.build(), rules.getPrincipalUserMatchRules(), rules.getNodeInfoRules(), rules.getIndexRules(), rules.getImpersonationRules());
         }

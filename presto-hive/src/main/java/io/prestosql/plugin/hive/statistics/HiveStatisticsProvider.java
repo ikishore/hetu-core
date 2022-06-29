@@ -15,7 +15,6 @@
 package io.prestosql.plugin.hive.statistics;
 
 import io.prestosql.plugin.hive.HivePartition;
-import io.prestosql.plugin.hive.metastore.Table;
 import io.prestosql.spi.connector.ColumnHandle;
 import io.prestosql.spi.connector.ConnectorSession;
 import io.prestosql.spi.connector.SchemaTableName;
@@ -32,10 +31,8 @@ public interface HiveStatisticsProvider
      */
     TableStatistics getTableStatistics(
             ConnectorSession session,
-            SchemaTableName schemaTableName,
+            SchemaTableName table,
             Map<String, ColumnHandle> columns,
             Map<String, Type> columnTypes,
-            List<HivePartition> partitions,
-            boolean includeColumnStatistics,
-            Table table);
+            List<HivePartition> partitions);
 }

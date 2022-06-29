@@ -84,18 +84,17 @@ public class TreePrinter
             {
                 print(indentLevel, "Query ");
 
-                Integer tmpIndentLevel = indentLevel;
-                tmpIndentLevel++;
+                indentLevel++;
 
-                print(tmpIndentLevel, "QueryBody");
-                process(node.getQueryBody(), tmpIndentLevel);
+                print(indentLevel, "QueryBody");
+                process(node.getQueryBody(), indentLevel);
                 if (node.getOrderBy().isPresent()) {
-                    print(tmpIndentLevel, "OrderBy");
-                    process(node.getOrderBy().get(), tmpIndentLevel + 1);
+                    print(indentLevel, "OrderBy");
+                    process(node.getOrderBy().get(), indentLevel + 1);
                 }
 
                 if (node.getLimit().isPresent()) {
-                    print(tmpIndentLevel, "Limit: " + node.getLimit().get());
+                    print(indentLevel, "Limit: " + node.getLimit().get());
                 }
 
                 return null;
@@ -106,19 +105,18 @@ public class TreePrinter
             {
                 print(indentLevel, "QuerySpecification ");
 
-                Integer tmpIndentLevel = indentLevel;
-                tmpIndentLevel++;
+                indentLevel++;
 
-                process(node.getSelect(), tmpIndentLevel);
+                process(node.getSelect(), indentLevel);
 
                 if (node.getFrom().isPresent()) {
-                    print(tmpIndentLevel, "From");
-                    process(node.getFrom().get(), tmpIndentLevel + 1);
+                    print(indentLevel, "From");
+                    process(node.getFrom().get(), indentLevel + 1);
                 }
 
                 if (node.getWhere().isPresent()) {
-                    print(tmpIndentLevel, "Where");
-                    process(node.getWhere().get(), tmpIndentLevel + 1);
+                    print(indentLevel, "Where");
+                    process(node.getWhere().get(), indentLevel + 1);
                 }
 
                 if (node.getGroupBy().isPresent()) {
@@ -126,51 +124,51 @@ public class TreePrinter
                     if (node.getGroupBy().get().isDistinct()) {
                         distinct = "[DISTINCT]";
                     }
-                    print(tmpIndentLevel, "GroupBy" + distinct);
+                    print(indentLevel, "GroupBy" + distinct);
                     for (GroupingElement groupingElement : node.getGroupBy().get().getGroupingElements()) {
-                        print(tmpIndentLevel, "SimpleGroupBy");
+                        print(indentLevel, "SimpleGroupBy");
                         if (groupingElement instanceof SimpleGroupBy) {
                             for (Expression column : groupingElement.getExpressions()) {
-                                process(column, tmpIndentLevel + 1);
+                                process(column, indentLevel + 1);
                             }
                         }
                         else if (groupingElement instanceof GroupingSets) {
-                            print(tmpIndentLevel + 1, "GroupingSets");
+                            print(indentLevel + 1, "GroupingSets");
                             for (List<Expression> set : ((GroupingSets) groupingElement).getSets()) {
-                                print(tmpIndentLevel + 2, "GroupingSet[");
+                                print(indentLevel + 2, "GroupingSet[");
                                 for (Expression expression : set) {
-                                    process(expression, tmpIndentLevel + 3);
+                                    process(expression, indentLevel + 3);
                                 }
-                                print(tmpIndentLevel + 2, "]");
+                                print(indentLevel + 2, "]");
                             }
                         }
                         else if (groupingElement instanceof Cube) {
-                            print(tmpIndentLevel + 1, "Cube");
+                            print(indentLevel + 1, "Cube");
                             for (Expression column : groupingElement.getExpressions()) {
-                                process(column, tmpIndentLevel + 1);
+                                process(column, indentLevel + 1);
                             }
                         }
                         else if (groupingElement instanceof Rollup) {
-                            print(tmpIndentLevel + 1, "Rollup");
+                            print(indentLevel + 1, "Rollup");
                             for (Expression column : groupingElement.getExpressions()) {
-                                process(column, tmpIndentLevel + 1);
+                                process(column, indentLevel + 1);
                             }
                         }
                     }
                 }
 
                 if (node.getHaving().isPresent()) {
-                    print(tmpIndentLevel, "Having");
-                    process(node.getHaving().get(), tmpIndentLevel + 1);
+                    print(indentLevel, "Having");
+                    process(node.getHaving().get(), indentLevel + 1);
                 }
 
                 if (node.getOrderBy().isPresent()) {
-                    print(tmpIndentLevel, "OrderBy");
-                    process(node.getOrderBy().get(), tmpIndentLevel + 1);
+                    print(indentLevel, "OrderBy");
+                    process(node.getOrderBy().get(), indentLevel + 1);
                 }
 
                 if (node.getLimit().isPresent()) {
-                    print(tmpIndentLevel, "Limit: " + node.getLimit().get());
+                    print(indentLevel, "Limit: " + node.getLimit().get());
                 }
 
                 return null;

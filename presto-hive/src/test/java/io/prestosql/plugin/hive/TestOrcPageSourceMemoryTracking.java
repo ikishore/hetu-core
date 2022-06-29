@@ -74,6 +74,7 @@ import org.apache.hadoop.mapred.FileSplit;
 import org.apache.hadoop.mapred.JobConf;
 import org.apache.orc.NullMemoryManager;
 import org.apache.orc.impl.WriterImpl;
+import org.joda.time.DateTimeZone;
 import org.testng.annotations.AfterClass;
 import org.testng.annotations.BeforeClass;
 import org.testng.annotations.DataProvider;
@@ -87,7 +88,6 @@ import java.time.Duration;
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.List;
-import java.util.Locale;
 import java.util.Map;
 import java.util.Optional;
 import java.util.OptionalInt;
@@ -166,7 +166,7 @@ public class TestOrcPageSourceMemoryTracking
     {
         tempFile = File.createTempFile("presto_test_orc_page_source_memory_tracking", "orc");
         tempFile.delete();
-        testPreparer = new TestPreparer(tempFile.getCanonicalPath());
+        testPreparer = new TestPreparer(tempFile.getAbsolutePath());
     }
 
     @AfterClass(alwaysRun = true)
@@ -278,12 +278,12 @@ public class TestOrcPageSourceMemoryTracking
             dataColumns[i] = new GrowingTestColumn("p_string", javaStringObjectInspector, () -> Long.toHexString(random.nextLong()), false, step * (i + 1));
             columnBuilder.add(dataColumns[i]);
         }
-        List<TestColumn> columns = columnBuilder.build();
-        File file = File.createTempFile("presto_test_orc_page_source_max_read_bytes", "orc");
-        file.delete();
+        List<TestColumn> testColumns = columnBuilder.build();
+        File tempFile = File.createTempFile("presto_test_orc_page_source_max_read_bytes", "orc");
+        tempFile.delete();
 
-        TestPreparer preparer = new TestPreparer(file.getCanonicalPath(), columns, rowCount, rowCount);
-        ConnectorPageSource pageSource = preparer.newPageSource(stats, session);
+        TestPreparer testPreparer = new TestPreparer(tempFile.getAbsolutePath(), testColumns, rowCount, rowCount);
+        ConnectorPageSource pageSource = testPreparer.newPageSource(stats, session);
 
         try {
             int positionCount = 0;
@@ -312,7 +312,7 @@ public class TestOrcPageSourceMemoryTracking
             pageSource.close();
         }
         finally {
-            file.delete();
+            tempFile.delete();
         }
     }
 
@@ -338,10 +338,11 @@ public class TestOrcPageSourceMemoryTracking
             if (memoryUsage == -1) {
                 memoryUsage = driverContext.getSystemMemoryUsage();
                 assertBetweenInclusive(memoryUsage, 180000L, 469999L);
-                System.out.println(String.format(Locale.ENGLISH, "[TotalRows: %d] memUsage: %d", totalRows, driverContext.getSystemMemoryUsage()));
+                System.out.println(String.format("[TotalRows: %d] memUsage: %d", totalRows, driverContext.getSystemMemoryUsage()));
             }
             else {
-                System.out.println(String.format(Locale.ENGLISH, "[TotalRows: %d] memUsage: %d", totalRows, driverContext.getSystemMemoryUsage()));
+                //assertEquals(driverContext.getSystemMemoryUsage(), memoryUsage);
+                System.out.println(String.format("[TotalRows: %d] memUsage: %d", totalRows, driverContext.getSystemMemoryUsage()));
             }
         }
 
@@ -493,31 +494,30 @@ public class TestOrcPageSourceMemoryTracking
                     new HiveConfig().getOrcRowDataCacheMaximumWeight(), Duration.ofMillis(new HiveConfig().getOrcRowDataCacheTtl().toMillis()),
                     new HiveConfig().isOrcCacheStatsMetricCollectionEnabled()));
             return HivePageSourceProvider.createHivePageSource(
-                            ImmutableSet.of(),
-                            ImmutableSet.of(orcPageSourceFactory),
-                            new Configuration(),
-                            session,
-                            fileSplit.getPath(),
-                            OptionalInt.empty(),
-                            fileSplit.getStart(),
-                            fileSplit.getLength(),
-                            fileSplit.getLength(),
-                            schema,
-                            TupleDomain.all(),
-                            columns,
-                            partitionKeys,
-                            TYPE_MANAGER,
-                            ImmutableMap.of(),
-                            Optional.empty(),
-                            false,
-                            dynamicFilterSupplier,
-                            Optional.empty(),
-                            Optional.empty(),
-                            Optional.empty(),
-                            null,
-                            false,
-                            -1L,
-                            ImmutableMap.of(), ImmutableList.of())
+                    ImmutableSet.of(),
+                    ImmutableSet.of(orcPageSourceFactory),
+                    new Configuration(),
+                    session,
+                    fileSplit.getPath(),
+                    OptionalInt.empty(),
+                    fileSplit.getStart(),
+                    fileSplit.getLength(),
+                    fileSplit.getLength(),
+                    schema,
+                    TupleDomain.all(),
+                    columns,
+                    partitionKeys,
+                    DateTimeZone.UTC,
+                    TYPE_MANAGER,
+                    ImmutableMap.of(),
+                    Optional.empty(),
+                    false,
+                    dynamicFilterSupplier,
+                    Optional.empty(),
+                    Optional.empty(),
+                    Optional.empty(),
+                    null,
+                    false)
                     .get();
         }
 
@@ -579,18 +579,17 @@ public class TestOrcPageSourceMemoryTracking
             HiveOutputFormat<?, ?> outputFormat,
             Serializer serializer,
             String compressionCodec,
-            List<TestColumn> columns,
+            List<TestColumn> testColumns,
             int numRows,
             int stripeRows)
             throws Exception
     {
-        List<TestColumn> testColumnList = columns;
-                // filter out partition keys, which are not written to the file
-        testColumnList = ImmutableList.copyOf(filter(testColumnList, not(TestColumn::isPartitionKey)));
+        // filter out partition keys, which are not written to the file
+        testColumns = ImmutableList.copyOf(filter(testColumns, not(TestColumn::isPartitionKey)));
 
         Properties tableProperties = new Properties();
-        tableProperties.setProperty("columns", Joiner.on(',').join(transform(testColumnList, TestColumn::getName)));
-        tableProperties.setProperty("columns.types", Joiner.on(',').join(transform(testColumnList, TestColumn::getType)));
+        tableProperties.setProperty("columns", Joiner.on(',').join(transform(testColumns, TestColumn::getName)));
+        tableProperties.setProperty("columns.types", Joiner.on(',').join(transform(testColumns, TestColumn::getType)));
         serializer.initialize(CONFIGURATION, tableProperties);
 
         JobConf jobConf = new JobConf();
@@ -604,16 +603,16 @@ public class TestOrcPageSourceMemoryTracking
 
         try {
             SettableStructObjectInspector objectInspector = getStandardStructObjectInspector(
-                    ImmutableList.copyOf(transform(testColumnList, TestColumn::getName)),
-                    ImmutableList.copyOf(transform(testColumnList, TestColumn::getObjectInspector)));
+                    ImmutableList.copyOf(transform(testColumns, TestColumn::getName)),
+                    ImmutableList.copyOf(transform(testColumns, TestColumn::getObjectInspector)));
 
             Object row = objectInspector.create();
 
             List<StructField> fields = ImmutableList.copyOf(objectInspector.getAllStructFieldRefs());
 
             for (int rowNumber = 0; rowNumber < numRows; rowNumber++) {
-                for (int i = 0; i < testColumnList.size(); i++) {
-                    Object writeValue = testColumnList.get(i).getWriteValue();
+                for (int i = 0; i < testColumns.size(); i++) {
+                    Object writeValue = testColumns.get(i).getWriteValue();
                     if (writeValue instanceof Slice) {
                         writeValue = ((Slice) writeValue).getBytes();
                     }
@@ -804,7 +803,7 @@ public class TestOrcPageSourceMemoryTracking
                 new ParquetFileWriterConfig()).getSessionProperties());
         List<ConnectorPageSource> pageSources = new ArrayList<>();
 
-        Supplier<List<Map<ColumnHandle, DynamicFilter>>> supplier = null;
+        Supplier<Map<ColumnHandle, DynamicFilter>> supplier = null;
         DynamicFilterSupplier theSupplier = new DynamicFilterSupplier(supplier, System.currentTimeMillis(), waitTime);
 
         Optional<DynamicFilterSupplier> dynamicFilterSupplier = Optional.of(theSupplier);

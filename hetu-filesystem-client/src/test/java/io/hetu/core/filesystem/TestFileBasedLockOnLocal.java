@@ -1,5 +1,5 @@
 /*
- * Copyright (C) 2018-2021. Huawei Technologies Co., Ltd. All rights reserved.
+ * Copyright (C) 2018-2020. Huawei Technologies Co., Ltd. All rights reserved.
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
  * You may obtain a copy of the License at
@@ -21,7 +21,6 @@ import org.testng.annotations.Test;
 
 import java.io.IOException;
 import java.io.OutputStream;
-import java.nio.charset.StandardCharsets;
 import java.nio.file.Path;
 import java.nio.file.Paths;
 import java.util.concurrent.TimeUnit;
@@ -56,7 +55,7 @@ public class TestFileBasedLockOnLocal
         FileBasedLock lock = new FileBasedLock(fs, testDir, 1000L,
                 FileBasedLock.DEFAULT_RETRY_INTERVAL, FileBasedLock.DEFAULT_REFRESH_RATE);
         OutputStream os = fs.newOutputStream(testDir.resolve(".lockFile"));
-        os.write("test".getBytes(StandardCharsets.UTF_8));
+        os.write("test".getBytes());
         os.close();
         assertTrue(lock.isLocked());
         Thread.sleep(1200L);
@@ -72,7 +71,7 @@ public class TestFileBasedLockOnLocal
         FileBasedLock lock = new FileBasedLock(fs, testDir, 1000L,
                 FileBasedLock.DEFAULT_RETRY_INTERVAL, FileBasedLock.DEFAULT_REFRESH_RATE);
         OutputStream os = fs.newOutputStream(testDir.resolve(".lockInfo"));
-        os.write("test".getBytes(StandardCharsets.UTF_8));
+        os.write("test".getBytes());
         os.close();
         assertFalse(lock.acquiredLock());
         Thread.sleep(1200L);
@@ -85,9 +84,9 @@ public class TestFileBasedLockOnLocal
             throws InterruptedException, IOException
     {
         Path testDir = Paths.get(testLockRoot + "/testRaceCondition");
-        FileBasedLock lock1 = new FileBasedLock(fs, testDir, 10000L,
+        FileBasedLock lock1 = new FileBasedLock(fs, testDir, 1000L,
                 FileBasedLock.DEFAULT_RETRY_INTERVAL, FileBasedLock.DEFAULT_REFRESH_RATE);
-        FileBasedLock lock2 = new FileBasedLock(fs, testDir, 10000L,
+        FileBasedLock lock2 = new FileBasedLock(fs, testDir, 1000L,
                 FileBasedLock.DEFAULT_RETRY_INTERVAL, FileBasedLock.DEFAULT_REFRESH_RATE);
         lock1.lock();
         assertTrue(lock1.isLocked());

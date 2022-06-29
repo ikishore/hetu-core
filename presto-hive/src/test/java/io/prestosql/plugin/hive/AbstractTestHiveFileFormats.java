@@ -43,11 +43,9 @@ import io.prestosql.testing.MaterializedRow;
 import io.prestosql.tests.StructuralTestUtil;
 import org.apache.hadoop.conf.Configuration;
 import org.apache.hadoop.fs.Path;
-import org.apache.hadoop.hive.common.type.Date;
 import org.apache.hadoop.hive.common.type.HiveChar;
 import org.apache.hadoop.hive.common.type.HiveDecimal;
 import org.apache.hadoop.hive.common.type.HiveVarchar;
-import org.apache.hadoop.hive.common.type.Timestamp;
 import org.apache.hadoop.hive.ql.exec.FileSinkOperator.RecordWriter;
 import org.apache.hadoop.hive.ql.io.HiveOutputFormat;
 import org.apache.hadoop.hive.serde2.Serializer;
@@ -72,6 +70,8 @@ import java.io.IOException;
 import java.lang.invoke.MethodHandle;
 import java.math.BigDecimal;
 import java.math.BigInteger;
+import java.sql.Date;
+import java.sql.Timestamp;
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.HashMap;
@@ -148,20 +148,17 @@ import static org.testng.Assert.assertTrue;
 @Test(groups = "hive")
 public abstract class AbstractTestHiveFileFormats
 {
-    protected static final DateTimeZone HIVE_STORAGE_TIME_ZONE = DateTimeZone.forID("America/Bahia_Banderas");
-
     private static final double EPSILON = 0.001;
 
     private static final long DATE_MILLIS_UTC = new DateTime(2011, 5, 6, 0, 0, UTC).getMillis();
     private static final long DATE_DAYS = TimeUnit.MILLISECONDS.toDays(DATE_MILLIS_UTC);
     private static final String DATE_STRING = DateTimeFormat.forPattern("yyyy-MM-dd").withZoneUTC().print(
             DATE_MILLIS_UTC);
-    private static final Date HIVE_DATE = Date.ofEpochMilli(DATE_MILLIS_UTC);
+    private static final Date SQL_DATE = new Date(UTC.getMillisKeepLocal(DateTimeZone.getDefault(), DATE_MILLIS_UTC));
 
     private static final long TIMESTAMP = new DateTime(2011, 5, 6, 7, 8, 9, 123).getMillis();
-    private static final String TIMESTAMP_STRING = DateTimeFormat.forPattern("yyyy-MM-dd HH:mm:ss.SSS").withZoneUTC().print(
+    private static final String TIMESTAMP_STRING = DateTimeFormat.forPattern("yyyy-MM-dd HH:mm:ss.SSS").print(
             TIMESTAMP);
-    private static final Timestamp HIVE_TIMESTAMP = Timestamp.ofEpochMilli(TIMESTAMP);
 
     private static final String VARCHAR_MAX_LENGTH_STRING;
 
@@ -241,6 +238,7 @@ public abstract class AbstractTestHiveFileFormats
                     WRITE_DECIMAL_PRECISION_18.toString(), EXPECTED_DECIMAL_PRECISION_18, true))
             .add(new TestColumn("p_decimal_precision_38", DECIMAL_INSPECTOR_PRECISION_38,
                     WRITE_DECIMAL_PRECISION_38.toString() + "BD", EXPECTED_DECIMAL_PRECISION_38, true))
+//            .add(new TestColumn("p_binary", javaByteArrayObjectInspector, "test2", Slices.utf8Slice("test2"), true))
             .add(new TestColumn("p_null_string", javaStringObjectInspector, HIVE_DEFAULT_DYNAMIC_PARTITION, null, true))
             .add(new TestColumn("p_null_varchar", javaHiveVarcharObjectInspector, HIVE_DEFAULT_DYNAMIC_PARTITION, null,
                     true))
@@ -270,6 +268,7 @@ public abstract class AbstractTestHiveFileFormats
             .add(new TestColumn("p_null_decimal_precision_38", DECIMAL_INSPECTOR_PRECISION_38,
                     HIVE_DEFAULT_DYNAMIC_PARTITION, null, true))
 
+//            .add(new TestColumn("p_null_binary", javaByteArrayObjectInspector, HIVE_DEFAULT_DYNAMIC_PARTITION, null, true))
             .add(new TestColumn("t_null_string", javaStringObjectInspector, null, null))
             .add(new TestColumn("t_null_varchar", javaHiveVarcharObjectInspector, null, null))
             .add(new TestColumn("t_null_char", CHAR_INSPECTOR_LENGTH_10, null, null))
@@ -298,8 +297,8 @@ public abstract class AbstractTestHiveFileFormats
             .add(new TestColumn("t_double", javaDoubleObjectInspector, 6.2, 6.2))
             .add(new TestColumn("t_boolean_true", javaBooleanObjectInspector, true, true))
             .add(new TestColumn("t_boolean_false", javaBooleanObjectInspector, false, false))
-            .add(new TestColumn("t_date", javaDateObjectInspector, HIVE_DATE, DATE_DAYS))
-            .add(new TestColumn("t_timestamp", javaTimestampObjectInspector, HIVE_TIMESTAMP, TIMESTAMP))
+            .add(new TestColumn("t_date", javaDateObjectInspector, SQL_DATE, DATE_DAYS))
+            .add(new TestColumn("t_timestamp", javaTimestampObjectInspector, new Timestamp(TIMESTAMP), TIMESTAMP))
             .add(new TestColumn("t_decimal_precision_2", DECIMAL_INSPECTOR_PRECISION_2, WRITE_DECIMAL_PRECISION_2,
                     EXPECTED_DECIMAL_PRECISION_2))
             .add(new TestColumn("t_decimal_precision_4", DECIMAL_INSPECTOR_PRECISION_4, WRITE_DECIMAL_PRECISION_4,
@@ -360,11 +359,11 @@ public abstract class AbstractTestHiveFileFormats
                     mapBlockOf(BOOLEAN, BOOLEAN, true, true)))
             .add(new TestColumn("t_map_date",
                     getStandardMapObjectInspector(javaDateObjectInspector, javaDateObjectInspector),
-                    ImmutableMap.of(HIVE_DATE, HIVE_DATE),
+                    ImmutableMap.of(SQL_DATE, SQL_DATE),
                     mapBlockOf(DateType.DATE, DateType.DATE, DATE_DAYS, DATE_DAYS)))
             .add(new TestColumn("t_map_timestamp",
                     getStandardMapObjectInspector(javaTimestampObjectInspector, javaTimestampObjectInspector),
-                    ImmutableMap.of(HIVE_TIMESTAMP, HIVE_TIMESTAMP),
+                    ImmutableMap.of(new Timestamp(TIMESTAMP), new Timestamp(TIMESTAMP)),
                     mapBlockOf(TimestampType.TIMESTAMP, TimestampType.TIMESTAMP, TIMESTAMP, TIMESTAMP)))
             .add(new TestColumn("t_map_decimal_precision_2",
                     getStandardMapObjectInspector(DECIMAL_INSPECTOR_PRECISION_2, DECIMAL_INSPECTOR_PRECISION_2),
@@ -420,11 +419,11 @@ public abstract class AbstractTestHiveFileFormats
                     arrayBlockOf(createCharType(10), "test")))
             .add(new TestColumn("t_array_date",
                     getStandardListObjectInspector(javaDateObjectInspector),
-                    ImmutableList.of(HIVE_DATE),
+                    ImmutableList.of(SQL_DATE),
                     arrayBlockOf(DateType.DATE, DATE_DAYS)))
             .add(new TestColumn("t_array_timestamp",
                     getStandardListObjectInspector(javaTimestampObjectInspector),
-                    ImmutableList.of(HIVE_TIMESTAMP),
+                    ImmutableList.of(new Timestamp(TIMESTAMP)),
                     StructuralTestUtil.arrayBlockOf(TimestampType.TIMESTAMP, TIMESTAMP)))
             .add(new TestColumn("t_array_decimal_precision_2",
                     getStandardListObjectInspector(DECIMAL_INSPECTOR_PRECISION_2),
@@ -562,16 +561,15 @@ public abstract class AbstractTestHiveFileFormats
         return columns;
     }
 
-    public static FileSplit createTestFilePresto(
+    public static FileSplit createTestFile(
             String filePath,
             HiveStorageFormat storageFormat,
             HiveCompressionCodec compressionCodec,
-            List<TestColumn> columns,
+            List<TestColumn> testColumns,
             ConnectorSession session,
             int numRows,
             HiveFileWriterFactory fileWriterFactory)
     {
-        List<TestColumn> testColumns = columns;
         // filter out partition keys, which are not written to the file
         testColumns = ImmutableList.copyOf(filter(testColumns, not(TestColumn::isPartitionKey)));
 
@@ -620,18 +618,17 @@ public abstract class AbstractTestHiveFileFormats
         return new FileSplit(new Path(filePath), 0, new File(filePath).length(), new String[0]);
     }
 
-    public static FileSplit createTestFileHive(
+    public static FileSplit createTestFile(
             String filePath,
             HiveStorageFormat storageFormat,
             HiveCompressionCodec compressionCodec,
-            List<TestColumn> columns,
+            List<TestColumn> testColumns,
             int numRows)
             throws Exception
     {
         HiveOutputFormat<?, ?> outputFormat = newInstance(storageFormat.getOutputFormat(), HiveOutputFormat.class);
         Serializer serializer = newInstance(storageFormat.getSerDe(), Serializer.class);
 
-        List<TestColumn> testColumns = columns;
         // filter out partition keys, which are not written to the file
         testColumns = ImmutableList.copyOf(filter(testColumns, not(TestColumn::isPartitionKey)));
 
@@ -840,7 +837,7 @@ public abstract class AbstractTestHiveFileFormats
                         assertEquals(actualValue, expectedValue);
                     }
                     else if (testColumn.getObjectInspector().getTypeName().equals("timestamp")) {
-                        SqlTimestamp expectedTimestamp = sqlTimestampOf((Long) expectedValue);
+                        SqlTimestamp expectedTimestamp = sqlTimestampOf((Long) expectedValue, SESSION);
                         assertEquals(actualValue, expectedTimestamp, "Wrong value for column " + testColumn.getName());
                     }
                     else if (testColumn.getObjectInspector().getTypeName().startsWith("char")) {

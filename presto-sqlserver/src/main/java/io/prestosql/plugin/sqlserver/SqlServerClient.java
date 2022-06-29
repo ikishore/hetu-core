@@ -76,7 +76,7 @@ public class SqlServerClient
     {
         String sql = format(
                 "sp_rename %s, %s",
-                singleQuoteByList(catalogName, schemaName, tableName),
+                singleQuote(catalogName, schemaName, tableName),
                 singleQuote(newTable.getTableName()));
         try (Connection connection = connectionFactory.openConnection(identity)) {
             execute(connection, sql);
@@ -92,7 +92,7 @@ public class SqlServerClient
         try (Connection connection = connectionFactory.openConnection(identity)) {
             String sql = format(
                     "sp_rename %s, %s, 'COLUMN'",
-                    singleQuoteByList(handle.getCatalogName(), handle.getSchemaName(), handle.getTableName(), jdbcColumn.getColumnName()),
+                    singleQuote(handle.getCatalogName(), handle.getSchemaName(), handle.getTableName(), jdbcColumn.getColumnName()),
                     singleQuote(newColumnName));
             execute(connection, sql);
         }
@@ -164,7 +164,7 @@ public class SqlServerClient
         return true;
     }
 
-    private static String singleQuoteByList(String... objects)
+    private static String singleQuote(String... objects)
     {
         return singleQuote(DOT_JOINER.join(objects));
     }

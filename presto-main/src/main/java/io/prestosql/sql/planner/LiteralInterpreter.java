@@ -19,7 +19,7 @@ import io.prestosql.metadata.Metadata;
 import io.prestosql.operator.scalar.VarbinaryFunctions;
 import io.prestosql.spi.PrestoException;
 import io.prestosql.spi.connector.ConnectorSession;
-import io.prestosql.spi.function.FunctionHandle;
+import io.prestosql.spi.function.Signature;
 import io.prestosql.spi.relation.ConstantExpression;
 import io.prestosql.spi.type.BigintType;
 import io.prestosql.spi.type.BooleanType;
@@ -44,7 +44,6 @@ import io.prestosql.spi.type.VarbinaryType;
 import io.prestosql.spi.type.VarcharType;
 import io.prestosql.sql.InterpretedFunctionInvoker;
 import io.prestosql.sql.analyzer.SemanticException;
-import io.prestosql.sql.analyzer.TypeSignatureProvider;
 import io.prestosql.sql.tree.AstVisitor;
 import io.prestosql.sql.tree.BinaryLiteral;
 import io.prestosql.sql.tree.BooleanLiteral;
@@ -71,8 +70,8 @@ import java.math.MathContext;
 
 import static com.google.common.base.Preconditions.checkState;
 import static io.airlift.slice.Slices.utf8Slice;
-import static io.prestosql.metadata.CastType.CAST;
 import static io.prestosql.spi.StandardErrorCode.GENERIC_USER_ERROR;
+import static io.prestosql.spi.function.FunctionKind.SCALAR;
 import static io.prestosql.spi.type.Decimals.decodeUnscaledValue;
 import static io.prestosql.spi.type.TypeSignature.parseTypeSignature;
 import static io.prestosql.spi.type.VarcharType.VARCHAR;
@@ -177,7 +176,7 @@ public final class LiteralInterpreter
         private LiteralVisitor(Metadata metadata)
         {
             this.metadata = metadata;
-            this.functionInvoker = new InterpretedFunctionInvoker(metadata.getFunctionAndTypeManager());
+            this.functionInvoker = new InterpretedFunctionInvoker(metadata);
         }
 
         @Override
@@ -240,13 +239,13 @@ public final class LiteralInterpreter
             }
 
             if (JSON.equals(type)) {
-                FunctionHandle functionHandle = metadata.getFunctionAndTypeManager().lookupFunction("json_parse", TypeSignatureProvider.fromTypes(VARCHAR));
-                return functionInvoker.invoke(functionHandle, session, ImmutableList.of(utf8Slice(node.getValue())));
+                Signature operatorSignature = new Signature("json_parse", SCALAR, JSON.getTypeSignature(), VARCHAR.getTypeSignature());
+                return functionInvoker.invoke(operatorSignature, session, ImmutableList.of(utf8Slice(node.getValue())));
             }
 
             try {
-                FunctionHandle functionHandle = metadata.getFunctionAndTypeManager().lookupCast(CAST, VARCHAR.getTypeSignature(), type.getTypeSignature());
-                return functionInvoker.invoke(functionHandle, session, ImmutableList.of(utf8Slice(node.getValue())));
+                Signature signature = metadata.getCoercion(VARCHAR.getTypeSignature(), type.getTypeSignature());
+                return functionInvoker.invoke(signature, session, ImmutableList.of(utf8Slice(node.getValue())));
             }
             catch (IllegalArgumentException e) {
                 throw new SemanticException(TYPE_MISMATCH, node, "No literal form for type %s", type);
@@ -256,14 +255,24 @@ public final class LiteralInterpreter
         @Override
         protected Long visitTimeLiteral(TimeLiteral node, ConnectorSession session)
         {
-            return parseTimeLiteral(node.getValue());
+            if (session.isLegacyTimestamp()) {
+                return parseTimeLiteral(session.getTimeZoneKey(), node.getValue());
+            }
+            else {
+                return parseTimeLiteral(node.getValue());
+            }
         }
 
         @Override
         protected Long visitTimestampLiteral(TimestampLiteral node, ConnectorSession session)
         {
             try {
-                return parseTimestampLiteral(node.getValue());
+                if (session.isLegacyTimestamp()) {
+                    return parseTimestampLiteral(session.getTimeZoneKey(), node.getValue());
+                }
+                else {
+                    return parseTimestampLiteral(node.getValue());
+                }
             }
             catch (RuntimeException e) {
                 throw new SemanticException(INVALID_LITERAL, node, "'%s' is not a valid timestamp literal", node.getValue());

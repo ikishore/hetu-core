@@ -14,22 +14,13 @@
 package io.prestosql.operator;
 
 import com.google.common.annotations.VisibleForTesting;
-import com.google.common.collect.AbstractIterator;
 import com.google.common.collect.ImmutableList;
 import com.google.common.io.Closer;
 import com.google.common.util.concurrent.ListenableFuture;
 import io.prestosql.execution.Lifespan;
 import io.prestosql.memory.context.LocalMemoryContext;
-import io.prestosql.snapshot.SingleInputSnapshotState;
-import io.prestosql.snapshot.Spillable;
 import io.prestosql.spi.Page;
-import io.prestosql.spi.block.Block;
 import io.prestosql.spi.plan.PlanNodeId;
-import io.prestosql.spi.snapshot.BlockEncodingSerdeProvider;
-import io.prestosql.spi.snapshot.MarkerPage;
-import io.prestosql.spi.snapshot.RestorableConfig;
-import io.prestosql.spi.type.BigintType;
-import io.prestosql.spi.util.BloomFilter;
 import io.prestosql.spiller.SingleStreamSpiller;
 import io.prestosql.spiller.SingleStreamSpillerFactory;
 import io.prestosql.sql.gen.JoinFilterFunctionCompiler.JoinFilterFunctionFactory;
@@ -37,24 +28,15 @@ import io.prestosql.sql.gen.JoinFilterFunctionCompiler.JoinFilterFunctionFactory
 import javax.annotation.Nullable;
 import javax.annotation.concurrent.ThreadSafe;
 
-import java.io.ByteArrayInputStream;
-import java.io.ByteArrayOutputStream;
 import java.io.IOException;
-import java.io.Serializable;
-import java.io.UncheckedIOException;
-import java.nio.file.Path;
 import java.util.ArrayDeque;
-import java.util.ArrayList;
-import java.util.Arrays;
 import java.util.HashMap;
-import java.util.Iterator;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
 import java.util.OptionalInt;
 import java.util.OptionalLong;
 import java.util.Queue;
-import java.util.concurrent.atomic.AtomicBoolean;
 
 import static com.google.common.base.Preconditions.checkArgument;
 import static com.google.common.base.Preconditions.checkState;
@@ -62,24 +44,12 @@ import static com.google.common.base.Verify.verify;
 import static com.google.common.util.concurrent.Futures.immediateFuture;
 import static io.airlift.concurrent.MoreFutures.checkSuccess;
 import static io.airlift.concurrent.MoreFutures.getDone;
-import static io.prestosql.SystemSessionProperties.isInnerJoinSpillFilteringEnabled;
 import static java.lang.String.format;
 import static java.util.Objects.requireNonNull;
 
-// Snapshot: Most of these fields are immutable objects, excpet for:
-// - spilledLookupSourceHandle: content is only changed after index is fully built
-// - spillInProgress: must be "done" when markers are received (see needsInput)
-// - unspillInProgress: unspill can only happen after "finish", so no marker can be received after that
-// - lookupSourceSupplier: only becomes non-null after "finish"
-// - lookupSourceChecksum: only used when unspilling lookupSourceSupplier
-// - finishMemoryRevoke: must be empty, because new input (including markers) can't be added until finishMemoryRevoke is called
 @ThreadSafe
-@RestorableConfig(uncapturedFields = {"lookupSourceFactory", "lookupSourceFactoryDestroyed", "outputChannels",
-        "hashChannels", "filterFunctionFactory", "sortChannel", "searchFunctionFactories", "singleStreamSpillerFactory",
-        "lookupSourceNotNeeded", "spilledLookupSourceHandle", "spillInProgress", "unspillInProgress", "lookupSourceSupplier", "lookupSourceChecksum",
-        "finishMemoryRevoke", "snapshotState", "lastMarker"})
 public class HashBuilderOperator
-        implements SinkOperator, Spillable
+        implements Operator
 {
     public static class HashBuilderOperatorFactory
             implements OperatorFactory
@@ -142,20 +112,15 @@ public class HashBuilderOperator
         public HashBuilderOperator createOperator(DriverContext driverContext)
         {
             checkState(!closed, "Factory is already closed");
-            OperatorContext addOperatorContext = driverContext.addOperatorContext(operatorId, planNodeId, HashBuilderOperator.class.getSimpleName());
+            OperatorContext operatorContext = driverContext.addOperatorContext(operatorId, planNodeId, HashBuilderOperator.class.getSimpleName());
 
-            PartitionedLookupSourceFactory partitionedLookupSourceFactory = this.lookupSourceFactoryManager.getJoinBridge(driverContext.getLifespan());
-            int incrementPartitionIndex = getAndIncrementPartitionIndex(driverContext.getLifespan());
-            // Snapshot: make driver ID and source/partition index the same, to ensure consistency before and after resuming.
-            // LocalExchangeSourceOperator also uses the same mechanism to ensure consistency.
-            if (addOperatorContext.isSnapshotEnabled()) {
-                incrementPartitionIndex = driverContext.getDriverId();
-            }
-            verify(incrementPartitionIndex < partitionedLookupSourceFactory.partitions());
+            PartitionedLookupSourceFactory lookupSourceFactory = this.lookupSourceFactoryManager.getJoinBridge(driverContext.getLifespan());
+            int partitionIndex = getAndIncrementPartitionIndex(driverContext.getLifespan());
+            verify(partitionIndex < lookupSourceFactory.partitions());
             return new HashBuilderOperator(
-                    addOperatorContext,
-                    partitionedLookupSourceFactory,
-                    incrementPartitionIndex,
+                    operatorContext,
+                    lookupSourceFactory,
+                    partitionIndex,
                     outputChannels,
                     hashChannels,
                     preComputedHashChannel,
@@ -230,7 +195,6 @@ public class HashBuilderOperator
     private final OperatorContext operatorContext;
     private final LocalMemoryContext localUserMemoryContext;
     private final LocalMemoryContext localRevocableMemoryContext;
-    //TODO-cp-I2DSGR: Shared field
     private final PartitionedLookupSourceFactory lookupSourceFactory;
     private final ListenableFuture<?> lookupSourceFactoryDestroyed;
     private final int partitionIndex;
@@ -251,7 +215,7 @@ public class HashBuilderOperator
 
     private State state = State.CONSUMING_INPUT;
     private Optional<ListenableFuture<?>> lookupSourceNotNeeded = Optional.empty();
-    private final SpilledLookupSourceHandle spilledLookupSourceHandle;
+    private final SpilledLookupSourceHandle spilledLookupSourceHandle = new SpilledLookupSourceHandle();
     private Optional<SingleStreamSpiller> spiller = Optional.empty();
     private ListenableFuture<?> spillInProgress = NOT_BLOCKED;
     private Optional<ListenableFuture<List<Page>>> unspillInProgress = Optional.empty();
@@ -260,26 +224,6 @@ public class HashBuilderOperator
     private OptionalLong lookupSourceChecksum = OptionalLong.empty();
 
     private Optional<Runnable> finishMemoryRevoke = Optional.empty();
-    private SpilledBlooms spillBloom;
-    private final long expectedValues;
-
-    private final SingleInputSnapshotState snapshotState;
-    // Snapshot: special logic for taking an extra snapshot for HashBuilder operator, for outer joins.
-    // LookupOuterOperator uses matched indices to determine which rows on the build side to send out.
-    // When LookupOuterOperator captures its state, it captures the above indices. But when the query resumes from a snapshot,
-    // pages received by HashBuilderOperator may be in a different order from the initial run.
-    // This means rows may occupy different indices after the resume, which invalidates what LookupOuterOperator captured.
-    // Note that when LookupOuterOperator captures the indices, the snapshot id must be *after* the last snapshot taken by the HashBuilderOperator.
-    // To overcome this problem, an additional snapshot is taken of the HashBuilderOperator, when the operator finishes.
-    // This snapshot contains all the rows, so when it's restored, their indices will stay the same.
-    // When query resumes to a snapshot with non-empty indices captured by LookupOuterOperator, this final snapshot of HashBuilderOperator is used,
-    // ensuring that what's inside the hash and the restored "matched positions" have consistent indices.
-    // Note that when this extra snapshot is loaded, operators preceding the HashBuilderOperator are still at an earlier snapshot,
-    // and may try to send pages the HashBuilderOperator. These pages must be discarded because HashBuilderOperator already has them.
-    // The lastSnapshotId is used to determine what id to use for the final snapshot.
-    private MarkerPage lastMarker;
-    // If this flag is true, then it was restored from the extra snapshot, and should discard incoming pages.
-    private boolean alreadyFinished;
 
     public HashBuilderOperator(
             OperatorContext operatorContext,
@@ -319,16 +263,6 @@ public class HashBuilderOperator
 
         this.spillEnabled = spillEnabled;
         this.singleStreamSpillerFactory = requireNonNull(singleStreamSpillerFactory, "singleStreamSpillerFactory is null");
-        this.snapshotState = operatorContext.isSnapshotEnabled() ? SingleInputSnapshotState.forOperator(this, operatorContext) : null;
-        this.expectedValues = expectedPositions * 10;
-        if (preComputedHashChannel.isPresent() && spillEnabled && isInnerJoinSpillFilteringEnabled(operatorContext.getDriverContext().getSession())) {
-            this.spillBloom = new SpilledBlooms();
-        }
-        else {
-            this.spillBloom = null;
-        }
-
-        spilledLookupSourceHandle = new SpilledLookupSourceHandle(spillBloom);
     }
 
     @Override
@@ -385,18 +319,6 @@ public class HashBuilderOperator
     {
         requireNonNull(page, "page is null");
 
-        if (snapshotState != null) {
-            if (snapshotState.processPage(page)) {
-                // Remember the last snapshot id, so we know what to use for the final snapshot
-                lastMarker = (MarkerPage) page;
-                return;
-            }
-            if (alreadyFinished) {
-                // We already have all the pages. Ignore additional ones.
-                return;
-            }
-        }
-
         if (lookupSourceFactoryDestroyed.isDone()) {
             close();
             return;
@@ -431,22 +353,7 @@ public class HashBuilderOperator
     {
         checkState(spillInProgress.isDone(), "Previous spill still in progress");
         checkSuccess(spillInProgress, "spilling failed");
-        updateBloom(page);
         spillInProgress = getSpiller().spill(page);
-    }
-
-    private void updateBloom(Page page)
-    {
-        if (spillBloom == null) {
-            return;
-        }
-
-        int hashChannel = preComputedHashChannel.getAsInt();
-        Block hashes = page.getBlock(hashChannel);
-        for (int i = 0; i < page.getPositionCount(); i++) {
-            //Todo make generic: spillBloom.put(type.get(hashes, i));
-            spillBloom.put(BigintType.BIGINT.getLong(hashes, i));
-        }
     }
 
     @Override
@@ -474,9 +381,6 @@ public class HashBuilderOperator
         }
         if (state == State.LOOKUP_SOURCE_BUILT) {
             finishMemoryRevoke = Optional.of(() -> {
-                if (spillBloom != null) {
-                    spillBloom.markReady();
-                }
                 lookupSourceFactory.setPartitionSpilledLookupSourceHandle(partitionIndex, spilledLookupSourceHandle);
                 lookupSourceNotNeeded = Optional.empty();
                 index.clear();
@@ -504,21 +408,7 @@ public class HashBuilderOperator
                 index.getTypes(),
                 operatorContext.getSpillContext().newLocalSpillContext(),
                 operatorContext.newLocalSystemMemoryContext(HashBuilderOperator.class.getSimpleName())));
-        return getSpiller().spill(new AbstractIterator<Page>()
-        {
-            private Iterator<Page> spillPages = index.getPages();
-
-            @Override
-            protected Page computeNext()
-            {
-                if (!spillPages.hasNext()) {
-                    return endOfData();
-                }
-                Page page = spillPages.next();
-                updateBloom(page);
-                return page;
-            }
-        });
+        return getSpiller().spill(index.getPages());
     }
 
     @Override
@@ -530,28 +420,13 @@ public class HashBuilderOperator
     }
 
     @Override
-    public void finish()
+    public Page getOutput()
     {
-        if (snapshotState != null && !alreadyFinished && lastMarker != null) {
-            // Update alreadyFinished field *before* calling captureState
-            alreadyFinished = true;
-            // There should have been at least one marker, either resume or snapshot.
-            // In case there isn't, then this must be the initial run but marker was never received,
-            // so no snapshot wil be marked complete. In this case there's no need to produce the final snapshot.
-            if (lastMarker.isResuming()) {
-                // If it was a resume marker, then we don't know what the "next" snapshot should be.
-                // This means we can't use the resumed snapshot for "backtrack".
-                // This is guaranteed by QuerySnapshotManager#queryRestoreComplete().
-            }
-            else {
-                // Take a final snapshot of this operator
-                snapshotState.captureExtraState(lastMarker.getSnapshotId() + 1);
-            }
-        }
-        doFinish();
+        return null;
     }
 
-    private void doFinish()
+    @Override
+    public void finish()
     {
         if (lookupSourceFactoryDestroyed.isDone()) {
             close();
@@ -643,9 +518,6 @@ public class HashBuilderOperator
             return;
         }
         checkSuccess(spillInProgress, "spilling failed");
-        if (spillBloom != null) {
-            spillBloom.markReady();
-        }
         state = State.INPUT_SPILLED;
     }
 
@@ -710,7 +582,6 @@ public class HashBuilderOperator
         localUserMemoryContext.setBytes(index.getEstimatedSize().toBytes());
 
         close();
-        spilledLookupSourceHandle.setDisposeCompleted();
     }
 
     private LookupSourceSupplier buildLookupSource()
@@ -756,187 +627,9 @@ public class HashBuilderOperator
             spiller.ifPresent(closer::register);
             closer.register(() -> localUserMemoryContext.setBytes(0));
             closer.register(() -> localRevocableMemoryContext.setBytes(0));
-            closer.register(() -> {
-                if (snapshotState != null) {
-                    snapshotState.close();
-                }
-            });
         }
         catch (IOException e) {
             throw new RuntimeException(e);
         }
-    }
-
-    @Override
-    public boolean isSpilled()
-    {
-        return state == State.SPILLING_INPUT || state == State.INPUT_SPILLED || state == State.INPUT_UNSPILLING;
-    }
-
-    @Override
-    public List<Path> getSpilledFilePaths()
-    {
-        if (isSpilled()) {
-            return ImmutableList.of(spiller.get().getFile());
-        }
-        return ImmutableList.of();
-    }
-
-    public class SpilledBlooms
-    {
-        AtomicBoolean isReady = new AtomicBoolean(false);
-        List<BloomFilter> blooms = new ArrayList<>(Arrays.asList(new BloomFilter(expectedValues, 0.01)));
-        int counter;
-
-        public void put(long value)
-        {
-            int current = blooms.size() - 1;
-            if (counter >= expectedValues) {
-                blooms.add(new BloomFilter(expectedValues, 0.01));
-                counter = 0;
-            }
-
-            blooms.get(current).add(value);
-            counter++;
-        }
-
-        public boolean mightContain(long value)
-        {
-            if (!isReady.get()) {
-                return true;
-            }
-
-            return blooms.stream().anyMatch(bf -> bf.test(value));
-        }
-
-        public void markReady()
-        {
-            isReady.compareAndSet(false, true);
-        }
-
-        public Object capture()
-        {
-            SpillBloomState myState = new SpillBloomState();
-            myState.counter = counter;
-            myState.isReady = isReady.get();
-
-            for (BloomFilter bf : blooms) {
-                ByteArrayOutputStream bos = new ByteArrayOutputStream();
-                try {
-                    bf.writeTo(bos);
-                    myState.blooms.add(bos.toByteArray());
-                }
-                catch (IOException e) {
-                    throw new UncheckedIOException(e);
-                }
-            }
-            return myState;
-        }
-
-        public void restore(Object state)
-        {
-            SpillBloomState myState = (SpillBloomState) state;
-            this.isReady.set(myState.isReady);
-            this.counter = myState.counter;
-
-            blooms.clear();
-            for (Object obj : myState.blooms) {
-                ByteArrayInputStream bis = new ByteArrayInputStream((byte[]) obj);
-                try {
-                    blooms.add(BloomFilter.readFrom(bis));
-                    bis.close();
-                }
-                catch (IOException e) {
-                    throw new UncheckedIOException(e);
-                }
-            }
-        }
-
-        private class SpillBloomState
-                implements Serializable
-        {
-            boolean isReady;
-            int counter;
-            List<Object> blooms = new ArrayList<>();
-        }
-    }
-
-    @Override
-    public Object capture(BlockEncodingSerdeProvider serdeProvider)
-    {
-        HashBuilderOperatorState myState = new HashBuilderOperatorState();
-        myState.operatorContext = operatorContext.capture(serdeProvider);
-        myState.localUserMemoryContext = localUserMemoryContext.getBytes();
-        myState.localRevocableMemoryContext = localRevocableMemoryContext.getBytes();
-        myState.index = index.capture(serdeProvider);
-        myState.hashCollisionsCounter = hashCollisionsCounter.capture(serdeProvider);
-        myState.state = state.toString();
-        myState.alreadyFinished = alreadyFinished;
-
-        // Capture spill related to spill
-        if (spiller.isPresent()) {
-            myState.spiller = spiller.get().capture(serdeProvider);
-        }
-
-        if (spillBloom != null) {
-            myState.spillBloom = spillBloom.capture();
-        }
-        return myState;
-    }
-
-    @Override
-    public void restore(Object state, BlockEncodingSerdeProvider serdeProvider)
-    {
-        HashBuilderOperatorState myState = (HashBuilderOperatorState) state;
-        this.operatorContext.restore(myState.operatorContext, serdeProvider);
-        this.localUserMemoryContext.setBytes(myState.localUserMemoryContext);
-        this.localRevocableMemoryContext.setBytes(myState.localRevocableMemoryContext);
-
-        this.index.restore(myState.index, serdeProvider);
-
-        this.hashCollisionsCounter.restore(myState.hashCollisionsCounter, serdeProvider);
-        State oldState = this.state;
-        this.state = State.valueOf(myState.state);
-        this.alreadyFinished = myState.alreadyFinished;
-
-        // Restore spill related fields
-        if (myState.spiller != null) {
-            if (!spiller.isPresent()) {
-                spiller = Optional.of(singleStreamSpillerFactory.create(
-                        index.getTypes(),
-                        operatorContext.getSpillContext().newLocalSpillContext(),
-                        operatorContext.newLocalSystemMemoryContext(HashBuilderOperator.class.getSimpleName())));
-            }
-            this.spiller.get().restore(myState.spiller, serdeProvider);
-        }
-        if (myState.spillBloom != null) {
-            this.spillBloom.restore(myState.spillBloom);
-        }
-        if (oldState == State.CONSUMING_INPUT && this.state == State.SPILLING_INPUT) {
-            lookupSourceFactory.setPartitionSpilledLookupSourceHandle(partitionIndex, spilledLookupSourceHandle);
-        }
-    }
-
-    @Override
-    public boolean supportsConsolidatedWrites()
-    {
-        return false;
-    }
-
-    private static class HashBuilderOperatorState
-            implements Serializable
-    {
-        private Object operatorContext;
-        private long localUserMemoryContext;
-        private long localRevocableMemoryContext;
-
-        private Object index;
-
-        private Object hashCollisionsCounter;
-        private String state;
-        private boolean alreadyFinished;
-        private Object spiller;
-
-        private Object spillBloom;
     }
 }

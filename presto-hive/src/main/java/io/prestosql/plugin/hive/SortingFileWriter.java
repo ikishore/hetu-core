@@ -30,7 +30,6 @@ import io.prestosql.spi.PageSorter;
 import io.prestosql.spi.PrestoException;
 import io.prestosql.spi.block.SortOrder;
 import io.prestosql.spi.type.Type;
-import org.apache.hadoop.fs.FileStatus;
 import org.apache.hadoop.fs.FileSystem;
 import org.apache.hadoop.fs.Path;
 import org.openjdk.jol.info.ClassLayout;
@@ -226,21 +225,17 @@ public class SortingFileWriter
 
             for (TempFile tempFile : files) {
                 Path file = tempFile.getPath();
-                FileStatus fileStatus = fileSystem.getFileStatus(file);
                 OrcDataSource dataSource = new HdfsOrcDataSource(
                         new OrcDataSourceId(file.toString()),
-                        fileStatus.getLen(),
+                        fileSystem.getFileStatus(file).getLen(),
                         new DataSize(1, MEGABYTE),
                         new DataSize(8, MEGABYTE),
                         new DataSize(8, MEGABYTE),
                         false,
                         fileSystem.open(file),
-                        new FileFormatDataSourceStats(),
-                        fileStatus.getModificationTime());
-                TempFileReader reader = new TempFileReader(types, dataSource);
-                // Closing the reader also closes the data source
-                closer.register(reader);
-                iterators.add(reader);
+                        new FileFormatDataSourceStats());
+                closer.register(dataSource);
+                iterators.add(new TempFileReader(types, dataSource));
             }
 
             new MergingPageIterator(iterators, types, sortFields, sortOrders)

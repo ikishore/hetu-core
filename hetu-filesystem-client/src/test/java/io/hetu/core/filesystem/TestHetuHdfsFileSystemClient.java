@@ -1,5 +1,5 @@
 /*
- * Copyright (C) 2018-2021. Huawei Technologies Co., Ltd. All rights reserved.
+ * Copyright (C) 2018-2020. Huawei Technologies Co., Ltd. All rights reserved.
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
  * You may obtain a copy of the License at
@@ -27,7 +27,6 @@ import java.io.IOException;
 import java.io.InputStream;
 import java.io.InputStreamReader;
 import java.io.OutputStream;
-import java.nio.charset.StandardCharsets;
 import java.nio.file.AccessDeniedException;
 import java.nio.file.DirectoryNotEmptyException;
 import java.nio.file.FileAlreadyExistsException;
@@ -222,11 +221,11 @@ public class TestHetuHdfsFileSystemClient
         assertFalse(fs.exists(path));
         String content = "test content";
         OutputStream os = fs.newOutputStream(path);
-        os.write(content.getBytes(StandardCharsets.UTF_8));
+        os.write(content.getBytes());
         os.close();
         assertTrue(fs.exists(path));
         InputStream is = fs.newInputStream(path);
-        BufferedReader br = new BufferedReader(new InputStreamReader(is, StandardCharsets.UTF_8));
+        BufferedReader br = new BufferedReader(new InputStreamReader(is));
         assertEquals(br.readLine(), content);
     }
 
@@ -250,10 +249,10 @@ public class TestHetuHdfsFileSystemClient
     {
         Path path = Paths.get(rootPath + "/testfileDup");
         OutputStream os = fs.newOutputStream(path);
-        os.write("foo".getBytes(StandardCharsets.UTF_8));
+        os.write("foo".getBytes());
         os.close();
         OutputStream os2 = fs.newOutputStream(path, CREATE_NEW);
-        os2.write("bar".getBytes(StandardCharsets.UTF_8));
+        os2.write("bar".getBytes());
         os2.close();
     }
 

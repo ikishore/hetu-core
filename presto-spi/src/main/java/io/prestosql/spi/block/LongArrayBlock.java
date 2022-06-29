@@ -39,11 +39,11 @@ public class LongArrayBlock
     //can we intro operations at block level?, for example join of blocks?
     private static final int INSTANCE_SIZE = ClassLayout.parseClass(LongArrayBlock.class).instanceSize();
 
-    protected final int arrayOffset;
+    private final int arrayOffset;
     private final int positionCount;
     @Nullable
-    protected final boolean[] valueIsNull;
-    protected final long[] values; //change to use offheap --> accessible by RDMA
+    private final boolean[] valueIsNull;
+    private final long[] values; //change to use offheap --> accessible by RDMA
 
     private final long sizeInBytes;
     private final long retainedSizeInBytes;
@@ -122,24 +122,6 @@ public class LongArrayBlock
     public int getPositionCount()
     {
         return positionCount;
-    }
-
-    @Override
-    public long[] getValues()
-    {
-        return values;
-    }
-
-    @Override
-    public int getBlockOffset()
-    {
-        return arrayOffset;
-    }
-
-    @Override
-    public boolean[] getValueNulls()
-    {
-        return valueIsNull;
     }
 
     @Override
@@ -272,9 +254,9 @@ public class LongArrayBlock
     {
         checkValidRegion(getPositionCount(), positionOffset, length);
 
-        int finalPositionOffset = positionOffset + arrayOffset;
-        boolean[] newValueIsNull = valueIsNull == null ? null : compactArray(valueIsNull, finalPositionOffset, length);
-        long[] newValues = compactArray(values, finalPositionOffset, length);
+        positionOffset += arrayOffset;
+        boolean[] newValueIsNull = valueIsNull == null ? null : compactArray(valueIsNull, positionOffset, length);
+        long[] newValues = compactArray(values, positionOffset, length);
 
         if (newValueIsNull == valueIsNull && newValues == values) {
             return this;
@@ -307,13 +289,8 @@ public class LongArrayBlock
     @Override
     public boolean[] filter(BloomFilter filter, boolean[] validPositions)
     {
-        for (int i = 0; i < positionCount; i++) {
-            if (valueIsNull != null && valueIsNull[i + arrayOffset]) {
-                validPositions[i] = validPositions[i] && filter.test((byte[]) null);
-            }
-            else {
-                validPositions[i] = validPositions[i] && filter.test(values[i + arrayOffset]);
-            }
+        for (int i = arrayOffset; i < positionCount; i++) {
+            validPositions[i] = validPositions[i] && filter.test(values[i]);
         }
         return validPositions;
     }

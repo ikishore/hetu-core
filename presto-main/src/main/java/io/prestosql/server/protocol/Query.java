@@ -36,7 +36,6 @@ import io.prestosql.client.NamedClientTypeSignature;
 import io.prestosql.client.QueryError;
 import io.prestosql.client.QueryResults;
 import io.prestosql.client.RowFieldName;
-import io.prestosql.client.SnapshotStats;
 import io.prestosql.client.StageStats;
 import io.prestosql.client.StatementStats;
 import io.prestosql.client.Warning;
@@ -49,12 +48,6 @@ import io.prestosql.execution.QueryStats;
 import io.prestosql.execution.StageInfo;
 import io.prestosql.execution.TaskInfo;
 import io.prestosql.operator.ExchangeClient;
-import io.prestosql.operator.PipelineStats;
-import io.prestosql.operator.TaskLocation;
-import io.prestosql.snapshot.QuerySnapshotManager;
-import io.prestosql.snapshot.RestoreResult;
-import io.prestosql.snapshot.SnapshotInfo;
-import io.prestosql.snapshot.SnapshotResult;
 import io.prestosql.spi.ErrorCode;
 import io.prestosql.spi.Page;
 import io.prestosql.spi.PageBuilder;
@@ -80,7 +73,6 @@ import javax.ws.rs.core.UriInfo;
 
 import java.net.URI;
 import java.net.URISyntaxException;
-import java.util.ArrayList;
 import java.util.Collections;
 import java.util.HashSet;
 import java.util.Iterator;
@@ -92,8 +84,6 @@ import java.util.OptionalLong;
 import java.util.Set;
 import java.util.concurrent.Executor;
 import java.util.concurrent.ScheduledExecutorService;
-import java.util.concurrent.atomic.AtomicLong;
-import java.util.stream.Collectors;
 
 import static com.google.common.base.MoreObjects.firstNonNull;
 import static com.google.common.base.Preconditions.checkArgument;
@@ -103,9 +93,7 @@ import static com.google.common.util.concurrent.Futures.immediateFuture;
 import static com.google.common.util.concurrent.MoreExecutors.directExecutor;
 import static io.airlift.concurrent.MoreFutures.addTimeout;
 import static io.prestosql.SystemSessionProperties.isExchangeCompressionEnabled;
-import static io.prestosql.SystemSessionProperties.isRecoveryEnabled;
 import static io.prestosql.execution.QueryState.FAILED;
-import static io.prestosql.execution.QueryState.RECOVERING;
 import static io.prestosql.spi.StandardErrorCode.GENERIC_INTERNAL_ERROR;
 import static io.prestosql.util.Failures.toFailure;
 import static io.prestosql.util.MoreLists.mappedCopy;
@@ -193,7 +181,6 @@ public class Query
         Query result = new Query(session, slug, queryManager, exchangeClient, dataProcessorExecutor, timeoutExecutor, blockEncodingSerde);
 
         result.queryManager.addOutputInfoListener(result.getQueryId(), result::setQueryOutputInfo);
-        result.queryManager.addStateChangeListener(result.getQueryId(), result::updateQueryState);
 
         result.queryManager.addStateChangeListener(result.getQueryId(), state -> {
             if (state.isDone()) {
@@ -454,8 +441,7 @@ public class Query
             long rows = 0;
             long targetResultBytes = targetResultSize.toBytes();
             while (bytes < targetResultBytes) {
-                // at this point, origin is irrelevant, so we can safely ignore it
-                SerializedPage serializedPage = exchangeClient.pollPage(null).getLeft();
+                SerializedPage serializedPage = exchangeClient.pollPage();
                 if (serializedPage == null) {
                     break;
                 }
@@ -582,7 +568,7 @@ public class Query
             queryHtmlUri = new URI("http://localhost");
         }
         catch (URISyntaxException e) {
-            log.error("get uri error: %s", e.getMessage());
+            // do nothing
         }
 
         // Remove as many pages as possible from the exchange until just greater than DESIRED_RESULT_BYTES
@@ -597,8 +583,7 @@ public class Query
             long rows = 0;
             long targetResultBytes = targetResultSize.toBytes();
             while (bytes < targetResultBytes) {
-                // at this point, origin is irrelevant, so we can safely ignore it
-                SerializedPage serializedPage = exchangeClient.pollPage(null).getLeft();
+                SerializedPage serializedPage = exchangeClient.pollPage();
                 if (serializedPage == null) {
                     break;
                 }
@@ -679,7 +664,7 @@ public class Query
                 nextResultsUri = new URI(Long.toString(nextToken.getAsLong()));
             }
             catch (URISyntaxException e) {
-                log.error("get uri error: %s", e.getMessage());
+                e.printStackTrace();
             }
         }
 
@@ -737,14 +722,6 @@ public class Query
         }
     }
 
-    private synchronized void updateQueryState(QueryState newState)
-    {
-        if (newState == RECOVERING) {
-            // Snapshot: remote task will be rescheduled. Need to reset exchange client so it can be connected to new task.
-            exchangeClient.resetForResume();
-        }
-    }
-
     private synchronized void setQueryOutputInfo(QueryExecution.QueryOutputInfo outputInfo)
     {
         // if first callback, set column names
@@ -761,7 +738,7 @@ public class Query
             types = outputInfo.getColumnTypes();
         }
 
-        for (TaskLocation outputLocation : outputInfo.getBufferLocations()) {
+        for (URI outputLocation : outputInfo.getBufferLocations()) {
             exchangeClient.addLocation(outputLocation);
         }
         if (outputInfo.isNoMoreBufferLocations()) {
@@ -818,7 +795,7 @@ public class Query
         throw new IllegalArgumentException("Unsupported kind: " + parameter.getKind());
     }
 
-    private StatementStats toStatementStats(QueryInfo queryInfo)
+    private static StatementStats toStatementStats(QueryInfo queryInfo)
     {
         QueryStats queryStats = queryInfo.getQueryStats();
         //Dont print any more stats for Async Query,
@@ -828,7 +805,7 @@ public class Query
                 .setState(queryInfo.getState().toString())
                 .setQueued(queryInfo.getState() == QueryState.QUEUED)
                 .setScheduled(queryInfo.isScheduled())
-                .setNodes(globalUniqueNodes(outputStage, false).size())
+                .setNodes(globalUniqueNodes(outputStage).size())
                 .setTotalSplits(queryStats.getTotalDrivers())
                 .setQueuedSplits(queryStats.getQueuedDrivers())
                 .setRunningSplits(queryStats.getRunningDrivers() + queryStats.getBlockedDrivers())
@@ -841,110 +818,8 @@ public class Query
                 .setProcessedBytes(queryStats.getRawInputDataSize().toBytes())
                 .setPeakMemoryBytes(queryStats.getPeakUserMemoryReservation().toBytes())
                 .setSpilledBytes(queryStats.getSpilledDataSize().toBytes())
-                .setSpilledReadTimeMillis(queryStats.getSpilledReadTime().toMillis())
-                .setSpilledWriteTimeMillis(queryStats.getSpilledWriteTime().toMillis())
-                .setSpilledNodes(globalUniqueNodes(outputStage, true).size())
                 .setRootStage(toStageStats(outputStage))
-                .setSnapshotStats(toSnapshotStats(queryInfo.getQueryId()))
                 .build();
-    }
-
-    private SnapshotStats toSnapshotStats(QueryId queryId)
-    {
-        if (!isRecoveryEnabled(session) || queryId == null) {
-            return null;
-        }
-        AtomicLong totalCpuTimeMillis = new AtomicLong(0L);
-        AtomicLong allSnapshotsSizeBytes = new AtomicLong(0L);
-        AtomicLong totalWallTimeMillis = new AtomicLong(0L);
-        AtomicLong lastSnapshotId = new AtomicLong(0L);
-
-        QuerySnapshotManager querySnapshotManager = queryManager.getQuerySnapshotManager(queryId);
-        if (querySnapshotManager != null) {
-            List<Long> capturedSnapshots = new ArrayList<Long>();
-            List<Long> capturingSnapshots = new ArrayList<Long>();
-
-            Map<Long, SnapshotInfo> captureResults = querySnapshotManager.getCaptureResults();
-            captureResults.forEach((snapshotId, snapshotInfo) -> {
-                if (snapshotId > 0 && snapshotInfo.isCompleteSnapshot()) {
-                    if (snapshotId.compareTo(lastSnapshotId.get()) > 0) {
-                        // Get last successful snapshot id
-                        lastSnapshotId.set(snapshotId);
-                    }
-                    long wallTime = snapshotInfo.getEndTime() - snapshotInfo.getBeginTime();
-                    capturedSnapshots.add(snapshotId);
-                    allSnapshotsSizeBytes.addAndGet(snapshotInfo.getSizeBytes());
-                    totalWallTimeMillis.addAndGet(wallTime);
-                    totalCpuTimeMillis.addAndGet(snapshotInfo.getCpuTime());
-                }
-                else if (snapshotInfo.getSnapshotResult() == SnapshotResult.IN_PROGRESS) {
-                    capturingSnapshots.add(snapshotId);
-                }
-                else {
-                    log.info("Neither successful nor in progress, Snapshot: %d, Status: %s", snapshotId, snapshotInfo.getSnapshotResult().toString());
-                }
-            });
-            SnapshotStats.Builder builder = SnapshotStats.builder();
-            if (capturedSnapshots.size() > 0) {
-                builder.setAllSnapshotsSizeBytes(allSnapshotsSizeBytes.get())
-                        .setTotalWallTimeMillis(totalWallTimeMillis.get())
-                        .setTotalCpuTimeMillis(totalCpuTimeMillis.get())
-                        .setCapturedSnapshotList(capturedSnapshots);
-            }
-            if (capturingSnapshots.size() > 0) {
-                builder.setCapturingSnapshotIds(capturingSnapshots);
-            }
-            // Gather last successful snapshot stats if available
-            if (lastSnapshotId.get() > 0) {
-                SnapshotInfo lastSnapshotInfo = captureResults.get(lastSnapshotId.get());
-                long lastWallTime = lastSnapshotInfo.getEndTime() - lastSnapshotInfo.getBeginTime();
-                builder.setLastCaptureSnapshotId(lastSnapshotId.get())
-                        .setLastSnapshotSizeBytes(lastSnapshotInfo.getSizeBytes())
-                        .setLastSnapshotWallTimeMillis(lastWallTime)
-                        .setLastSnapshotCpuTimeMillis(lastSnapshotInfo.getCpuTime());
-            }
-
-            // Restore stats
-            AtomicLong totalRestoreWallTime = new AtomicLong(0L);
-            AtomicLong totalRestoreCpuTime = new AtomicLong(0L);
-            AtomicLong totalRestoreSize = new AtomicLong(0L);
-            int restoreCount = 0;
-
-            List<RestoreResult> restoreStats = querySnapshotManager.getRestoreStats();
-            restoreCount = restoreStats.size();
-            // Add restore stats if restore is happened
-            if (restoreCount > 0) {
-                List<Long> restoredSnapshotList = new ArrayList<Long>();
-                restoreStats.forEach(restoreResult -> {
-                    SnapshotInfo info = restoreResult.getSnapshotInfo();
-                    // Wall Time and CPU Time
-                    totalRestoreWallTime.addAndGet(info.getEndTime() - info.getBeginTime());
-                    totalRestoreCpuTime.addAndGet(info.getCpuTime());
-                    totalRestoreSize.addAndGet(info.getSizeBytes());
-                    // Collect list of restored snapshots
-                    if (restoreResult.getSnapshotId() > 0) {
-                        restoredSnapshotList.add(restoreResult.getSnapshotId());
-                    }
-                    else {
-                        log.info("Query restarted instead of resume..");
-                    }
-                });
-                builder.setSuccessRestoreCount(restoreCount)
-                        .setTotalRestoreWallTime(totalRestoreWallTime.get())
-                        .setTotalRestoreCpuTime(totalRestoreCpuTime.get())
-                        .setTotalRestoreSize(totalRestoreSize.get())
-                        .setRestoredSnapshotList(restoredSnapshotList);
-            }
-            // Collect current restoring snapshot if restore in progress
-            long restoringSnapshotId = querySnapshotManager.getRestoringSnapshotId();
-            if (restoringSnapshotId > 0) {
-                builder.setRestoringSnapshotId(restoringSnapshotId);
-            }
-            SnapshotStats snapshotStats = builder.build();
-            log.debug("SnapshotStats: " + snapshotStats.toString());
-            return snapshotStats;
-        }
-        return null;
     }
 
     private static StageStats toStageStats(StageInfo stageInfo)
@@ -966,12 +841,10 @@ public class Query
             URI uri = task.getTaskStatus().getSelf();
             uniqueNodes.add(uri.getHost() + ":" + uri.getPort());
         }
-        log.debug("StageStats Id: %s, IsRestoring: %b, SnapshotId: %d", stageInfo.getStageId().toString(), stageInfo.isRestoring(), stageInfo.getSnapshotId());
+
         return StageStats.builder()
                 .setStageId(String.valueOf(stageInfo.getStageId().getId()))
                 .setState(stageInfo.getState().toString())
-                .setRestoring(stageInfo.isRestoring())
-                .setSnapshotId(stageInfo.getSnapshotId())
                 .setDone(stageInfo.getState().isDone())
                 .setNodes(uniqueNodes.size())
                 .setTotalSplits(stageStats.getTotalDrivers())
@@ -986,32 +859,20 @@ public class Query
                 .build();
     }
 
-    public static Set<String> globalUniqueNodes(StageInfo stageInfo, boolean getSpilledNodes)
+    private static Set<String> globalUniqueNodes(StageInfo stageInfo)
     {
-        boolean isSpilledNode = false;
-
         if (stageInfo == null) {
             return ImmutableSet.of();
         }
         ImmutableSet.Builder<String> nodes = ImmutableSet.builder();
         for (TaskInfo task : stageInfo.getTasks()) {
-            if (getSpilledNodes) {
-                for (PipelineStats pipeline : task.getStats().getPipelines()) {
-                    isSpilledNode = pipeline.getOperatorSummaries().stream().filter(operatorStats -> operatorStats.getSpilledDataSize().toBytes() > 0).collect(Collectors.toList()).size() > 0;
-                    if (isSpilledNode) {
-                        break;
-                    }
-                }
-            }
             // todo add nodeId to TaskInfo
-            if (isSpilledNode || !getSpilledNodes) {
-                URI uri = task.getTaskStatus().getSelf();
-                nodes.add(uri.getHost() + ":" + uri.getPort());
-            }
+            URI uri = task.getTaskStatus().getSelf();
+            nodes.add(uri.getHost() + ":" + uri.getPort());
         }
 
         for (StageInfo subStage : stageInfo.getSubStages()) {
-            nodes.addAll(globalUniqueNodes(subStage, getSpilledNodes));
+            nodes.addAll(globalUniqueNodes(subStage));
         }
         return nodes.build();
     }

@@ -102,10 +102,9 @@ public final class OrcInputStream
         return current.read(b, off, length);
     }
 
-    public void skipFully(long inputLength)
+    public void skipFully(long length)
             throws IOException
     {
-        long length = inputLength;
         while (length > 0) {
             long result = skip(length);
             if (result < 0) {
@@ -115,10 +114,9 @@ public final class OrcInputStream
         }
     }
 
-    public void readFully(byte[] buffer, int inputOffset, int length)
+    public void readFully(byte[] buffer, int offset, int length)
             throws IOException
     {
-        int offset = inputOffset;
         while (offset < length) {
             int result = read(buffer, offset, length - offset);
             if (result < 0) {
@@ -128,11 +126,9 @@ public final class OrcInputStream
         }
     }
 
-    public void readFully(Slice buffer, int inputOffset, int inputLength)
+    public void readFully(Slice buffer, int offset, int length)
             throws IOException
     {
-        int offset = inputOffset;
-        int length = inputLength;
         while (length > 0) {
             if (current != null && current.remaining() == 0) {
                 advance();

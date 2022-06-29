@@ -149,7 +149,7 @@ public class MultipleDistinctAggregationToMarkDistinct
                 // remove the distinct flag and set the distinct marker
                 newAggregations.put(entry.getKey(),
                         new Aggregation(
-                                aggregation.getFunctionCall(),
+                                aggregation.getSignature(),
                                 aggregation.getArguments(),
                                 false,
                                 aggregation.getFilter(),
@@ -170,8 +170,6 @@ public class MultipleDistinctAggregationToMarkDistinct
                         ImmutableList.of(),
                         parent.getStep(),
                         parent.getHashSymbol(),
-                        parent.getGroupIdSymbol(),
-                        parent.getAggregationType(),
-                        parent.getFinalizeSymbol()));
+                        parent.getGroupIdSymbol()));
     }
 }

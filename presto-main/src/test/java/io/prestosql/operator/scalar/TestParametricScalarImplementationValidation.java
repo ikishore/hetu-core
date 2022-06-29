@@ -15,14 +15,14 @@ package io.prestosql.operator.scalar;
 
 import com.google.common.collect.ImmutableList;
 import io.prestosql.spi.connector.ConnectorSession;
-import io.prestosql.spi.function.BuiltInScalarFunctionImplementation;
+import io.prestosql.spi.function.ScalarFunctionImplementation;
 import org.testng.annotations.Test;
 
 import java.lang.invoke.MethodHandle;
 import java.util.Optional;
 
-import static io.prestosql.spi.function.BuiltInScalarFunctionImplementation.ArgumentProperty.valueTypeArgumentProperty;
-import static io.prestosql.spi.function.BuiltInScalarFunctionImplementation.NullConvention.RETURN_NULL_ON_NULL;
+import static io.prestosql.spi.function.ScalarFunctionImplementation.ArgumentProperty.valueTypeArgumentProperty;
+import static io.prestosql.spi.function.ScalarFunctionImplementation.NullConvention.RETURN_NULL_ON_NULL;
 import static io.prestosql.spi.util.Reflection.methodHandle;
 import static org.testng.Assert.assertEquals;
 import static org.testng.Assert.fail;
@@ -36,21 +36,23 @@ public class TestParametricScalarImplementationValidation
     {
         // Without cached instance factory
         MethodHandle validFunctionMethodHandle = methodHandle(TestParametricScalarImplementationValidation.class, "validConnectorSessionParameterPosition", ConnectorSession.class, long.class, long.class);
-        BuiltInScalarFunctionImplementation validFunction = new BuiltInScalarFunctionImplementation(
+        ScalarFunctionImplementation validFunction = new ScalarFunctionImplementation(
                 false,
                 ImmutableList.of(
                         valueTypeArgumentProperty(RETURN_NULL_ON_NULL),
                         valueTypeArgumentProperty(RETURN_NULL_ON_NULL)),
-                validFunctionMethodHandle);
+                validFunctionMethodHandle,
+                false);
         assertEquals(validFunction.getMethodHandle(), validFunctionMethodHandle);
 
         try {
-            BuiltInScalarFunctionImplementation invalidFunction = new BuiltInScalarFunctionImplementation(
+            ScalarFunctionImplementation invalidFunction = new ScalarFunctionImplementation(
                     false,
                     ImmutableList.of(
                             valueTypeArgumentProperty(RETURN_NULL_ON_NULL),
                             valueTypeArgumentProperty(RETURN_NULL_ON_NULL)),
-                    methodHandle(TestParametricScalarImplementationValidation.class, "invalidConnectorSessionParameterPosition", long.class, long.class, ConnectorSession.class));
+                    methodHandle(TestParametricScalarImplementationValidation.class, "invalidConnectorSessionParameterPosition", long.class, long.class, ConnectorSession.class),
+                    false);
             fail("expected exception");
         }
         catch (IllegalArgumentException e) {
@@ -59,23 +61,25 @@ public class TestParametricScalarImplementationValidation
 
         // With cached instance factory
         MethodHandle validFunctionWithInstanceFactoryMethodHandle = methodHandle(TestParametricScalarImplementationValidation.class, "validConnectorSessionParameterPosition", Object.class, ConnectorSession.class, long.class, long.class);
-        BuiltInScalarFunctionImplementation validFunctionWithInstanceFactory = new BuiltInScalarFunctionImplementation(
+        ScalarFunctionImplementation validFunctionWithInstanceFactory = new ScalarFunctionImplementation(
                 false,
                 ImmutableList.of(
                         valueTypeArgumentProperty(RETURN_NULL_ON_NULL),
                         valueTypeArgumentProperty(RETURN_NULL_ON_NULL)),
                 validFunctionWithInstanceFactoryMethodHandle,
-                Optional.of(STATE_FACTORY));
+                Optional.of(STATE_FACTORY),
+                false);
         assertEquals(validFunctionWithInstanceFactory.getMethodHandle(), validFunctionWithInstanceFactoryMethodHandle);
 
         try {
-            BuiltInScalarFunctionImplementation invalidFunctionWithInstanceFactory = new BuiltInScalarFunctionImplementation(
+            ScalarFunctionImplementation invalidFunctionWithInstanceFactory = new ScalarFunctionImplementation(
                     false,
                     ImmutableList.of(
                             valueTypeArgumentProperty(RETURN_NULL_ON_NULL),
                             valueTypeArgumentProperty(RETURN_NULL_ON_NULL)),
                     methodHandle(TestParametricScalarImplementationValidation.class, "invalidConnectorSessionParameterPosition", Object.class, long.class, long.class, ConnectorSession.class),
-                    Optional.of(STATE_FACTORY));
+                    Optional.of(STATE_FACTORY),
+                    false);
             fail("expected exception");
         }
         catch (IllegalArgumentException e) {

@@ -1,5 +1,5 @@
 /*
- * Copyright (C) 2018-2021. Huawei Technologies Co., Ltd. All rights reserved.
+ * Copyright (C) 2018-2020. Huawei Technologies Co., Ltd. All rights reserved.
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
  * You may obtain a copy of the License at
@@ -35,7 +35,6 @@ import org.testng.annotations.Test;
 
 import java.io.ByteArrayOutputStream;
 import java.io.IOException;
-import java.nio.charset.StandardCharsets;
 import java.util.Arrays;
 import java.util.HashMap;
 import java.util.HashSet;
@@ -92,8 +91,8 @@ public class TestDynamicFilterServiceWithBloomFilter
         VariableReferenceExpression mockExpression = mock(VariableReferenceExpression.class);
         when(mockExpression.getName()).thenReturn("name");
         ColumnHandle mockColumnHandle = mock(ColumnHandle.class);
-        Supplier<List<Set<DynamicFilter>>> dynamicFilterSupplier = DynamicFilterService.getDynamicFilterSupplier(session.getQueryId(),
-                ImmutableList.of(ImmutableList.of(new DynamicFilters.Descriptor(filterId, mockExpression))),
+        Supplier<Set<DynamicFilter>> dynamicFilterSupplier = DynamicFilterService.getDynamicFilterSupplier(session.getQueryId(),
+                ImmutableList.of(new DynamicFilters.Descriptor(filterId, mockExpression)),
                 ImmutableMap.of(new Symbol("name"), mockColumnHandle));
         assertTrue(dynamicFilterSupplier.get().isEmpty(), "should return empty dynamic filter set when dynamic filters are not available");
 
@@ -103,26 +102,26 @@ public class TestDynamicFilterServiceWithBloomFilter
         Thread.sleep(3000);
         BloomFilter bf = fetchDynamicFilter(filterId, session.getQueryId().toString());
         for (int i = 1; i < 9; i++) {
-            assertTrue(bf.test((String.valueOf(i).getBytes(StandardCharsets.UTF_8))));
+            assertTrue(bf.test((String.valueOf(i).getBytes())));
         }
-        assertFalse(bf.test("10".getBytes(StandardCharsets.UTF_8)));
+        assertFalse(bf.test("10".getBytes()));
 
         // Test getDynamicFilterSupplier
         dynamicFilterSupplier = DynamicFilterService.getDynamicFilterSupplier(session.getQueryId(),
-                ImmutableList.of(ImmutableList.of(new DynamicFilters.Descriptor(filterId, mockExpression))),
+                ImmutableList.of(new DynamicFilters.Descriptor(filterId, mockExpression)),
                 ImmutableMap.of(new Symbol("name"), mockColumnHandle));
-        List<Set<DynamicFilter>> dynamicFilters = dynamicFilterSupplier.get();
+        Set<DynamicFilter> dynamicFilters = dynamicFilterSupplier.get();
         assertFalse(dynamicFilters == null, "dynamic filters should be ready");
         assertEquals(dynamicFilters.size(), 1, "there should be 1 dynamic filter in supplier");
 
-        DynamicFilter dynamicFilter = dynamicFilters.get(0).iterator().next();
+        DynamicFilter dynamicFilter = dynamicFilters.iterator().next();
         for (int i = 1; i < 9; i++) {
             assertTrue(dynamicFilter.contains(String.valueOf(i)));
         }
         assertFalse(dynamicFilter.contains("10"));
 
         dynamicFilterSupplier = DynamicFilterService.getDynamicFilterSupplier(new QueryId("invalid"),
-                ImmutableList.of(ImmutableList.of(new DynamicFilters.Descriptor(filterId, mockExpression))),
+                ImmutableList.of(new DynamicFilters.Descriptor(filterId, mockExpression)),
                 ImmutableMap.of(new Symbol("name"), mockColumnHandle));
         assertTrue(dynamicFilterSupplier.get().isEmpty(), "should return empty dynamic filter set for invalid or non-existing queryId");
 
@@ -159,7 +158,7 @@ public class TestDynamicFilterServiceWithBloomFilter
     {
         BloomFilter bloomFilter = new BloomFilter(1024 * 1024, 0.1);
         for (String val : values) {
-            bloomFilter.add(val.getBytes(StandardCharsets.UTF_8));
+            bloomFilter.add(val.getBytes());
         }
 
         String key = DynamicFilterUtils.createKey(DynamicFilterUtils.PARTIALPREFIX, filterId, queryId);

@@ -24,8 +24,6 @@ public interface RemoteTask
 {
     TaskId getTaskId();
 
-    String getInstanceId();
-
     String getNodeId();
 
     TaskInfo getTaskInfo();
@@ -60,12 +58,6 @@ public interface RemoteTask
     ListenableFuture<?> whenSplitQueueHasSpace(int threshold);
 
     void cancel();
-
-    void cancelToResume();
-
-    void suspend();
-
-    void resume();
 
     void abort();
 

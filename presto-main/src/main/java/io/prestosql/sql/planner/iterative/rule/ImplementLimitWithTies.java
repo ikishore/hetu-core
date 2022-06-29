@@ -19,9 +19,8 @@ import com.google.common.collect.ImmutableSet;
 import io.prestosql.matching.Capture;
 import io.prestosql.matching.Captures;
 import io.prestosql.matching.Pattern;
-import io.prestosql.metadata.Metadata;
-import io.prestosql.spi.connector.QualifiedObjectName;
-import io.prestosql.spi.function.FunctionHandle;
+import io.prestosql.spi.function.FunctionKind;
+import io.prestosql.spi.function.Signature;
 import io.prestosql.spi.plan.FilterNode;
 import io.prestosql.spi.plan.LimitNode;
 import io.prestosql.spi.plan.PlanNode;
@@ -30,6 +29,8 @@ import io.prestosql.spi.plan.Symbol;
 import io.prestosql.spi.plan.WindowNode;
 import io.prestosql.spi.sql.expression.Types.FrameBoundType;
 import io.prestosql.spi.sql.expression.Types.WindowFrameType;
+import io.prestosql.spi.type.StandardTypes;
+import io.prestosql.spi.type.TypeSignature;
 import io.prestosql.sql.planner.iterative.Rule;
 import io.prestosql.sql.planner.plan.AssignmentUtils;
 import io.prestosql.sql.tree.ComparisonExpression;
@@ -38,12 +39,10 @@ import io.prestosql.sql.tree.GenericLiteral;
 import java.util.Optional;
 
 import static io.prestosql.matching.Capture.newCapture;
-import static io.prestosql.spi.connector.CatalogSchemaName.DEFAULT_NAMESPACE;
 import static io.prestosql.spi.type.BigintType.BIGINT;
 import static io.prestosql.sql.planner.SymbolUtils.toSymbolReference;
 import static io.prestosql.sql.planner.plan.Patterns.limit;
 import static io.prestosql.sql.planner.plan.Patterns.source;
-import static io.prestosql.sql.relational.Expressions.call;
 import static io.prestosql.sql.relational.OriginalExpressionUtils.castToRowExpression;
 
 /**
@@ -68,13 +67,6 @@ public class ImplementLimitWithTies
             .matching(LimitNode::isWithTies)
             .with(source().capturedAs(CHILD));
 
-    private final Metadata metadata;
-
-    public ImplementLimitWithTies(Metadata metadata)
-    {
-        this.metadata = metadata;
-    }
-
     @Override
     public Pattern<LimitNode> getPattern()
     {
@@ -87,6 +79,12 @@ public class ImplementLimitWithTies
         PlanNode child = captures.get(CHILD);
         Symbol rankSymbol = context.getSymbolAllocator().newSymbol("rank_num", BIGINT);
 
+        Signature signature = new Signature(
+                "rank",
+                FunctionKind.WINDOW,
+                TypeSignature.parseTypeSignature(StandardTypes.BIGINT),
+                ImmutableList.of());
+
         WindowNode.Frame frame = new WindowNode.Frame(
                 WindowFrameType.RANGE,
                 FrameBoundType.UNBOUNDED_PRECEDING,
@@ -96,12 +94,8 @@ public class ImplementLimitWithTies
                 Optional.empty(),
                 Optional.empty());
 
-        FunctionHandle functionHandle = metadata.getFunctionAndTypeManager().lookupFunction("rank", ImmutableList.of());
         WindowNode.Function rankFunction = new WindowNode.Function(
-                call(
-                        QualifiedObjectName.valueOf(DEFAULT_NAMESPACE, "rank").toString(),
-                        functionHandle,
-                        BIGINT),
+                signature,
                 ImmutableList.of(),
                 frame);
 

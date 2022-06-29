@@ -15,9 +15,7 @@ package io.prestosql.cost;
 
 import com.google.common.collect.Iterables;
 import io.prestosql.Session;
-import io.prestosql.expressions.LogicalRowExpressions;
 import io.prestosql.matching.Pattern;
-import io.prestosql.metadata.Metadata;
 import io.prestosql.spi.plan.FilterNode;
 import io.prestosql.spi.plan.PlanNode;
 import io.prestosql.spi.plan.ProjectNode;
@@ -25,12 +23,11 @@ import io.prestosql.spi.plan.Symbol;
 import io.prestosql.spi.relation.CallExpression;
 import io.prestosql.spi.relation.RowExpression;
 import io.prestosql.spi.relation.VariableReferenceExpression;
+import io.prestosql.spi.sql.RowExpressionUtils;
 import io.prestosql.sql.planner.SymbolUtils;
 import io.prestosql.sql.planner.TypeProvider;
 import io.prestosql.sql.planner.iterative.Lookup;
 import io.prestosql.sql.planner.plan.SemiJoinNode;
-import io.prestosql.sql.relational.FunctionResolution;
-import io.prestosql.sql.relational.RowExpressionDeterminismEvaluator;
 import io.prestosql.sql.tree.Expression;
 import io.prestosql.sql.tree.NotExpression;
 import io.prestosql.sql.tree.SymbolReference;
@@ -64,15 +61,11 @@ public class SimpleFilterProjectSemiJoinStatsRule
     private static final Pattern<FilterNode> PATTERN = filter();
 
     private final FilterStatsCalculator filterStatsCalculator;
-    private final FunctionResolution functionResolution;
-    private final LogicalRowExpressions logicalRowExpressions;
 
-    public SimpleFilterProjectSemiJoinStatsRule(StatsNormalizer normalizer, FilterStatsCalculator filterStatsCalculator, Metadata metadata)
+    public SimpleFilterProjectSemiJoinStatsRule(StatsNormalizer normalizer, FilterStatsCalculator filterStatsCalculator)
     {
         super(normalizer);
         this.filterStatsCalculator = requireNonNull(filterStatsCalculator, "filterStatsCalculator can not be null");
-        this.functionResolution = new FunctionResolution(metadata.getFunctionAndTypeManager());
-        this.logicalRowExpressions = new LogicalRowExpressions(new RowExpressionDeterminismEvaluator(metadata), new FunctionResolution(metadata.getFunctionAndTypeManager()), metadata.getFunctionAndTypeManager());
     }
 
     @Override
@@ -177,7 +170,7 @@ public class SimpleFilterProjectSemiJoinStatsRule
     private Optional<SemiJoinOutputFilter> extractSemiJoinOutputFilter(RowExpression predicate, RowExpression input)
     {
         checkState(!isExpression(predicate));
-        List<RowExpression> conjuncts = LogicalRowExpressions.extractConjuncts(predicate);
+        List<RowExpression> conjuncts = RowExpressionUtils.extractConjuncts(predicate);
         List<RowExpression> semiJoinOutputReferences = conjuncts.stream()
                 .filter(conjunct -> isSemiJoinOutputReference(conjunct, input))
                 .collect(toImmutableList());
@@ -187,7 +180,7 @@ public class SimpleFilterProjectSemiJoinStatsRule
         }
 
         RowExpression semiJoinOutputReference = Iterables.getOnlyElement(semiJoinOutputReferences);
-        RowExpression remainingPredicate = logicalRowExpressions.combineConjuncts(conjuncts.stream()
+        RowExpression remainingPredicate = RowExpressionUtils.combineConjuncts(conjuncts.stream()
                 .filter(conjunct -> conjunct != semiJoinOutputReference)
                 .collect(toImmutableList()));
         boolean negated = isNotFunction(semiJoinOutputReference);
@@ -208,7 +201,7 @@ public class SimpleFilterProjectSemiJoinStatsRule
 
     private boolean isNotFunction(RowExpression expression)
     {
-        return expression instanceof CallExpression && functionResolution.isNotFunction(((CallExpression) expression).getFunctionHandle());
+        return expression instanceof CallExpression && (((CallExpression) expression).getSignature().getName().equalsIgnoreCase("not"));
     }
 
     private static class SemiJoinOutputFilter

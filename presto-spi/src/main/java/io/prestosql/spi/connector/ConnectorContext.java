@@ -17,12 +17,8 @@ import io.prestosql.spi.NodeManager;
 import io.prestosql.spi.PageIndexerFactory;
 import io.prestosql.spi.PageSorter;
 import io.prestosql.spi.VersionEmbedder;
-import io.prestosql.spi.block.BlockEncodingSerde;
-import io.prestosql.spi.function.FunctionMetadataManager;
-import io.prestosql.spi.function.StandardFunctionResolution;
 import io.prestosql.spi.heuristicindex.IndexClient;
 import io.prestosql.spi.metastore.HetuMetastore;
-import io.prestosql.spi.plan.FilterStatsCalculatorService;
 import io.prestosql.spi.relation.RowExpressionService;
 import io.prestosql.spi.type.TypeManager;
 
@@ -64,26 +60,6 @@ public interface ConnectorContext
     }
 
     default RowExpressionService getRowExpressionService()
-    {
-        throw new UnsupportedOperationException();
-    }
-
-    default FunctionMetadataManager getFunctionMetadataManager()
-    {
-        throw new UnsupportedOperationException();
-    }
-
-    default StandardFunctionResolution getStandardFunctionResolution()
-    {
-        throw new UnsupportedOperationException();
-    }
-
-    default BlockEncodingSerde getBlockEncodingSerde()
-    {
-        throw new UnsupportedOperationException();
-    }
-
-    default FilterStatsCalculatorService getFilterStatsCalculatorService()
     {
         throw new UnsupportedOperationException();
     }

@@ -1,5 +1,5 @@
 /*
- * Copyright (C) 2018-2021. Huawei Technologies Co., Ltd. All rights reserved.
+ * Copyright (C) 2018-2020. Huawei Technologies Co., Ltd. All rights reserved.
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
  * You may obtain a copy of the License at
@@ -44,7 +44,6 @@ import java.util.Map;
 import java.util.Optional;
 
 import static com.google.common.base.Throwables.throwIfUnchecked;
-import static io.hetu.core.metastore.MetaStoreConstants.LOCAL;
 import static io.hetu.core.metastore.MetaStoreUtConstants.PROPERTY_FILE_PATH;
 import static io.prestosql.spi.StandardErrorCode.NOT_FOUND;
 import static io.prestosql.spi.metastore.HetuErrorCode.HETU_METASTORE_CODE;
@@ -110,13 +109,11 @@ public class TestJdbcHetuMetastore
                 .put("hetu.metastore.db.password", password)
                 .build();
 
-        String type = LOCAL;
-
         try {
             Bootstrap app = new Bootstrap(
                     new MBeanModule(),
                     new MBeanServerModule(),
-                    new JdbcMetastoreModule(type));
+                    new JdbcMetastoreModule());
 
             Injector injector = app
                     .strictConfig()
@@ -505,7 +502,7 @@ public class TestJdbcHetuMetastore
                 .put("desc", "vschema")
                 .build();
 
-        DatabaseEntity tmpDatabase = DatabaseEntity.builder()
+        DatabaseEntity database = DatabaseEntity.builder()
                 .setCatalogName(defaultCatalog.getName())
                 .setDatabaseName("database100")
                 .setOwner("root9")
@@ -519,7 +516,7 @@ public class TestJdbcHetuMetastore
         for (int i = 0; i < 5; i++) {
             threads[i] = new Thread(() -> {
                 try {
-                    metastore.createDatabaseIfNotExist(tmpDatabase);
+                    metastore.createDatabaseIfNotExist(database);
                 }
                 catch (PrestoException e) {
                     testResult = false;
@@ -533,7 +530,7 @@ public class TestJdbcHetuMetastore
         }
 
         assertTrue(testResult);
-        metastore.dropDatabase(tmpDatabase.getCatalogName(), tmpDatabase.getName());
+        metastore.dropDatabase(database.getCatalogName(), database.getName());
     }
 
     /**
@@ -717,7 +714,7 @@ public class TestJdbcHetuMetastore
                 .put("desc", "vschema")
                 .build();
 
-        DatabaseEntity tmpDatabase = DatabaseEntity.builder()
+        DatabaseEntity database = DatabaseEntity.builder()
                 .setCatalogName(defaultCatalog.getName())
                 .setDatabaseName("database200")
                 .setOwner("root9")
@@ -725,7 +722,7 @@ public class TestJdbcHetuMetastore
                 .setCreateTime(System.currentTimeMillis())
                 .setParameters(properties)
                 .build();
-        metastore.createDatabase(tmpDatabase);
+        metastore.createDatabase(database);
 
         DatabaseEntity newDatabase = DatabaseEntity.builder()
                 .setCatalogName(defaultCatalog.getName())
@@ -741,7 +738,7 @@ public class TestJdbcHetuMetastore
         for (int i = 0; i < 5; i++) {
             threads[i] = new Thread(() -> {
                 try {
-                    metastore.alterDatabase(tmpDatabase.getCatalogName(), tmpDatabase.getName(), newDatabase);
+                    metastore.alterDatabase(database.getCatalogName(), database.getName(), newDatabase);
                 }
                 catch (PrestoException e) {
                     testResult = false;
@@ -755,7 +752,7 @@ public class TestJdbcHetuMetastore
         }
 
         assertTrue(testResult);
-        metastore.dropDatabase(tmpDatabase.getCatalogName(), tmpDatabase.getName());
+        metastore.dropDatabase(database.getCatalogName(), database.getName());
     }
 
     /**
@@ -1128,110 +1125,6 @@ public class TestJdbcHetuMetastore
         assertTrue(newView1.isPresent());
         assertTableEquals(newView1.get(), newView);
         assertEquals(newView1.get().getCreateTime(), view.getCreateTime());
-    }
-
-    @Test
-    public void testAlterCatalogParametersParallel()
-            throws InterruptedException
-    {
-        String catalogName = "catalog2000";
-        metastore.createCatalog(CatalogEntity.builder()
-                .setCatalogName(catalogName)
-                .build());
-
-        int num = 100;
-        Thread[] threads = new Thread[num];
-        for (int i = 0; i < num; i++) {
-            int finalI = i;
-            threads[i] = new Thread(() -> {
-                try {
-                    metastore.alterCatalogParameter(catalogName, String.valueOf(finalI), String.valueOf(finalI));
-                }
-                catch (Exception e) {
-                    testResult = false;
-                }
-            });
-            threads[i].start();
-        }
-        for (Thread thread : threads) {
-            thread.join();
-        }
-
-        Map<String, String> res = metastore.getCatalog(catalogName).get().getParameters();
-        assertEquals(num, res.size());
-
-        metastore.dropCatalog(catalogName);
-    }
-
-    @Test
-    public void testAlterDatabaseParametersParallel()
-            throws InterruptedException
-    {
-        String databaseName = "database2000";
-        metastore.createDatabase(DatabaseEntity.builder()
-                .setCatalogName(defaultCatalog.getName())
-                .setDatabaseName(databaseName)
-                .build());
-
-        int num = 100;
-        Thread[] threads = new Thread[num];
-        for (int i = 0; i < num; i++) {
-            int finalI = i;
-            threads[i] = new Thread(() -> {
-                try {
-                    metastore.alterDatabaseParameter(defaultCatalog.getName(), databaseName, String.valueOf(finalI), String.valueOf(finalI));
-                }
-                catch (Exception e) {
-                    testResult = false;
-                }
-            });
-            threads[i].start();
-        }
-        for (Thread thread : threads) {
-            thread.join();
-        }
-
-        Map<String, String> res = metastore.getDatabase(defaultCatalog.getName(), databaseName).get().getParameters();
-        assertEquals(num, res.size());
-
-        metastore.dropDatabase(defaultCatalog.getName(), databaseName);
-    }
-
-    @Test
-    public void testAlterTableParametersParallel()
-            throws InterruptedException
-    {
-        String tableName = "table2000";
-        TableEntity tableEntity = TableEntity.builder()
-                .setCatalogName(defaultDatabase.getCatalogName())
-                .setDatabaseName(defaultDatabase.getName())
-                .setTableName(tableName)
-                .setTableType(TableEntityType.TABLE.toString())
-                .build();
-        metastore.createTable(tableEntity);
-
-        int num = 100;
-        Thread[] threads = new Thread[num];
-        for (int i = 0; i < num; i++) {
-            int finalI = i;
-            threads[i] = new Thread(() -> {
-                try {
-                    metastore.alterTableParameter(defaultDatabase.getCatalogName(), defaultDatabase.getName(), tableName, String.valueOf(finalI), String.valueOf(finalI));
-                }
-                catch (Exception e) {
-                    testResult = false;
-                }
-            });
-            threads[i].start();
-        }
-        for (Thread thread : threads) {
-            thread.join();
-        }
-
-        Map<String, String> res = metastore.getTable(defaultDatabase.getCatalogName(), defaultDatabase.getName(), tableName).get().getParameters();
-        assertEquals(num, res.size());
-
-        metastore.dropTable(defaultDatabase.getCatalogName(), defaultDatabase.getName(), tableName);
     }
 
     private void assertCatalogEquals(CatalogEntity actual, CatalogEntity expected)

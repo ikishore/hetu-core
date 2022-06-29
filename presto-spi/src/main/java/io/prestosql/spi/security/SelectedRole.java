@@ -90,9 +90,9 @@ public class SelectedRole
     {
         Matcher m = PATTERN.matcher(value);
         if (m.matches()) {
-            Type tmpType = Type.valueOf(m.group(1));
-            Optional<String> role1 = Optional.ofNullable(m.group(3));
-            return new SelectedRole(tmpType, role1);
+            Type type = Type.valueOf(m.group(1));
+            Optional<String> role = Optional.ofNullable(m.group(3));
+            return new SelectedRole(type, role);
         }
         throw new IllegalArgumentException("Could not parse selected role: " + value);
     }

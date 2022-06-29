@@ -14,7 +14,6 @@
 package io.prestosql.block;
 
 import com.google.common.collect.ImmutableList;
-import io.airlift.log.Logger;
 import io.airlift.slice.DynamicSliceOutput;
 import io.airlift.slice.Slice;
 import io.airlift.slice.SliceOutput;
@@ -58,7 +57,6 @@ import static org.testng.Assert.fail;
 @Test
 public abstract class AbstractTestBlock
 {
-    private static final Logger LOG = Logger.get(AbstractTestBlock.class);
     private static final Metadata METADATA = createTestMetadataManager();
 
     protected <T> void assertBlock(Block block, Supplier<BlockBuilder> newBlockBuilder, T[] expectedValues)
@@ -80,14 +78,12 @@ public abstract class AbstractTestBlock
             fail("expected IllegalArgumentException");
         }
         catch (IllegalArgumentException expected) {
-            LOG.info("Error message: " + expected.getStackTrace());
         }
         try {
             block.isNull(block.getPositionCount());
             fail("expected IllegalArgumentException");
         }
         catch (IllegalArgumentException expected) {
-            LOG.info("Error message: " + expected.getStackTrace());
         }
     }
 
@@ -400,8 +396,8 @@ public abstract class AbstractTestBlock
     private static Block copyBlockViaBlockSerde(Block block)
     {
         DynamicSliceOutput sliceOutput = new DynamicSliceOutput(1024);
-        METADATA.getFunctionAndTypeManager().getBlockEncodingSerde().writeBlock(sliceOutput, block);
-        return METADATA.getFunctionAndTypeManager().getBlockEncodingSerde().readBlock(sliceOutput.slice().getInput());
+        METADATA.getBlockEncodingSerde().writeBlock(sliceOutput, block);
+        return METADATA.getBlockEncodingSerde().readBlock(sliceOutput.slice().getInput());
     }
 
     private static Block copyBlockViaWritePositionTo(Block block, Supplier<BlockBuilder> newBlockBuilder)

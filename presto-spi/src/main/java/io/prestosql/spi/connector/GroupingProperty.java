@@ -49,7 +49,6 @@ public final class GroupingProperty<E>
     }
 
     @JsonProperty
-    @Override
     public Set<E> getColumns()
     {
         return columns;
@@ -82,11 +81,11 @@ public final class GroupingProperty<E>
                 .collect(toCollection(LinkedHashSet::new));
 
         if (translated.stream().allMatch(Optional::isPresent)) {
-            Set<T> localColumns = translated.stream()
+            Set<T> columns = translated.stream()
                     .map(Optional::get)
                     .collect(toCollection(LinkedHashSet::new));
 
-            return Optional.of(new GroupingProperty<>(localColumns));
+            return Optional.of(new GroupingProperty<>(columns));
         }
 
         return Optional.empty();

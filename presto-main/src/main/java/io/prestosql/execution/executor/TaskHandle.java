@@ -26,7 +26,6 @@ import java.util.ArrayList;
 import java.util.List;
 import java.util.OptionalInt;
 import java.util.Queue;
-import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.atomic.AtomicReference;
 import java.util.function.DoubleSupplier;
@@ -53,8 +52,6 @@ public class TaskHandle
     private boolean destroyed;
     @GuardedBy("this")
     protected final SplitConcurrencyController concurrencyController;
-
-    private AtomicBoolean isSuspended = new AtomicBoolean(false);
 
     private final AtomicInteger nextSplitId = new AtomicInteger();
 
@@ -122,33 +119,6 @@ public class TaskHandle
         return maxDriversPerTask;
     }
 
-    public synchronized List<PrioritizedSplitRunner> suspend()
-    {
-        checkState(!destroyed, "Cannot suspend task as already destroyed");
-
-        isSuspended.compareAndSet(false, true);
-
-        ImmutableList.Builder<PrioritizedSplitRunner> builder = ImmutableList.builder();
-        builder.addAll(runningIntermediateSplits);
-        builder.addAll(runningLeafSplits);
-        builder.addAll(queuedLeafSplits);
-
-        queuedLeafSplits.addAll(runningLeafSplits);
-
-        runningLeafSplits.clear();
-        return builder.build();
-    }
-
-    public synchronized void resume()
-    {
-        isSuspended.compareAndSet(true, false);
-    }
-
-    public synchronized boolean isSuspended()
-    {
-        return isSuspended.get();
-    }
-
     // Returns any remaining splits. The caller must destroy these.
     public synchronized List<PrioritizedSplitRunner> destroy()
     {
@@ -208,26 +178,11 @@ public class TaskHandle
         concurrencyController.splitFinished(split.getScheduledNanos(), utilizationSupplier.getAsDouble(), runningLeafSplits.size());
         runningIntermediateSplits.remove(split);
         runningLeafSplits.remove(split);
-        queuedLeafSplits.remove(split); // for case, task is suspended and an already scheduled split finishes
     }
 
     public int getNextSplitId()
     {
         return nextSplitId.getAndIncrement();
-    }
-
-    public synchronized List<PrioritizedSplitRunner> getQueuedLeafSplits()
-    {
-        ImmutableList.Builder<PrioritizedSplitRunner> builder = ImmutableList.builder();
-        builder.addAll(queuedLeafSplits);
-        return builder.build();
-    }
-
-    public List<PrioritizedSplitRunner> getRunningIntermediateSplits()
-    {
-        ImmutableList.Builder<PrioritizedSplitRunner> builder = ImmutableList.builder();
-        builder.addAll(runningIntermediateSplits);
-        return builder.build();
     }
 
     @Override

@@ -1,5 +1,5 @@
 /*
- * Copyright (C) 2018-2021. Huawei Technologies Co., Ltd. All rights reserved.
+ * Copyright (C) 2018-2020. Huawei Technologies Co., Ltd. All rights reserved.
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
  * You may obtain a copy of the License at
@@ -27,25 +27,24 @@ public class UpdateIndex
         extends Statement
 {
     private final QualifiedName indexName;
-    private final boolean exists;
-    // Properties are removed from grammar but passed as empty for potential future usage
+    private final boolean notExists;
     private final List<Property> properties;
 
-    public UpdateIndex(QualifiedName indexName, boolean exists, List<Property> properties)
+    public UpdateIndex(QualifiedName indexName, boolean notExists, List<Property> properties)
     {
-        this(Optional.empty(), indexName, exists, properties);
+        this(Optional.empty(), indexName, notExists, properties);
     }
 
-    public UpdateIndex(NodeLocation location, QualifiedName indexName, boolean exists, List<Property> properties)
+    public UpdateIndex(NodeLocation location, QualifiedName indexName, boolean notExists, List<Property> properties)
     {
-        this(Optional.of(location), indexName, exists, properties);
+        this(Optional.of(location), indexName, notExists, properties);
     }
 
-    private UpdateIndex(Optional<NodeLocation> location, QualifiedName indexName, boolean exists, List<Property> properties)
+    private UpdateIndex(Optional<NodeLocation> location, QualifiedName indexName, boolean notExists, List<Property> properties)
     {
         super(location);
         this.indexName = requireNonNull(indexName, "indexName is null");
-        this.exists = exists;
+        this.notExists = notExists;
         this.properties = properties;
     }
 
@@ -59,9 +58,9 @@ public class UpdateIndex
         return properties;
     }
 
-    public boolean isExists()
+    public boolean isNotExists()
     {
-        return exists;
+        return notExists;
     }
 
     @Override
@@ -81,7 +80,7 @@ public class UpdateIndex
     @Override
     public int hashCode()
     {
-        return Objects.hash(indexName, exists, properties);
+        return Objects.hash(indexName, notExists, properties);
     }
 
     @Override
@@ -95,7 +94,7 @@ public class UpdateIndex
         }
         UpdateIndex o = (UpdateIndex) obj;
         return Objects.equals(indexName, o.indexName) &&
-                Objects.equals(exists, o.exists) &&
+                Objects.equals(notExists, o.notExists) &&
                 Objects.equals(properties, o.properties);
     }
 
@@ -104,7 +103,7 @@ public class UpdateIndex
     {
         return toStringHelper(this)
                 .add("indexName", indexName)
-                .add("notExists", exists)
+                .add("notExists", notExists)
                 .add("properties", properties)
                 .toString();
     }

@@ -152,16 +152,15 @@ class RequestErrorTracker
 
     private static boolean isExpectedError(Throwable t)
     {
-        Throwable tmp = t;
-        while (tmp != null) {
-            if ((tmp instanceof SocketException) ||
-                    (tmp instanceof SocketTimeoutException) ||
-                    (tmp instanceof EOFException) ||
-                    (tmp instanceof TimeoutException) ||
-                    (tmp instanceof ServiceUnavailableException)) {
+        while (t != null) {
+            if ((t instanceof SocketException) ||
+                    (t instanceof SocketTimeoutException) ||
+                    (t instanceof EOFException) ||
+                    (t instanceof TimeoutException) ||
+                    (t instanceof ServiceUnavailableException)) {
                 return true;
             }
-            tmp = tmp.getCause();
+            t = t.getCause();
         }
         return false;
     }

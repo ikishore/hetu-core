@@ -191,8 +191,6 @@ class ColumnInfo
                 builder.setPrecision(type.getArguments().get(0).getLongLiteral().intValue());
                 builder.setScale(type.getArguments().get(1).getLongLiteral().intValue());
                 break;
-            default:
-                break;
         }
     }
 

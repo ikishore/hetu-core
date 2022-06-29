@@ -14,7 +14,6 @@
 package io.prestosql.spi.connector;
 
 import io.airlift.slice.Slice;
-import io.prestosql.spi.PartialAndFinalAggregationType;
 import io.prestosql.spi.PrestoException;
 import io.prestosql.spi.expression.ConnectorExpression;
 import io.prestosql.spi.predicate.TupleDomain;
@@ -25,7 +24,6 @@ import io.prestosql.spi.security.RoleGrant;
 import io.prestosql.spi.statistics.ComputedStatistics;
 import io.prestosql.spi.statistics.TableStatistics;
 import io.prestosql.spi.statistics.TableStatisticsMetadata;
-import io.prestosql.spi.type.Type;
 
 import javax.annotation.Nullable;
 
@@ -226,7 +224,7 @@ public interface ConnectorMetadata
     /**
      * Get statistics for table for given filtering constraint.
      */
-    default TableStatistics getTableStatistics(ConnectorSession session, ConnectorTableHandle tableHandle, Constraint constraint, boolean includeColumnStatistics)
+    default TableStatistics getTableStatistics(ConnectorSession session, ConnectorTableHandle tableHandle, Constraint constraint)
     {
         return TableStatistics.empty();
     }
@@ -447,19 +445,9 @@ public interface ConnectorMetadata
      * These IDs will be passed to the {@code deleteRows()} method of the
      * {@link io.prestosql.spi.connector.UpdatablePageSource} that created them.
      */
-    default ColumnHandle getDeleteRowIdColumnHandle(ConnectorSession session, ConnectorTableHandle tableHandle)
+    default ColumnHandle getUpdateRowIdColumnHandle(ConnectorSession session, ConnectorTableHandle tableHandle)
     {
-        throw new PrestoException(NOT_SUPPORTED, "This connector does not support deletes");
-    }
-
-    /**
-     * Get the column handle that will generate row IDs for the update operation.
-     * These IDs will be passed to the {@code updateRows() method of the
-     * {@link io.prestosql.spi.connector.UpdatablePageSource} that created them.
-     */
-    default ColumnHandle getUpdateRowIdColumnHandle(ConnectorSession session, ConnectorTableHandle tableHandle, List<ColumnHandle> updatedColumns)
-    {
-        throw new PrestoException(NOT_SUPPORTED, "This connector does not support updates");
+        throw new PrestoException(NOT_SUPPORTED, "This connector does not support updates or deletes");
     }
 
     /**
@@ -483,7 +471,7 @@ public interface ConnectorMetadata
     /**
      * Begin update query
      */
-    default ConnectorUpdateTableHandle beginUpdateAsInsert(ConnectorSession session, ConnectorTableHandle tableHandle)
+    default ConnectorUpdateTableHandle beginUpdate(ConnectorSession session, ConnectorTableHandle tableHandle)
     {
         throw new PrestoException(NOT_SUPPORTED, "This connector does not support updates");
     }
@@ -494,36 +482,11 @@ public interface ConnectorMetadata
     }
 
     /**
-     * Finish Update query as insert
+     * Finish Update query
      */
-    default Optional<ConnectorOutputMetadata> finishUpdateAsInsert(ConnectorSession session, ConnectorUpdateTableHandle updateHandle, Collection<Slice> fragments, Collection<ComputedStatistics> computedStatistics)
+    default Optional<ConnectorOutputMetadata> finishUpdate(ConnectorSession session, ConnectorUpdateTableHandle updateHandle, Collection<Slice> fragments, Collection<ComputedStatistics> computedStatistics)
     {
         throw new PrestoException(GENERIC_INTERNAL_ERROR, "ConnectorMetadata beginUpdate() is implemented without finishUpdate()");
-    }
-
-    /**
-     * Do whatever is necessary to start an UPDATE query, returning the {@link ConnectorTableHandle}
-     * instance that will be passed to split generation, and to the {@link #finishUpdate} method.
-     * @param session The session in which to start the update operation.
-     * @param tableHandle A ConnectorTableHandle for the table to be updated.
-     * @param updatedColumnTypes A list of the ColumnHandles of columns that will be updated by this UPDATE
-     * operation, in table column order.
-     * @return a ConnectorTableHandle that will be passed to split generation, and to the
-     * {@link #finishUpdate} method.
-     */
-    default ConnectorTableHandle beginUpdate(ConnectorSession session, ConnectorTableHandle tableHandle, List<Type> updatedColumnTypes)
-    {
-        throw new PrestoException(NOT_SUPPORTED, "This connector does not support updates");
-    }
-
-    /**
-     * Finish an update query
-     *
-     * @param fragments all fragments returned by {@link io.prestosql.spi.connector.UpdatablePageSource#finish()}
-     */
-    default void finishUpdate(ConnectorSession session, ConnectorTableHandle tableHandle, Collection<Slice> fragments)
-    {
-        throw new PrestoException(NOT_SUPPORTED, "This connector does not support updates");
     }
 
     /**
@@ -647,14 +610,6 @@ public interface ConnectorMetadata
      * Execute the delete operation on the handle returned from {@link #applyDelete}.
      */
     default OptionalLong executeDelete(ConnectorSession session, ConnectorTableHandle handle)
-    {
-        throw new PrestoException(GENERIC_INTERNAL_ERROR, "ConnectorMetadata applyDelete() is implemented without executeDelete()");
-    }
-
-    /**
-     * Execute the delete operation on the handle returned from {@link #applyDelete}.
-     */
-    default OptionalLong executeUpdate(ConnectorSession session, ConnectorTableHandle handle)
     {
         throw new PrestoException(GENERIC_INTERNAL_ERROR, "ConnectorMetadata applyDelete() is implemented without executeDelete()");
     }
@@ -970,68 +925,5 @@ public interface ConnectorMetadata
     default boolean isPreAggregationSupported(ConnectorSession session)
     {
         return false;
-    }
-
-    /**
-     * Whether this table can be used as input for snapshot-enabled query executions.
-     *
-     * @param session Presto session
-     * @param table Connector specific table handle
-     */
-    default boolean isSnapshotSupportedAsInput(ConnectorSession session, ConnectorTableHandle table)
-    {
-        // Most connectors do *not* support snapshot. Only Hive, TPCDS, and TPCH support it.
-        return false;
-    }
-
-    /**
-     * Whether this table can be used as output for snapshot-enabled query executions
-     *
-     * @param session Presto session
-     * @param table Connector specific table handle
-     */
-    default boolean isSnapshotSupportedAsOutput(ConnectorSession session, ConnectorTableHandle table)
-    {
-        // Most connectors do *not* support snapshot. Only Hive with ORC format supports it.
-        return false;
-    }
-
-    /**
-     * Whether new table with specified format can be used as output for snapshot-enabled
-     *
-     * @param session Presto session
-     * @param tableProperties Table properties
-     */
-    default boolean isSnapshotSupportedAsNewTable(ConnectorSession session, Map<String, Object> tableProperties)
-    {
-        // Most connectors do *not* support snapshot. Only Hive with ORC format supports it.
-        return false;
-    }
-
-    /**
-     * Snapshot: Remove any previous changes from previous execution attempt, to prepare for query resume
-     */
-    default void resetInsertForRerun(ConnectorSession session, ConnectorInsertTableHandle tableHandle, OptionalLong snapshotIndex)
-    {
-        throw new UnsupportedOperationException("This connector does not support query resuming");
-    }
-
-    /**
-     * Snapshot: Remove any previous changes from previous execution attempt, to prepare for query resume
-     */
-    default void resetCreateForRerun(ConnectorSession session, ConnectorOutputTableHandle tableHandle, OptionalLong snapshotIndex)
-    {
-        throw new UnsupportedOperationException("This connector does not support query resuming");
-    }
-
-    default PartialAndFinalAggregationType validateAndGetSortAggregationType(ConnectorSession session, ConnectorTableHandle tableHandle, List<String> keyNames)
-    {
-        PartialAndFinalAggregationType partialAndFinalAggregationType = new PartialAndFinalAggregationType();
-        return partialAndFinalAggregationType;
-    }
-
-    default void refreshMetadataCache()
-    {
-        throw new UnsupportedOperationException("This connector does not support refreshing metadata cache");
     }
 }

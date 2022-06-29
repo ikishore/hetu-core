@@ -23,7 +23,7 @@ import static com.google.common.base.Preconditions.checkArgument;
 import static java.util.Objects.requireNonNull;
 
 @ThreadSafe
-public class PageReference
+class PageReference
 {
     private final Page page;
     private final Runnable onFree;
@@ -44,16 +44,11 @@ public class PageReference
 
     public Page removePage()
     {
-        int pageReferenceCount = this.referenceCount.decrementAndGet();
-        checkArgument(pageReferenceCount >= 0, "Page reference count is negative");
-        if (pageReferenceCount == 0) {
+        int referenceCount = this.referenceCount.decrementAndGet();
+        checkArgument(referenceCount >= 0, "Page reference count is negative");
+        if (referenceCount == 0) {
             onFree.run();
         }
-        return page;
-    }
-
-    public Page peekPage()
-    {
         return page;
     }
 }

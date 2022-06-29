@@ -35,7 +35,6 @@ import org.apache.parquet.column.ColumnDescriptor;
 import org.apache.parquet.column.values.ValuesReader;
 import org.apache.parquet.column.values.rle.RunLengthBitPackingHybridDecoder;
 import org.apache.parquet.io.ParquetDecodingException;
-import org.joda.time.DateTimeZone;
 
 import java.io.ByteArrayInputStream;
 import java.io.IOException;
@@ -81,7 +80,7 @@ public abstract class PrimitiveColumnReader
         return ParquetTypeUtils.isValueNull(columnDescriptor.isRequired(), definitionLevel, columnDescriptor.getMaxDefinitionLevel());
     }
 
-    public static PrimitiveColumnReader createReader(RichColumnDescriptor descriptor, DateTimeZone timeZone)
+    public static PrimitiveColumnReader createReader(RichColumnDescriptor descriptor)
     {
         switch (descriptor.getType()) {
             case BOOLEAN:
@@ -91,7 +90,7 @@ public abstract class PrimitiveColumnReader
             case INT64:
                 return createDecimalColumnReader(descriptor).orElse(new LongColumnReader(descriptor));
             case INT96:
-                return new TimestampColumnReader(descriptor, timeZone);
+                return new TimestampColumnReader(descriptor);
             case FLOAT:
                 return new FloatColumnReader(descriptor);
             case DOUBLE:
@@ -300,20 +299,20 @@ public abstract class PrimitiveColumnReader
 
     private ValuesReader initDataReader(ParquetEncoding dataEncoding, int valueCount, ByteBufferInputStream in)
     {
-        ValuesReader localValuesReader;
+        ValuesReader valuesReader;
         if (dataEncoding.usesDictionary()) {
             if (dictionary == null) {
                 throw new ParquetDecodingException("Dictionary is missing for Page");
             }
-            localValuesReader = dataEncoding.getDictionaryBasedValuesReader(columnDescriptor, VALUES, dictionary);
+            valuesReader = dataEncoding.getDictionaryBasedValuesReader(columnDescriptor, VALUES, dictionary);
         }
         else {
-            localValuesReader = dataEncoding.getValuesReader(columnDescriptor, VALUES);
+            valuesReader = dataEncoding.getValuesReader(columnDescriptor, VALUES);
         }
 
         try {
-            localValuesReader.initFromPage(valueCount, in);
-            return localValuesReader;
+            valuesReader.initFromPage(valueCount, in);
+            return valuesReader;
         }
         catch (IOException e) {
             throw new ParquetDecodingException("Error reading parquet page in column " + columnDescriptor, e);

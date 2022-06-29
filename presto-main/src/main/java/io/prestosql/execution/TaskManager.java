@@ -31,13 +31,7 @@ import java.util.OptionalInt;
 public interface TaskManager
 {
     /**
-     * Gets all of the currently tracked task instanceIds. This will include
-     * uninitialized, running, and completed tasks
-     */
-    List<SqlTask> getAllTasks();
-
-    /**
-     * Gets all of the currently tracked tasks.  This will include
+     * Gets all of the currently tracked tasks.  This will included
      * uninitialized, running, and completed tasks.
      */
     List<TaskInfo> getAllTaskInfo();
@@ -49,12 +43,12 @@ public interface TaskManager
      * NOTE: this design assumes that only tasks that will eventually exist are
      * queried.
      */
-    TaskInfo getTaskInfo(TaskId taskId, String expectedTaskInstanceId);
+    TaskInfo getTaskInfo(TaskId taskId);
 
     /**
      * Gets the status for the specified task.
      */
-    TaskStatus getTaskStatus(TaskId taskId, String expectedTaskInstanceId);
+    TaskStatus getTaskStatus(TaskId taskId);
 
     /**
      * Gets future info for the task after the state changes from
@@ -65,7 +59,13 @@ public interface TaskManager
      * NOTE: this design assumes that only tasks that will eventually exist are
      * queried.
      */
-    ListenableFuture<TaskInfo> getTaskInfo(TaskId taskId, TaskState currentState, String expectedTaskInstanceId);
+    ListenableFuture<TaskInfo> getTaskInfo(TaskId taskId, TaskState currentState);
+
+    /**
+     * Gets the unique instance id of a task.  This can be used to detect a task
+     * that was destroyed and recreated.
+     */
+    String getTaskInstanceId(TaskId taskId);
 
     /**
      * Gets future status for the task after the state changes from
@@ -76,7 +76,7 @@ public interface TaskManager
      * NOTE: this design assumes that only tasks that will eventually exist are
      * queried.
      */
-    ListenableFuture<TaskStatus> getTaskStatus(TaskId taskId, TaskState currentState, String expectedTaskInstanceId);
+    ListenableFuture<TaskStatus> getTaskStatus(TaskId taskId, TaskState currentState);
 
     void updateMemoryPoolAssignments(MemoryPoolAssignmentsRequest assignments);
 
@@ -84,21 +84,19 @@ public interface TaskManager
      * Updates the task plan, sources and output buffers.  If the task does not
      * already exist, is is created and then updated.
      */
-    TaskInfo updateTask(Session session, TaskId taskId, Optional<PlanFragment> fragment, List<TaskSource> sources, OutputBuffers outputBuffers, OptionalInt totalPartitions, Optional<PlanNodeId> consumer, String expectedTaskInstanceId);
-
-    TaskInfo suspendTask(TaskId taskId, TaskState targetState, String expectedTaskInstanceId);
-
-    TaskInfo resumeTask(TaskId taskId, TaskState targetState, String expectedTaskInstanceId);
+    TaskInfo updateTask(Session session, TaskId taskId, Optional<PlanFragment> fragment, List<TaskSource> sources, OutputBuffers outputBuffers, OptionalInt totalPartitions, Optional<PlanNodeId> consumer);
 
     /**
      * Cancels a task.  If the task does not already exist, is is created and then
-     * canceled. Snapshot: If a worker dies and then brought back, we don't want
-     * to create a new task on it then cancel when this method is called. We would
-     * return null if we can't find the task with the particular taskInstanceId to
-     * create a new abortedTaskInfo with the given taskInstanceId and return that
-     * to the caller to avoid RemoteTaskMismatch.
+     * canceled.
      */
-    TaskInfo cancelTask(TaskId taskId, TaskState targetState, String expectedTaskInstanceId);
+    TaskInfo cancelTask(TaskId taskId);
+
+    /**
+     * Aborts a task.  If the task does not already exist, is is created and then
+     * aborted.
+     */
+    TaskInfo abortTask(TaskId taskId);
 
     /**
      * Gets results from a task either immediately or in the future.  If the
@@ -108,12 +106,12 @@ public interface TaskManager
      * NOTE: this design assumes that only tasks and buffers that will
      * eventually exist are queried.
      */
-    ListenableFuture<BufferResult> getTaskResults(TaskId taskId, OutputBufferId bufferId, long startingSequenceId, DataSize maxSize, String expectedTaskInstanceId);
+    ListenableFuture<BufferResult> getTaskResults(TaskId taskId, OutputBufferId bufferId, long startingSequenceId, DataSize maxSize);
 
     /**
      * Acknowledges previously received results.
      */
-    void acknowledgeTaskResults(TaskId taskId, OutputBufferId bufferId, long sequenceId, String expectedTaskInstanceId);
+    void acknowledgeTaskResults(TaskId taskId, OutputBufferId bufferId, long sequenceId);
 
     /**
      * Aborts a result buffer for a task.  If the task or buffer has not been
@@ -123,7 +121,7 @@ public interface TaskManager
      * NOTE: this design assumes that only tasks and buffers that will
      * eventually exist are queried.
      */
-    TaskInfo abortTaskResults(TaskId taskId, OutputBufferId bufferId, String expectedTaskInstanceId);
+    TaskInfo abortTaskResults(TaskId taskId, OutputBufferId bufferId);
 
     /**
      * Adds a state change listener to the specified task.
@@ -131,5 +129,5 @@ public interface TaskManager
      * be taken to avoid leaking {@code this} when adding a listener in a constructor. Additionally, it is
      * possible notifications are observed out of order due to the asynchronous execution.
      */
-    void addStateChangeListener(String instanceId, StateChangeListener<TaskState> stateChangeListener);
+    void addStateChangeListener(TaskId taskId, StateChangeListener<TaskState> stateChangeListener);
 }

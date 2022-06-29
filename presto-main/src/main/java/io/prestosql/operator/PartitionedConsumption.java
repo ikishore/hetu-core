@@ -36,7 +36,6 @@ import static com.google.common.base.Preconditions.checkState;
 import static com.google.common.util.concurrent.Futures.allAsList;
 import static com.google.common.util.concurrent.Futures.immediateFuture;
 import static com.google.common.util.concurrent.MoreExecutors.directExecutor;
-import static java.util.Collections.emptyIterator;
 import static java.util.Objects.requireNonNull;
 
 @ThreadSafe
@@ -47,10 +46,9 @@ public final class PartitionedConsumption<T>
     @Nullable
     private List<Partition<T>> partitions;
 
-    public PartitionedConsumption(int consumersCount, Iterable<Integer> partitionNumbers, IntFunction<ListenableFuture<T>> loader, IntConsumer disposer,
-                                  IntFunction<ListenableFuture<?>> disposed)
+    public PartitionedConsumption(int consumersCount, Iterable<Integer> partitionNumbers, IntFunction<ListenableFuture<T>> loader, IntConsumer disposer)
     {
-        this(consumersCount, immediateFuture(null), partitionNumbers, loader, disposer, disposed);
+        this(consumersCount, immediateFuture(null), partitionNumbers, loader, disposer);
     }
 
     public PartitionedConsumption(
@@ -58,33 +56,31 @@ public final class PartitionedConsumption<T>
             ListenableFuture<?> activator,
             Iterable<Integer> partitionNumbers,
             IntFunction<ListenableFuture<T>> loader,
-            IntConsumer disposer,
-            IntFunction<ListenableFuture<?>> disposed)
+            IntConsumer disposer)
     {
         checkArgument(consumersCount > 0, "consumersCount must be positive");
         this.consumersCount = consumersCount;
-        this.partitions = createPartitions(activator, partitionNumbers, loader, disposer, disposed);
+        this.partitions = createPartitions(activator, partitionNumbers, loader, disposer);
     }
 
     private List<Partition<T>> createPartitions(
             ListenableFuture<?> activator,
             Iterable<Integer> partitionNumbers,
             IntFunction<ListenableFuture<T>> loader,
-            IntConsumer disposer,
-            IntFunction<ListenableFuture<?>> disposed)
+            IntConsumer disposer)
     {
         requireNonNull(partitionNumbers, "partitionNumbers is null");
         requireNonNull(loader, "loader is null");
         requireNonNull(disposer, "disposer is null");
 
-        ImmutableList.Builder<Partition<T>> partitionList = ImmutableList.builder();
+        ImmutableList.Builder<Partition<T>> partitions = ImmutableList.builder();
         ListenableFuture<?> partitionActivator = activator;
         for (Integer partitionNumber : partitionNumbers) {
             Partition<T> partition = new Partition<>(consumersCount, partitionNumber, loader, partitionActivator, disposer);
-            partitionList.add(partition);
-            partitionActivator = disposed.apply(partitionNumber);
+            partitions.add(partition);
+            partitionActivator = partition.released;
         }
-        return partitionList.build();
+        return partitions.build();
     }
 
     public int getConsumersCount()
@@ -92,21 +88,19 @@ public final class PartitionedConsumption<T>
         return consumersCount;
     }
 
-    public synchronized Iterator<Partition<T>> beginConsumption()
+    public Iterator<Partition<T>> beginConsumption()
     {
-        if (consumed.getAndIncrement() >= consumersCount) {
+        Queue<Partition<T>> partitions = new ArrayDeque<>(requireNonNull(this.partitions, "partitions is already null"));
+        if (consumed.incrementAndGet() >= consumersCount) {
             // Unreference futures to allow GC
             this.partitions = null;
-            return emptyIterator();
         }
-
-        Queue<Partition<T>> partitionQueue = new ArrayDeque<>(requireNonNull(this.partitions, "partitionQueue is already null"));
         return new AbstractIterator<Partition<T>>()
         {
             @Override
             protected Partition<T> computeNext()
             {
-                Partition<T> next = partitionQueue.poll();
+                Partition<T> next = partitions.poll();
                 if (next != null) {
                     return next;
                 }
@@ -122,7 +116,7 @@ public final class PartitionedConsumption<T>
         private final int partitionNumber;
         private final SettableFuture<?> requested;
         private final ListenableFuture<T> loaded;
-        private final IntConsumer disposer;
+        private final SettableFuture<?> released;
 
         @GuardedBy("this")
         private int pendingReleases;
@@ -140,7 +134,8 @@ public final class PartitionedConsumption<T>
                     allAsList(requested, previousReleased),
                     ignored -> loader.apply(partitionNumber),
                     directExecutor());
-            this.disposer = disposer;
+            this.released = SettableFuture.create();
+            released.addListener(() -> disposer.accept(partitionNumber), directExecutor());
             this.pendingReleases = consumersCount;
         }
 
@@ -161,7 +156,7 @@ public final class PartitionedConsumption<T>
             pendingReleases--;
             checkState(pendingReleases >= 0);
             if (pendingReleases == 0) {
-                disposer.accept(partitionNumber);
+                released.set(null);
             }
         }
     }

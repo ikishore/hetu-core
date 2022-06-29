@@ -15,11 +15,12 @@ package io.prestosql.elasticsearch.decoders;
 
 import io.prestosql.spi.PrestoException;
 import io.prestosql.spi.block.BlockBuilder;
+import io.prestosql.spi.connector.ConnectorSession;
 import org.elasticsearch.common.document.DocumentField;
 import org.elasticsearch.search.SearchHit;
 
 import java.time.LocalDateTime;
-import java.time.ZoneOffset;
+import java.time.ZoneId;
 import java.util.function.Supplier;
 
 import static io.prestosql.spi.StandardErrorCode.TYPE_MISMATCH;
@@ -31,10 +32,12 @@ public class TimestampDecoder
         implements Decoder
 {
     private final String path;
+    private final ZoneId zoneId;
 
-    public TimestampDecoder(String path)
+    public TimestampDecoder(ConnectorSession session, String path)
     {
         this.path = path;
+        this.zoneId = ZoneId.of(session.getTimeZoneKey().getId());
     }
 
     @Override
@@ -50,7 +53,7 @@ public class TimestampDecoder
         else {
             TIMESTAMP.writeLong(output,
                     ISO_DATE_TIME.parse(documentField.getValue(), LocalDateTime::from)
-                            .atOffset(ZoneOffset.UTC)
+                            .atZone(zoneId)
                             .toInstant()
                             .toEpochMilli());
         }

@@ -1,5 +1,5 @@
 /*
- * Copyright (C) 2018-2021. Huawei Technologies Co., Ltd. All rights reserved.
+ * Copyright (C) 2018-2020. Huawei Technologies Co., Ltd. All rights reserved.
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
  * You may obtain a copy of the License at
@@ -24,8 +24,8 @@ import io.hetu.core.spi.cube.CubeStatement;
 import io.hetu.core.spi.cube.io.CubeMetaStore;
 import io.prestosql.Session;
 import io.prestosql.cube.CubeManager;
-import io.prestosql.metadata.FunctionAndTypeManager;
 import io.prestosql.metadata.Metadata;
+import io.prestosql.metadata.QualifiedObjectName;
 import io.prestosql.metadata.TableMetadata;
 import io.prestosql.plugin.tpch.TpchColumnHandle;
 import io.prestosql.plugin.tpch.TpchTableHandle;
@@ -33,11 +33,8 @@ import io.prestosql.plugin.tpch.TpchTableLayoutHandle;
 import io.prestosql.plugin.tpch.TpchTransactionHandle;
 import io.prestosql.spi.connector.ColumnHandle;
 import io.prestosql.spi.connector.ColumnMetadata;
-import io.prestosql.spi.connector.ConnectorTableMetadata;
-import io.prestosql.spi.connector.QualifiedObjectName;
-import io.prestosql.spi.connector.SchemaTableName;
 import io.prestosql.spi.cube.CubeProvider;
-import io.prestosql.spi.function.FunctionHandle;
+import io.prestosql.spi.function.Signature;
 import io.prestosql.spi.metadata.TableHandle;
 import io.prestosql.spi.operator.ReuseExchangeOperator;
 import io.prestosql.spi.plan.AggregationNode;
@@ -54,6 +51,7 @@ import io.prestosql.spi.predicate.TupleDomain;
 import io.prestosql.spi.relation.InputReferenceExpression;
 import io.prestosql.spi.relation.RowExpression;
 import io.prestosql.spi.relation.VariableReferenceExpression;
+import io.prestosql.spi.type.IntegerType;
 import io.prestosql.spi.type.StandardTypes;
 import io.prestosql.spi.util.DateTimeUtils;
 import io.prestosql.sql.analyzer.FeaturesConfig;
@@ -62,7 +60,6 @@ import io.prestosql.sql.planner.PlanSymbolAllocator;
 import io.prestosql.sql.planner.SymbolUtils;
 import io.prestosql.sql.planner.iterative.rule.test.BaseRuleTest;
 import io.prestosql.sql.planner.iterative.rule.test.PlanBuilder;
-import io.prestosql.sql.relational.Expressions;
 import io.prestosql.sql.relational.OriginalExpressionUtils;
 import io.prestosql.sql.tree.Cast;
 import io.prestosql.sql.tree.DoubleLiteral;
@@ -76,7 +73,6 @@ import org.testng.annotations.BeforeClass;
 import org.testng.annotations.Test;
 
 import java.util.ArrayList;
-import java.util.Arrays;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
@@ -85,14 +81,12 @@ import java.util.UUID;
 
 import static io.prestosql.SystemSessionProperties.ENABLE_STAR_TREE_INDEX;
 import static io.prestosql.metadata.AbstractMockMetadata.dummyMetadata;
-import static io.prestosql.metadata.MetadataManager.createTestMetadataManager;
+import static io.prestosql.spi.function.FunctionKind.AGGREGATE;
 import static io.prestosql.spi.plan.AggregationNode.Step.SINGLE;
 import static io.prestosql.spi.plan.AggregationNode.singleGroupingSet;
 import static io.prestosql.spi.type.BigintType.BIGINT;
 import static io.prestosql.spi.type.DateType.DATE;
 import static io.prestosql.spi.type.DoubleType.DOUBLE;
-import static io.prestosql.spi.type.IntegerType.INTEGER;
-import static io.prestosql.sql.analyzer.TypeSignatureProvider.fromTypes;
 import static io.prestosql.sql.planner.iterative.rule.test.PlanBuilder.expression;
 import static org.mockito.Matchers.any;
 import static org.mockito.Matchers.anyString;
@@ -104,14 +98,6 @@ import static org.testng.Assert.assertTrue;
 public class TestStarTreeAggregationRule
         extends BaseRuleTest
 {
-    private static final FunctionAndTypeManager FUNCTION_MANAGER = createTestMetadataManager().getFunctionAndTypeManager();
-    private static final FunctionHandle COUNT = FUNCTION_MANAGER.lookupFunction("count", fromTypes(DOUBLE));
-    private static final FunctionHandle SUM = FUNCTION_MANAGER.lookupFunction("sum", fromTypes(DOUBLE));
-    private static final FunctionHandle AVG = FUNCTION_MANAGER.lookupFunction("avg", fromTypes(DOUBLE));
-    private static final FunctionHandle MIN = FUNCTION_MANAGER.lookupFunction("min", fromTypes(DOUBLE));
-    private static final FunctionHandle MAX = FUNCTION_MANAGER.lookupFunction("max", fromTypes(DOUBLE));
-    private static final FunctionHandle LAG = FUNCTION_MANAGER.lookupFunction("lag", fromTypes(DOUBLE));
-
     private final PlanBuilder planBuilder = new PlanBuilder(new PlanNodeIdAllocator(), dummyMetadata());
     private Symbol output;
     private Symbol columnOrderkey;
@@ -125,7 +111,6 @@ public class TestStarTreeAggregationRule
     private Map<Symbol, ColumnHandle> assignments;
     private TableHandle ordersTableHandle;
     private TableScanNode baseTableScan;
-    private TableMetadata baseTableMetadata;
     private FeaturesConfig config;
     private CubeManager cubeManager;
     private CubeProvider provider;
@@ -172,16 +157,10 @@ public class TestStarTreeAggregationRule
         columnOrderDate = symbolAllocator.newSymbol("orderdate", DATE);
         columnCustkey = symbolAllocator.newSymbol("custkey", BIGINT);
         columnTotalprice = symbolAllocator.newSymbol("totalprice", DOUBLE);
-
         orderkeyHandle = new TpchColumnHandle("orderkey", BIGINT);
         orderdateHandle = new TpchColumnHandle("orderdate", DATE);
         custkeyHandle = new TpchColumnHandle("custkey", BIGINT);
         totalpriceHandle = new TpchColumnHandle("totalprice", DOUBLE);
-
-        ColumnMetadata orderKeyColumnMetadata = new ColumnMetadata(orderkeyHandle.getColumnName(), orderkeyHandle.getType());
-        ColumnMetadata orderDateColumnMetadata = new ColumnMetadata(orderdateHandle.getColumnName(), orderdateHandle.getType());
-        ColumnMetadata custKeyColumnMetadata = new ColumnMetadata(custkeyHandle.getColumnName(), custkeyHandle.getType());
-        ColumnMetadata totalPriceColumnMetadata = new ColumnMetadata(totalpriceHandle.getColumnName(), totalpriceHandle.getType());
 
         output = symbolAllocator.newSymbol("output", DOUBLE);
         assignments = ImmutableMap.<Symbol, ColumnHandle>builder()
@@ -206,13 +185,6 @@ public class TestStarTreeAggregationRule
                 new UUID(0, 0),
                 0,
                 false);
-
-        QualifiedObjectName baseTableName = QualifiedObjectName.valueOf(baseTableScan.getTable().getFullyQualifiedName());
-        baseTableMetadata = new TableMetadata(
-                ordersTableHandle.getCatalogName(),
-                new ConnectorTableMetadata(
-                        new SchemaTableName(baseTableName.getSchemaName(), baseTableName.getObjectName()),
-                        Arrays.asList(orderKeyColumnMetadata, orderDateColumnMetadata, custKeyColumnMetadata, totalPriceColumnMetadata)));
 
         columnCountAll = symbolAllocator.newSymbol("count_all", BIGINT);
         columnSumTotalPrice = symbolAllocator.newSymbol("sum_totalprice", DOUBLE);
@@ -255,8 +227,7 @@ public class TestStarTreeAggregationRule
         cubeMetaStore = Mockito.mock(CubeMetaStore.class);
         cubeMetadata = Mockito.mock(CubeMetadata.class);
 
-        ordersTableHandleMatcher = new BaseMatcher<TableHandle>()
-        {
+        ordersTableHandleMatcher = new BaseMatcher<TableHandle>() {
             @Override
             public boolean matches(Object o)
             {
@@ -273,8 +244,7 @@ public class TestStarTreeAggregationRule
             }
         };
 
-        ordersCubeHandleMatcher = new BaseMatcher<TableHandle>()
-        {
+        ordersCubeHandleMatcher = new BaseMatcher<TableHandle>() {
             @Override
             public boolean matches(Object o)
             {
@@ -291,8 +261,7 @@ public class TestStarTreeAggregationRule
             }
         };
 
-        countAllColumnHandleMatcher = new BaseMatcher<ColumnHandle>()
-        {
+        countAllColumnHandleMatcher = new BaseMatcher<ColumnHandle>() {
             @Override
             public void describeTo(Description description)
             {
@@ -309,8 +278,7 @@ public class TestStarTreeAggregationRule
             }
         };
 
-        sumTotalPriceColumnHandleMatcher = new BaseMatcher<ColumnHandle>()
-        {
+        sumTotalPriceColumnHandleMatcher = new BaseMatcher<ColumnHandle>() {
             @Override
             public void describeTo(Description description)
             {
@@ -327,8 +295,7 @@ public class TestStarTreeAggregationRule
             }
         };
 
-        countOrderKeyColumnHandleMatcher = new BaseMatcher<ColumnHandle>()
-        {
+        countOrderKeyColumnHandleMatcher = new BaseMatcher<ColumnHandle>() {
             @Override
             public boolean matches(Object o)
             {
@@ -345,8 +312,7 @@ public class TestStarTreeAggregationRule
             }
         };
 
-        groupingBitSetColumnHandleMatcher = new BaseMatcher<ColumnHandle>()
-        {
+        groupingBitSetColumnHandleMatcher = new BaseMatcher<ColumnHandle>() {
             @Override
             public boolean matches(Object o)
             {
@@ -363,8 +329,7 @@ public class TestStarTreeAggregationRule
             }
         };
 
-        orderDateCubeColumnHandleMatcher = new BaseMatcher<ColumnHandle>()
-        {
+        orderDateCubeColumnHandleMatcher = new BaseMatcher<ColumnHandle>() {
             @Override
             public boolean matches(Object o)
             {
@@ -381,8 +346,7 @@ public class TestStarTreeAggregationRule
             }
         };
 
-        custKeyCubeColumnHandleMatcher = new BaseMatcher<ColumnHandle>()
-        {
+        custKeyCubeColumnHandleMatcher = new BaseMatcher<ColumnHandle>() {
             @Override
             public boolean matches(Object o)
             {
@@ -411,7 +375,7 @@ public class TestStarTreeAggregationRule
                 newId(),
                 baseTableScan,
                 assignment1));
-        assertTrue(CubeOptimizerUtil.supportedProjectNode(planNode1));
+        assertTrue(StarTreeAggregationRule.supportedProjectNode(planNode1));
 
         //not projectNode
         ListMultimap<Symbol, Symbol> mappings = ImmutableListMultimap.<Symbol, Symbol>builder()
@@ -423,17 +387,17 @@ public class TestStarTreeAggregationRule
                 ImmutableList.of(baseTableScan, baseTableScan),
                 mappings,
                 ImmutableList.copyOf(mappings.keySet())));
-        assertFalse(CubeOptimizerUtil.supportedProjectNode(planNode2));
+        assertFalse(StarTreeAggregationRule.supportedProjectNode(planNode2));
 
         //expression not instance of Cast
         Assignments assignment2 = Assignments.builder()
-                .put(columnCustkey, new InputReferenceExpression(1, INTEGER))
+                .put(columnCustkey, new InputReferenceExpression(1, IntegerType.INTEGER))
                 .build();
         Optional<PlanNode> planNode3 = Optional.of(new ProjectNode(
                 newId(),
                 baseTableScan,
                 assignment2));
-        assertFalse(CubeOptimizerUtil.supportedProjectNode(planNode3));
+        assertFalse(StarTreeAggregationRule.supportedProjectNode(planNode3));
 
         //expression is instance of SymbolReference OR Literal
         Assignments assignment3 = Assignments.builder()
@@ -443,11 +407,11 @@ public class TestStarTreeAggregationRule
                 newId(),
                 baseTableScan,
                 assignment3));
-        assertTrue(CubeOptimizerUtil.supportedProjectNode(planNode4));
+        assertTrue(StarTreeAggregationRule.supportedProjectNode(planNode4));
 
         //empty node
         Optional<PlanNode> emptyPlanNode = Optional.empty();
-        assertTrue(CubeOptimizerUtil.supportedProjectNode(emptyPlanNode));
+        assertTrue(StarTreeAggregationRule.supportedProjectNode(emptyPlanNode));
     }
 
     @Test
@@ -458,11 +422,7 @@ public class TestStarTreeAggregationRule
                 newId(),
                 baseTableScan,
                 ImmutableMap.of(columnOrderkey, new AggregationNode.Aggregation(
-                        Expressions.call(
-                                "count",
-                                COUNT,
-                                DOUBLE,
-                                ImmutableList.of(planBuilder.variable(columnOrderkey.getName(), orderkeyHandle.getType()))),
+                        new Signature("count", AGGREGATE, DOUBLE.getTypeSignature()),
                         ImmutableList.of(planBuilder.variable(columnOrderkey.getName(), orderkeyHandle.getType())),
                         false,
                         Optional.empty(),
@@ -472,20 +432,14 @@ public class TestStarTreeAggregationRule
                 ImmutableList.of(),
                 SINGLE,
                 Optional.empty(),
-                Optional.empty(),
-                AggregationNode.AggregationType.HASH,
                 Optional.empty());
-        assertTrue(CubeOptimizerUtil.isSupportedAggregation(countAgg));
+        assertTrue(StarTreeAggregationRule.isSupportedAggregation(countAgg));
 
         AggregationNode countDistinctNode = new AggregationNode(
                 newId(),
                 baseTableScan,
                 ImmutableMap.of(columnOrderkey, new AggregationNode.Aggregation(
-                        Expressions.call(
-                                "count",
-                                COUNT,
-                                DOUBLE,
-                                ImmutableList.of(planBuilder.variable(columnOrderkey.getName(), orderkeyHandle.getType()))),
+                        new Signature("count", AGGREGATE, DOUBLE.getTypeSignature()),
                         ImmutableList.of(planBuilder.variable(columnOrderkey.getName(), orderkeyHandle.getType())),
                         true,
                         Optional.empty(),
@@ -495,20 +449,14 @@ public class TestStarTreeAggregationRule
                 ImmutableList.of(),
                 SINGLE,
                 Optional.empty(),
-                Optional.empty(),
-                AggregationNode.AggregationType.HASH,
                 Optional.empty());
-        assertTrue(CubeOptimizerUtil.isSupportedAggregation(countDistinctNode));
+        assertTrue(StarTreeAggregationRule.isSupportedAggregation(countDistinctNode));
 
         AggregationNode sumAgg = new AggregationNode(
                 newId(),
                 baseTableScan,
                 ImmutableMap.of(columnOrderkey, new AggregationNode.Aggregation(
-                        Expressions.call(
-                                "sum",
-                                SUM,
-                                DOUBLE,
-                                ImmutableList.of(planBuilder.variable(columnOrderkey.getName(), orderkeyHandle.getType()))),
+                        new Signature("sum", AGGREGATE, DOUBLE.getTypeSignature()),
                         ImmutableList.of(planBuilder.variable(columnOrderkey.getName(), orderkeyHandle.getType())),
                         true,
                         Optional.empty(),
@@ -518,20 +466,14 @@ public class TestStarTreeAggregationRule
                 ImmutableList.of(),
                 SINGLE,
                 Optional.empty(),
-                Optional.empty(),
-                AggregationNode.AggregationType.HASH,
                 Optional.empty());
-        assertFalse(CubeOptimizerUtil.isSupportedAggregation(sumAgg));
+        assertFalse(StarTreeAggregationRule.isSupportedAggregation(sumAgg));
 
         AggregationNode avgAgg = new AggregationNode(
                 newId(),
                 baseTableScan,
                 ImmutableMap.of(columnOrderkey, new AggregationNode.Aggregation(
-                        Expressions.call(
-                                "avg",
-                                AVG,
-                                DOUBLE,
-                                ImmutableList.of(planBuilder.variable(columnOrderkey.getName(), orderkeyHandle.getType()))),
+                        new Signature("avg", AGGREGATE, DOUBLE.getTypeSignature()),
                         ImmutableList.of(planBuilder.variable(columnOrderkey.getName(), orderkeyHandle.getType())),
                         true,
                         Optional.empty(),
@@ -541,20 +483,14 @@ public class TestStarTreeAggregationRule
                 ImmutableList.of(),
                 SINGLE,
                 Optional.empty(),
-                Optional.empty(),
-                AggregationNode.AggregationType.HASH,
                 Optional.empty());
-        assertFalse(CubeOptimizerUtil.isSupportedAggregation(avgAgg));
+        assertFalse(StarTreeAggregationRule.isSupportedAggregation(avgAgg));
 
         AggregationNode minAgg = new AggregationNode(
                 newId(),
                 baseTableScan,
                 ImmutableMap.of(columnOrderkey, new AggregationNode.Aggregation(
-                        Expressions.call(
-                                "min",
-                                MIN,
-                                DOUBLE,
-                                ImmutableList.of(planBuilder.variable(columnOrderkey.getName(), orderkeyHandle.getType()))),
+                        new Signature("min", AGGREGATE, DOUBLE.getTypeSignature()),
                         ImmutableList.of(planBuilder.variable(columnOrderkey.getName(), orderkeyHandle.getType())),
                         false,
                         Optional.empty(),
@@ -564,20 +500,14 @@ public class TestStarTreeAggregationRule
                 ImmutableList.of(),
                 SINGLE,
                 Optional.empty(),
-                Optional.empty(),
-                AggregationNode.AggregationType.HASH,
                 Optional.empty());
-        assertTrue(CubeOptimizerUtil.isSupportedAggregation(minAgg));
+        assertTrue(StarTreeAggregationRule.isSupportedAggregation(minAgg));
 
         AggregationNode maxAgg = new AggregationNode(
                 newId(),
                 baseTableScan,
                 ImmutableMap.of(columnOrderkey, new AggregationNode.Aggregation(
-                        Expressions.call(
-                                "max",
-                                MAX,
-                                DOUBLE,
-                                ImmutableList.of(planBuilder.variable(columnOrderkey.getName(), orderkeyHandle.getType()))),
+                        new Signature("max", AGGREGATE, DOUBLE.getTypeSignature()),
                         ImmutableList.of(planBuilder.variable(columnOrderkey.getName(), orderkeyHandle.getType())),
                         false,
                         Optional.empty(),
@@ -587,21 +517,15 @@ public class TestStarTreeAggregationRule
                 ImmutableList.of(),
                 SINGLE,
                 Optional.empty(),
-                Optional.empty(),
-                AggregationNode.AggregationType.HASH,
                 Optional.empty());
-        assertTrue(CubeOptimizerUtil.isSupportedAggregation(maxAgg));
+        assertTrue(StarTreeAggregationRule.isSupportedAggregation(maxAgg));
 
         //function not supported
         AggregationNode lagAgg = new AggregationNode(
                 newId(),
                 baseTableScan,
                 ImmutableMap.of(columnOrderkey, new AggregationNode.Aggregation(
-                        Expressions.call(
-                                "lag",
-                                LAG,
-                                DOUBLE,
-                                ImmutableList.of(planBuilder.variable(columnOrderkey.getName(), orderkeyHandle.getType()))),
+                        new Signature("lag", AGGREGATE, DOUBLE.getTypeSignature()),
                         ImmutableList.of(planBuilder.variable(columnOrderkey.getName(), orderkeyHandle.getType())),
                         false,
                         Optional.empty(),
@@ -611,19 +535,18 @@ public class TestStarTreeAggregationRule
                 ImmutableList.of(),
                 SINGLE,
                 Optional.empty(),
-                Optional.empty(),
-                AggregationNode.AggregationType.HASH,
                 Optional.empty());
-        assertFalse(CubeOptimizerUtil.isSupportedAggregation(lagAgg));
+        assertFalse(StarTreeAggregationRule.isSupportedAggregation(lagAgg));
 
         //empty node
         AggregationNode emptyAggNode = planBuilder.aggregation(PlanBuilder.AggregationBuilder::singleGroupingSet);
-        assertFalse(CubeOptimizerUtil.isSupportedAggregation(emptyAggNode));
+        assertFalse(StarTreeAggregationRule.isSupportedAggregation(emptyAggNode));
     }
 
     @Test
     public void testBuildSymbolMappings()
     {
+        //expression instanceof SymbolReference
         RowExpression rowExpression = planBuilder.variable(columnTotalprice.getName(), totalpriceHandle.getType());
         FilterNode filterNode = new FilterNode(newId(), baseTableScan, rowExpression);
 
@@ -636,11 +559,7 @@ public class TestStarTreeAggregationRule
                 newId(),
                 projectNode1,
                 ImmutableMap.of(columnCustkey, new AggregationNode.Aggregation(
-                        Expressions.call(
-                                "count",
-                                COUNT,
-                                DOUBLE,
-                                ImmutableList.of(planBuilder.variable(columnOrderkey.getName(), orderkeyHandle.getType()))),
+                        new Signature("count", AGGREGATE, DOUBLE.getTypeSignature()),
                         ImmutableList.of(planBuilder.variable(columnCustkey.getName(), custkeyHandle.getType())),
                         true,
                         Optional.empty(),
@@ -650,42 +569,40 @@ public class TestStarTreeAggregationRule
                 ImmutableList.of(),
                 SINGLE,
                 Optional.empty(),
-                Optional.empty(),
-                AggregationNode.AggregationType.HASH,
                 Optional.empty());
-        Map<String, Object> columnMapping = CubeOptimizerUtil.buildSymbolMappings(countAggNode, projectNodes, Optional.of(filterNode), baseTableScan, baseTableMetadata);
+        Map<String, Object> columnMapping = StarTreeAggregationRule.buildSymbolMappings(countAggNode, projectNodes, Optional.of(filterNode), baseTableScan);
         assertEquals(columnMapping.size(), 4);
         assertEquals(new ArrayList<>(columnMapping.keySet()).toString(), "[orderkey, custkey, totalprice, orderdate]");
         assertTrue(columnMapping.values().containsAll(assignments.values()) && assignments.values().containsAll(columnMapping.values()));
 
-        //expression Literal
+        //expression instanceof Literal
         DoubleLiteral testDouble = new DoubleLiteral("1.0");
         Assignments assignment2 = Assignments.builder()
                 .put(columnCustkey, OriginalExpressionUtils.castToRowExpression(testDouble))
                 .build();
         ProjectNode projectNode2 = new ProjectNode(newId(), filterNode, assignment2);
         List<ProjectNode> projections2 = ImmutableList.of(projectNode2);
-        columnMapping = CubeOptimizerUtil.buildSymbolMappings(countAggNode, projections2, Optional.of(filterNode), baseTableScan, baseTableMetadata);
+        columnMapping = StarTreeAggregationRule.buildSymbolMappings(countAggNode, projections2, Optional.of(filterNode), baseTableScan);
         assertEquals(new ArrayList(columnMapping.values()).get(1), testDouble);
 
-        //expression Cast/SymbolReference
+        //expression instanceof Cast/SymbolReference
         Cast testCast = new Cast(SymbolUtils.toSymbolReference(columnCustkey), StandardTypes.INTEGER);
         Assignments assignment3 = Assignments.builder()
                 .put(columnCustkey, OriginalExpressionUtils.castToRowExpression(testCast))
                 .build();
         ProjectNode planNode3 = new ProjectNode(newId(), baseTableScan, assignment3);
         List<ProjectNode> projections3 = ImmutableList.of(planNode3);
-        columnMapping = CubeOptimizerUtil.buildSymbolMappings(countAggNode, projections3, Optional.of(filterNode), baseTableScan, baseTableMetadata);
+        columnMapping = StarTreeAggregationRule.buildSymbolMappings(countAggNode, projections3, Optional.of(filterNode), baseTableScan);
         assertEquals(new ArrayList(columnMapping.values()).get(1), custkeyHandle);
 
-        //expression Cast/Literal
+        //expression instanceof Cast/Literal
         Cast testCast2 = new Cast(testDouble, StandardTypes.DOUBLE);
         Assignments assignment4 = Assignments.builder()
                 .put(columnCustkey, OriginalExpressionUtils.castToRowExpression(testCast2))
                 .build();
         ProjectNode planNode4 = new ProjectNode(newId(), baseTableScan, assignment4);
         List<ProjectNode> projections4 = ImmutableList.of(planNode4);
-        columnMapping = CubeOptimizerUtil.buildSymbolMappings(countAggNode, projections4, Optional.of(filterNode), baseTableScan, baseTableMetadata);
+        columnMapping = StarTreeAggregationRule.buildSymbolMappings(countAggNode, projections4, Optional.of(filterNode), baseTableScan);
         assertEquals(new ArrayList(columnMapping.values()).get(1), testDouble);
     }
 
@@ -696,7 +613,7 @@ public class TestStarTreeAggregationRule
         Mockito.when(cubeManager.getMetaStore(anyString())).then(new Returns(Optional.of(cubeMetaStore)));
 
         TpchTableHandle orders = new TpchTableHandle("orders", 1.0);
-        TableHandle tmpOrdersTableHandle = new TableHandle(tester().getCurrentConnectorId(),
+        TableHandle ordersTableHandle = new TableHandle(tester().getCurrentConnectorId(),
                 orders, TpchTransactionHandle.INSTANCE,
                 Optional.of(new TpchTableLayoutHandle(orders, TupleDomain.all())));
 
@@ -710,7 +627,7 @@ public class TestStarTreeAggregationRule
                         .step(SINGLE)
                         .source(
                                 p.project(Assignments.builder().put(p.symbol("custkey"), p.variable("custkey", custkeyHandle.getType())).build(),
-                                        p.tableScan(tmpOrdersTableHandle, ImmutableList.of(p.symbol("orderkey", BIGINT)),
+                                        p.tableScan(ordersTableHandle, ImmutableList.of(p.symbol("orderkey", BIGINT)),
                                                 ImmutableMap.of(p.symbol("orderkey", BIGINT), new TpchColumnHandle("orderkey", BIGINT)))))))
                 .doesNotFire();
         Mockito.verify(cubeMetaStore, Mockito.never()).getMetadataList(eq("local.sf1.0.orders"));
@@ -723,7 +640,7 @@ public class TestStarTreeAggregationRule
         Mockito.when(cubeManager.getMetaStore(anyString())).then(new Returns(Optional.of(cubeMetaStore)));
 
         TpchTableHandle orders = new TpchTableHandle("orders", 1.0);
-        TableHandle tmpOrdersTableHandle = new TableHandle(tester().getCurrentConnectorId(),
+        TableHandle ordersTableHandle = new TableHandle(tester().getCurrentConnectorId(),
                 orders, TpchTransactionHandle.INSTANCE,
                 Optional.of(new TpchTableLayoutHandle(orders, TupleDomain.all())));
 
@@ -739,7 +656,7 @@ public class TestStarTreeAggregationRule
                         .step(SINGLE)
                         .source(
                                 p.project(Assignments.builder().put(p.symbol("custkey"), OriginalExpressionUtils.castToRowExpression(SymbolUtils.toSymbolReference(p.symbol("custkey")))).build(),
-                                        p.tableScan(tmpOrdersTableHandle, ImmutableList.of(p.symbol("orderkey", BIGINT)),
+                                        p.tableScan(ordersTableHandle, ImmutableList.of(p.symbol("orderkey", BIGINT)),
                                                 ImmutableMap.of(p.symbol("orderkey", BIGINT), new TpchColumnHandle("orderkey", BIGINT)))))))
                 .doesNotFire();
         Mockito.verify(cubeMetaStore, Mockito.atLeastOnce()).getMetadataList(eq("local.sf1.0.orders"));
@@ -752,7 +669,7 @@ public class TestStarTreeAggregationRule
         Mockito.when(cubeManager.getMetaStore(anyString())).then(new Returns(Optional.of(cubeMetaStore)));
 
         TpchTableHandle orders = new TpchTableHandle("orders", 1.0);
-        TableHandle tmpOrdersTableHandle = new TableHandle(tester().getCurrentConnectorId(),
+        TableHandle ordersTableHandle = new TableHandle(tester().getCurrentConnectorId(),
                 orders, TpchTransactionHandle.INSTANCE,
                 Optional.of(new TpchTableLayoutHandle(orders, TupleDomain.all())));
 
@@ -771,7 +688,7 @@ public class TestStarTreeAggregationRule
                         .source(
                                 p.project(Assignments.builder().put(p.symbol("custkey"), OriginalExpressionUtils.castToRowExpression(SymbolUtils.toSymbolReference(p.symbol("custkey")))).build(),
                                         p.filter(expression("orderkey=1"),
-                                                p.tableScan(tmpOrdersTableHandle, ImmutableList.of(p.symbol("orderkey", BIGINT)),
+                                                p.tableScan(ordersTableHandle, ImmutableList.of(p.symbol("orderkey", BIGINT)),
                                                         ImmutableMap.of(p.symbol("orderkey", BIGINT), new TpchColumnHandle("orderkey", BIGINT))))))))
                 .doesNotFire();
         Mockito.verify(cubeMetaStore, Mockito.atLeastOnce()).getMetadataList(eq("local.sf1.0.orders"));
@@ -779,7 +696,7 @@ public class TestStarTreeAggregationRule
     }
 
     @Test
-    public void testDoNotUseCubeIfSourceTableUpdatedAfterCubeCreated()
+    public void testDoNotUseCubeIfOriginalTableUpdatedAfterCubeCreated()
     {
         Mockito.when(cubeManager.getCubeProvider(anyString())).then(new Returns(Optional.of(provider)));
         Mockito.when(cubeManager.getMetaStore(anyString())).then(new Returns(Optional.of(cubeMetaStore)));
@@ -796,7 +713,7 @@ public class TestStarTreeAggregationRule
         List<CubeMetadata> metadataList = ImmutableList.of(cubeMetadata);
         Mockito.when(cubeMetaStore.getMetadataList(eq("local.sf1.0.orders"))).then(new Returns(metadataList));
         Mockito.when(cubeMetadata.matches(any(CubeStatement.class))).thenReturn(true);
-        Mockito.when(cubeMetadata.getLastUpdatedTime()).thenReturn(DateTimeUtils.parseTimestampWithoutTimeZone("2020-01-01 12:00:00"));
+        Mockito.when(cubeMetadata.getLastUpdated()).thenReturn(DateTimeUtils.parseTimestampWithoutTimeZone("2020-01-01 12:00:00"));
 
         StarTreeAggregationRule starTreeAggregationRule = new StarTreeAggregationRule(cubeManager, metadata);
         tester().assertThat(starTreeAggregationRule)

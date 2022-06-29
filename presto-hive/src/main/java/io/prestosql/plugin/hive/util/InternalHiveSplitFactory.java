@@ -14,7 +14,6 @@
 package io.prestosql.plugin.hive.util;
 
 import com.google.common.collect.ImmutableList;
-import com.google.common.collect.ImmutableMap;
 import io.prestosql.plugin.hive.DeleteDeltaLocations;
 import io.prestosql.plugin.hive.HiveColumnHandle;
 import io.prestosql.plugin.hive.HivePartitionKey;
@@ -48,7 +47,6 @@ import static com.google.common.collect.ImmutableList.toImmutableList;
 import static io.airlift.slice.Slices.utf8Slice;
 import static io.prestosql.plugin.hive.HiveColumnHandle.isPathColumnHandle;
 import static io.prestosql.plugin.hive.HiveUtil.isSplittable;
-import static io.prestosql.plugin.hive.util.CustomSplitConversionUtils.extractCustomSplitInfo;
 import static java.util.Objects.requireNonNull;
 
 public class InternalHiveSplitFactory
@@ -105,7 +103,7 @@ public class InternalHiveSplitFactory
 
     private Optional<InternalHiveSplit> createInternalHiveSplit(LocatedFileStatus status, OptionalInt bucketNumber, boolean splittable, Optional<DeleteDeltaLocations> deleteDeltaLocations, Optional<Long> startRowOffsetOfFile)
     {
-        boolean tmpSplittable = splittable && isSplittable(inputFormat, fileSystem, status.getPath());
+        splittable = splittable && isSplittable(inputFormat, fileSystem, status.getPath());
         return createInternalHiveSplit(
                 status.getPath(),
                 status.getBlockLocations(),
@@ -114,17 +112,15 @@ public class InternalHiveSplitFactory
                 status.getLen(),
                 status.getModificationTime(),
                 bucketNumber,
-                tmpSplittable,
+                splittable,
                 deleteDeltaLocations,
-                startRowOffsetOfFile,
-                ImmutableMap.of());
+                startRowOffsetOfFile);
     }
 
     public Optional<InternalHiveSplit> createInternalHiveSplit(FileSplit split)
             throws IOException
     {
         FileStatus file = fileSystem.getFileStatus(split.getPath());
-        Map<String, String> customSplitInfo = extractCustomSplitInfo(split);
         return createInternalHiveSplit(
                 split.getPath(),
                 fileSystem.getFileBlockLocations(file, split.getStart(), split.getLength()),
@@ -135,8 +131,7 @@ public class InternalHiveSplitFactory
                 OptionalInt.empty(),
                 false,
                 Optional.empty(),
-                Optional.empty(),
-                customSplitInfo);
+                Optional.empty());
     }
 
     private Optional<InternalHiveSplit> createInternalHiveSplit(
@@ -149,28 +144,26 @@ public class InternalHiveSplitFactory
             OptionalInt bucketNumber,
             boolean splittable,
             Optional<DeleteDeltaLocations> deleteDeltaLocations,
-            Optional<Long> startRowOffsetOfFile,
-            Map<String, String> customSplitInfo)
+            Optional<Long> startRowOffsetOfFile)
     {
         String pathString = path.toString();
         if (!pathMatchesPredicate(pathDomain, pathString)) {
             return Optional.empty();
         }
 
-        boolean tmpForceLocalScheduling = this.forceLocalScheduling;
+        boolean forceLocalScheduling = this.forceLocalScheduling;
 
         // For empty files, some filesystem (e.g. LocalFileSystem) produce one empty block
         // while others (e.g. hdfs.DistributedFileSystem) produces no block.
         // Synthesize an empty block if one does not already exist.
-        BlockLocation[] tmpBlockLocations = blockLocations;
-        if (fileSize == 0 && tmpBlockLocations.length == 0) {
-            tmpBlockLocations = new BlockLocation[] {new BlockLocation()};
+        if (fileSize == 0 && blockLocations.length == 0) {
+            blockLocations = new BlockLocation[] {new BlockLocation()};
             // Turn off force local scheduling because hosts list doesn't exist.
-            tmpForceLocalScheduling = false;
+            forceLocalScheduling = false;
         }
 
         ImmutableList.Builder<InternalHiveSplit.InternalHiveBlock> blockBuilder = ImmutableList.builder();
-        for (BlockLocation blockLocation : tmpBlockLocations) {
+        for (BlockLocation blockLocation : blockLocations) {
             // clamp the block range
             long blockStart = Math.max(start, blockLocation.getOffset());
             long blockEnd = Math.min(start + length, blockLocation.getOffset() + blockLocation.getLength());
@@ -204,13 +197,12 @@ public class InternalHiveSplitFactory
                 blocks,
                 bucketNumber,
                 splittable,
-                tmpForceLocalScheduling && allBlocksHaveAddress(blocks),
+                forceLocalScheduling && allBlocksHaveAddress(blocks),
                 columnCoercions,
                 bucketConversion,
                 s3SelectPushdownEnabled && S3SelectPushdown.isCompressionCodecSupported(inputFormat, path),
                 deleteDeltaLocations,
-                startRowOffsetOfFile,
-                customSplitInfo));
+                startRowOffsetOfFile));
     }
 
     private static void checkBlocks(List<InternalHiveSplit.InternalHiveBlock> blocks, long start, long length)

@@ -108,7 +108,8 @@ public class CarbondataAutoVacuumThread
 
         AutoVacuumScanTask(SemiTransactionalHiveMetastore metastore)
         {
-            this(metastore, null);
+            this.metastore = metastore;
+            this.schemaName = null;
         }
 
         AutoVacuumScanTask(SemiTransactionalHiveMetastore metastore, String schemaName)
@@ -232,6 +233,7 @@ public class CarbondataAutoVacuumThread
     private void submitTaskScanning(CarbondataAutoVacuumThread instanceAutoVacuum, SemiTransactionalHiveMetastore metastore)
     {
         //trigger task to do scanning of tables
+        //instanceAutoVacuum.executorService.submit(new AutoVacuumScanTask(metastore));
         if (enableTracingCleanupTask) {
             queuedTasks.add(instanceAutoVacuum.executorService.submit(new AutoVacuumScanTask(metastore)));
         }

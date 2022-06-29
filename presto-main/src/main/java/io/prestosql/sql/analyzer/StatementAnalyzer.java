@@ -14,17 +14,13 @@
 package io.prestosql.sql.analyzer;
 
 import com.google.common.base.Joiner;
-import com.google.common.base.VerifyException;
 import com.google.common.collect.ImmutableList;
 import com.google.common.collect.ImmutableMap;
 import com.google.common.collect.ImmutableMultimap;
 import com.google.common.collect.ImmutableSet;
 import com.google.common.collect.Iterables;
 import com.google.common.collect.Multimap;
-import com.google.common.collect.Sets;
 import io.hetu.core.spi.cube.CubeAggregateFunction;
-import io.hetu.core.spi.cube.CubeMetadata;
-import io.hetu.core.spi.cube.CubeStatus;
 import io.hetu.core.spi.cube.io.CubeMetaStore;
 import io.prestosql.Session;
 import io.prestosql.SystemSessionProperties;
@@ -34,6 +30,7 @@ import io.prestosql.execution.warnings.WarningCollector;
 import io.prestosql.heuristicindex.HeuristicIndexerManager;
 import io.prestosql.metadata.Metadata;
 import io.prestosql.metadata.OperatorNotFoundException;
+import io.prestosql.metadata.QualifiedObjectName;
 import io.prestosql.metadata.TableMetadata;
 import io.prestosql.security.AccessControl;
 import io.prestosql.security.AllowAllAccessControl;
@@ -48,11 +45,9 @@ import io.prestosql.spi.connector.ColumnMetadata;
 import io.prestosql.spi.connector.ConnectorViewDefinition;
 import io.prestosql.spi.connector.ConnectorViewDefinition.ViewColumn;
 import io.prestosql.spi.connector.CreateIndexMetadata;
-import io.prestosql.spi.connector.QualifiedObjectName;
 import io.prestosql.spi.function.FunctionKind;
 import io.prestosql.spi.function.OperatorType;
 import io.prestosql.spi.heuristicindex.IndexClient;
-import io.prestosql.spi.heuristicindex.IndexRecord;
 import io.prestosql.spi.heuristicindex.Pair;
 import io.prestosql.spi.metadata.TableHandle;
 import io.prestosql.spi.security.AccessDeniedException;
@@ -67,7 +62,6 @@ import io.prestosql.spi.type.Type;
 import io.prestosql.spi.type.TypeNotFoundException;
 import io.prestosql.spi.type.TypeSignature;
 import io.prestosql.spi.type.VarcharType;
-import io.prestosql.sql.ExpressionUtils;
 import io.prestosql.sql.SqlPath;
 import io.prestosql.sql.parser.ParsingException;
 import io.prestosql.sql.parser.SqlParser;
@@ -78,12 +72,10 @@ import io.prestosql.sql.tree.AddColumn;
 import io.prestosql.sql.tree.AliasedRelation;
 import io.prestosql.sql.tree.AllColumns;
 import io.prestosql.sql.tree.Analyze;
-import io.prestosql.sql.tree.ArrayConstructor;
 import io.prestosql.sql.tree.AssignmentItem;
 import io.prestosql.sql.tree.Call;
 import io.prestosql.sql.tree.Comment;
 import io.prestosql.sql.tree.Commit;
-import io.prestosql.sql.tree.ComparisonExpression;
 import io.prestosql.sql.tree.CreateCube;
 import io.prestosql.sql.tree.CreateIndex;
 import io.prestosql.sql.tree.CreateSchema;
@@ -113,7 +105,6 @@ import io.prestosql.sql.tree.FetchFirst;
 import io.prestosql.sql.tree.FieldReference;
 import io.prestosql.sql.tree.FrameBound;
 import io.prestosql.sql.tree.FunctionCall;
-import io.prestosql.sql.tree.FunctionProperty;
 import io.prestosql.sql.tree.Grant;
 import io.prestosql.sql.tree.GroupBy;
 import io.prestosql.sql.tree.GroupingElement;
@@ -190,19 +181,16 @@ import java.util.Optional;
 import java.util.OptionalLong;
 import java.util.Properties;
 import java.util.Set;
-import java.util.function.LongSupplier;
 import java.util.stream.Collectors;
 
 import static com.google.common.base.Preconditions.checkArgument;
 import static com.google.common.base.Preconditions.checkState;
 import static com.google.common.base.Throwables.throwIfInstanceOf;
 import static com.google.common.collect.ImmutableList.toImmutableList;
-import static com.google.common.collect.ImmutableMap.toImmutableMap;
 import static com.google.common.collect.ImmutableSet.toImmutableSet;
 import static com.google.common.collect.Iterables.getLast;
 import static com.google.common.collect.Iterables.transform;
 import static io.prestosql.SystemSessionProperties.getMaxGroupingSets;
-import static io.prestosql.SystemSessionProperties.isEnableStarTreeIndex;
 import static io.prestosql.cube.CubeManager.STAR_TREE;
 import static io.prestosql.metadata.MetadataUtil.createQualifiedObjectName;
 import static io.prestosql.spi.StandardErrorCode.INVALID_COLUMN_MASK;
@@ -210,7 +198,6 @@ import static io.prestosql.spi.StandardErrorCode.INVALID_FUNCTION_ARGUMENT;
 import static io.prestosql.spi.StandardErrorCode.INVALID_ROW_FILTER;
 import static io.prestosql.spi.StandardErrorCode.NOT_FOUND;
 import static io.prestosql.spi.connector.CreateIndexMetadata.Level.UNDEFINED;
-import static io.prestosql.spi.connector.StandardWarningCode.CUBE_NOT_FOUND;
 import static io.prestosql.spi.connector.StandardWarningCode.REDUNDANT_ORDER_BY;
 import static io.prestosql.spi.function.FunctionKind.AGGREGATE;
 import static io.prestosql.spi.function.FunctionKind.WINDOW;
@@ -246,7 +233,6 @@ import static io.prestosql.sql.analyzer.SemanticErrorCode.DUPLICATE_RELATION;
 import static io.prestosql.sql.analyzer.SemanticErrorCode.INDEX_ALREADY_EXISTS;
 import static io.prestosql.sql.analyzer.SemanticErrorCode.INSERT_INTO_CUBE;
 import static io.prestosql.sql.analyzer.SemanticErrorCode.INVALID_FETCH_FIRST_ROW_COUNT;
-import static io.prestosql.sql.analyzer.SemanticErrorCode.INVALID_FUNCTION_NAME;
 import static io.prestosql.sql.analyzer.SemanticErrorCode.INVALID_LIMIT_ROW_COUNT;
 import static io.prestosql.sql.analyzer.SemanticErrorCode.INVALID_OFFSET_ROW_COUNT;
 import static io.prestosql.sql.analyzer.SemanticErrorCode.INVALID_ORDINAL;
@@ -257,8 +243,6 @@ import static io.prestosql.sql.analyzer.SemanticErrorCode.MISMATCHED_SET_COLUMN_
 import static io.prestosql.sql.analyzer.SemanticErrorCode.MISSING_ATTRIBUTE;
 import static io.prestosql.sql.analyzer.SemanticErrorCode.MISSING_CATALOG;
 import static io.prestosql.sql.analyzer.SemanticErrorCode.MISSING_COLUMN;
-import static io.prestosql.sql.analyzer.SemanticErrorCode.MISSING_CUBE;
-import static io.prestosql.sql.analyzer.SemanticErrorCode.MISSING_INDEX;
 import static io.prestosql.sql.analyzer.SemanticErrorCode.MISSING_ORDER_BY;
 import static io.prestosql.sql.analyzer.SemanticErrorCode.MISSING_SCHEMA;
 import static io.prestosql.sql.analyzer.SemanticErrorCode.MISSING_TABLE;
@@ -269,7 +253,6 @@ import static io.prestosql.sql.analyzer.SemanticErrorCode.NON_NUMERIC_SAMPLE_PER
 import static io.prestosql.sql.analyzer.SemanticErrorCode.NOT_SUPPORTED;
 import static io.prestosql.sql.analyzer.SemanticErrorCode.ORDER_BY_MUST_BE_IN_SELECT;
 import static io.prestosql.sql.analyzer.SemanticErrorCode.TABLE_ALREADY_EXISTS;
-import static io.prestosql.sql.analyzer.SemanticErrorCode.TABLE_STATE_INCORRECT;
 import static io.prestosql.sql.analyzer.SemanticErrorCode.TOO_MANY_ARGUMENTS;
 import static io.prestosql.sql.analyzer.SemanticErrorCode.TOO_MANY_GROUPING_SETS;
 import static io.prestosql.sql.analyzer.SemanticErrorCode.TYPE_MISMATCH;
@@ -278,6 +261,7 @@ import static io.prestosql.sql.analyzer.SemanticErrorCode.VIEW_IS_RECURSIVE;
 import static io.prestosql.sql.analyzer.SemanticErrorCode.VIEW_IS_STALE;
 import static io.prestosql.sql.analyzer.SemanticErrorCode.VIEW_PARSE_ERROR;
 import static io.prestosql.sql.analyzer.SemanticErrorCode.WILDCARD_WITHOUT_FROM;
+import static io.prestosql.sql.analyzer.TypeSignatureProvider.fromTypeSignatures;
 import static io.prestosql.sql.planner.ExpressionDeterminismEvaluator.isDeterministic;
 import static io.prestosql.sql.planner.ExpressionInterpreter.expressionOptimizer;
 import static io.prestosql.sql.tree.ExplainType.Type.DISTRIBUTED;
@@ -330,7 +314,7 @@ class StatementAnalyzer
     {
         this(analysis, metadata, sqlParser, accessControl, session, warningCollector);
         this.heuristicIndexerManager = requireNonNull(heuristicIndexerManager, "heuristicIndexerManager is null");
-        this.cubeManager = requireNonNull(cubeManager, "cubeManager is null");
+        this.cubeManager = cubeManager;
     }
 
     public Scope analyze(Node node, Scope outerQueryScope)
@@ -340,20 +324,7 @@ class StatementAnalyzer
 
     public Scope analyze(Node node, Optional<Scope> outerQueryScope)
     {
-        return new Visitor(outerQueryScope, warningCollector, Optional.empty())
-                .process(node, Optional.empty());
-    }
-
-    public Scope analyzeForUpdate(Table table, Optional<Scope> outerQueryScope, UpdateKind updateKind)
-    {
-        return new Visitor(outerQueryScope, warningCollector, Optional.of(updateKind))
-                .process(table, Optional.empty());
-    }
-
-    private enum UpdateKind
-    {
-        DELETE,
-        UPDATE;
+        return new Visitor(outerQueryScope, warningCollector).process(node, Optional.empty());
     }
 
     /**
@@ -366,13 +337,11 @@ class StatementAnalyzer
     {
         private final Optional<Scope> outerQueryScope;
         private final WarningCollector warningCollector;
-        private final Optional<UpdateKind> updateKind;
 
-        private Visitor(Optional<Scope> outerQueryScope, WarningCollector warningCollector, Optional<UpdateKind> updateKind)
+        private Visitor(Optional<Scope> outerQueryScope, WarningCollector warningCollector)
         {
             this.outerQueryScope = requireNonNull(outerQueryScope, "outerQueryScope is null");
             this.warningCollector = requireNonNull(warningCollector, "warningCollector is null");
-            this.updateKind = requireNonNull(updateKind, "updateKind is null");
         }
 
         @Override
@@ -476,6 +445,38 @@ class StatementAnalyzer
             return createAndAssignScope(insert, scope, Field.newUnqualified("rows", BIGINT));
         }
 
+        @Override
+        protected Scope visitInsertCube(InsertCube insertCube, Optional<Scope> scope)
+        {
+            QualifiedObjectName targetCube = createQualifiedObjectName(session, insertCube, insertCube.getCubeName());            // check if target is view
+            if (metadata.getView(session, targetCube).isPresent()) {
+                throw new SemanticException(NOT_SUPPORTED, insertCube, "Inserting into view is not supported");
+            }            // check if target cube is present
+            Optional<CubeMetaStore> optionalCubeMetaStore = cubeManager.getMetaStore(STAR_TREE);
+            if (!optionalCubeMetaStore.isPresent() || !optionalCubeMetaStore.get().getMetadataFromCubeName(targetCube.toString()).isPresent()) {
+                throw new SemanticException(INSERT_INTO_CUBE, insertCube, "%s is not a star-tree cube, INSERT INTO CUBE is not applicable.", targetCube);
+            }            // check if target cube is present as a table
+            Optional<TableHandle> targetCubeHandle = metadata.getTableHandle(session, targetCube);
+            if (!targetCubeHandle.isPresent()) {
+                throw new SemanticException(MISSING_TABLE, insertCube, "Table '%s' does not exist", targetCube);
+            }            // analyze the query that creates the data
+            Scope queryScope = process(insertCube.getQuery(), scope);
+            accessControl.checkCanInsertIntoTable(session.getRequiredTransactionId(), session.getIdentity(), targetCube);
+            if (insertCube.isOverwrite()) {
+                // set the insert as insert overwrite
+                analysis.setUpdateType("INSERT OVERWRITE CUBE", targetCube);
+                analysis.setCubeOverwrite(true);
+            }
+            else {
+                analysis.setUpdateType("INSERT CUBE", targetCube);
+            }
+            Map<String, ColumnHandle> columnHandles = metadata.getColumnHandles(session, targetCubeHandle.get());
+            analysis.setCubeInsert(new Analysis.CubeInsert(
+                    targetCubeHandle.get(),
+                    insertCube.getColumns().stream().map(Identifier::getValue).map(columnHandles::get).collect(Collectors.toList())));
+            return createAndAssignScope(insertCube, scope, Field.newUnqualified("rows", BIGINT));
+        }
+
         private boolean typesMatchForInsert(Iterable<Type> tableTypes, Iterable<Type> queryTypes)
         {
             if (Iterables.size(tableTypes) != Iterables.size(queryTypes)) {
@@ -529,72 +530,12 @@ class StatementAnalyzer
         }
 
         @Override
-        protected Scope visitInsertCube(InsertCube insertCube, Optional<Scope> scope)
-        {
-            QualifiedObjectName targetCube = createQualifiedObjectName(session, insertCube, insertCube.getCubeName());
-            CubeMetaStore cubeMetaStore = cubeManager.getMetaStore(STAR_TREE).orElseThrow(() -> new RuntimeException("Hetu metastore must be initialized"));
-            CubeMetadata cubeMetadata = cubeMetaStore.getMetadataFromCubeName(targetCube.toString())
-                    .orElseThrow(() -> new SemanticException(INSERT_INTO_CUBE, insertCube, "Cube '%s' is not found, INSERT INTO CUBE is not applicable.", targetCube));
-            Optional<TableHandle> targetCubeHandle = metadata.getTableHandle(session, targetCube);
-            if (!targetCubeHandle.isPresent()) {
-                throw new SemanticException(MISSING_CUBE, insertCube, "Cube '%s' table handle does not exist", targetCube);
-            }
-
-            TableMetadata cubeTableMetadata = metadata.getTableMetadata(session, targetCubeHandle.get());
-            boolean isPartitioned = cubeTableMetadata.getMetadata().getProperties().containsKey("partitioned_by");
-            if (insertCube.isOverwrite() && isPartitioned) {
-                throw new PrestoException(StandardErrorCode.NOT_SUPPORTED, "INSERT OVERWRITE not supported on partitioned cube. Drop and recreate cube, if needed.");
-            }
-
-            QualifiedObjectName tableName = QualifiedObjectName.valueOf(cubeMetadata.getSourceTableName());
-            TableHandle sourceTableHandle = metadata.getTableHandle(session, tableName)
-                    .orElseThrow(() -> new SemanticException(MISSING_TABLE, insertCube, "Source table '%s' on which cube was built is missing", tableName.toString()));
-
-            //Cube status is determined based on the last modified timestamp of the source table
-            //Without that Cube might return incorrect results if the table was updated but cube was not.
-            LongSupplier tableLastModifiedTime = metadata.getTableLastModifiedTimeSupplier(session, sourceTableHandle);
-            if (tableLastModifiedTime == null) {
-                throw new SemanticException(TABLE_STATE_INCORRECT, insertCube, "Cannot allow insert into cube. Cube might return incorrect results. Unable to identify last modified of the time source table.");
-            }
-            // If Original table was updated since Cube was built then We cannot allow any more updates on the Cube.
-            // User must create new cube from the source table and try insert overwrite cube
-            if (!insertCube.isOverwrite() && cubeMetadata.getCubeStatus() == CubeStatus.READY && tableLastModifiedTime.getAsLong() > cubeMetadata.getSourceTableLastUpdatedTime()) {
-                throw new SemanticException(TABLE_STATE_INCORRECT, insertCube, "Cannot insert into cube. Source table has been updated since Cube was last updated. Try INSERT OVERWRITE CUBE or Create new a cube");
-            }
-
-            Scope queryScope = process(insertCube.getQuery(), scope);
-            accessControl.checkCanInsertIntoTable(session.getRequiredTransactionId(), session.getIdentity(), targetCube);
-            if (insertCube.isOverwrite()) {
-                // set the insert as insert overwrite
-                analysis.setUpdateType("INSERT OVERWRITE CUBE", targetCube);
-                analysis.setCubeOverwrite(true);
-            }
-            else {
-                analysis.setUpdateType("INSERT CUBE", targetCube);
-            }
-            Map<String, ColumnHandle> columnHandles = metadata.getColumnHandles(session, targetCubeHandle.get());
-            analysis.setCubeInsert(new Analysis.CubeInsert(
-                    cubeMetadata,
-                    targetCubeHandle.get(),
-                    sourceTableHandle,
-                    insertCube.getColumns().stream().map(Identifier::getValue).map(columnHandles::get).collect(Collectors.toList())));
-            return createAndAssignScope(insertCube, scope, Field.newUnqualified("rows", BIGINT));
-        }
-
-        @Override
         protected Scope visitDelete(Delete node, Optional<Scope> scope)
         {
             Table table = node.getTable();
             QualifiedObjectName tableName = createQualifiedObjectName(session, table, table.getName());
             if (metadata.getView(session, tableName).isPresent()) {
                 throw new SemanticException(NOT_SUPPORTED, node, "Deleting from views is not supported");
-            }
-
-            accessControl.checkCanDeleteFromTable(session.getRequiredTransactionId(), session.getIdentity(), tableName);
-
-            Optional<CubeMetaStore> optionalCubeMetaStore = cubeManager.getMetaStore(STAR_TREE);
-            if (optionalCubeMetaStore.isPresent() && optionalCubeMetaStore.get().getMetadataFromCubeName(tableName.toString()).isPresent()) {
-                throw new SemanticException(NOT_SUPPORTED, node, "%s is a star-tree cube, DELETE is not supported", tableName);
             }
 
             // Analyzer checks for select permissions but DELETE has a separate permission, so disable access checks
@@ -607,10 +548,12 @@ class StatementAnalyzer
                     session,
                     warningCollector);
 
-            Scope tableScope = analyzer.analyzeForUpdate(table, scope, UpdateKind.DELETE);
+            Scope tableScope = analyzer.analyze(table, scope);
             node.getWhere().ifPresent(where -> analyzeWhere(node, tableScope, where));
 
             analysis.setUpdateType("DELETE", tableName);
+
+            accessControl.checkCanDeleteFromTable(session.getRequiredTransactionId(), session.getIdentity(), tableName);
 
             return createAndAssignScope(node, scope, Field.newUnqualified("rows", BIGINT));
         }
@@ -624,14 +567,6 @@ class StatementAnalyzer
                 throw new SemanticException(NOT_SUPPORTED, node, "Updating view is not supported");
             }
 
-            // check access right
-            accessControl.checkCanUpdateTable(session.getRequiredTransactionId(), session.getIdentity(), tableName);
-
-            Optional<CubeMetaStore> optionalCubeMetaStore = cubeManager.getMetaStore(STAR_TREE);
-            if (optionalCubeMetaStore.isPresent() && optionalCubeMetaStore.get().getMetadataFromCubeName(tableName.toString()).isPresent()) {
-                throw new SemanticException(NOT_SUPPORTED, node, "%s is a star-tree cube, UPDATE is not supported", tableName);
-            }
-
             // verify the existing of table
             Optional<TableHandle> targetTableHandle = metadata.getTableHandle(session, tableName);
             if (!targetTableHandle.isPresent()) {
@@ -639,23 +574,17 @@ class StatementAnalyzer
             }
 
             TableMetadata tableMetadata = metadata.getTableMetadata(session, targetTableHandle.get());
-            Set<String> tableColumns = tableMetadata.getColumns().stream()
+            List<String> tableColumns = tableMetadata.getColumns().stream()
                     .filter(column -> !column.isHidden())
                     .map(ColumnMetadata::getName)
-                    .collect(toImmutableSet());
-
-            List<ColumnMetadata> tableColumnMeta = tableMetadata.getColumns().stream().collect(toImmutableList());
-            Map<String, Type> tableColumnsTypeMap = tableColumnMeta.stream().collect(toImmutableMap(ColumnMetadata::getName, ColumnMetadata::getType));
-
-            Set<String> assignmentTargets = node.getAssignmentItems().stream()
-                    .map(assignment -> assignment.getName().toString())
-                    .collect(toImmutableSet());
-
-            List<ColumnMetadata> updatedColumns = tableColumnMeta.stream()
-                    .filter(column -> assignmentTargets.contains(column.getName()))
                     .collect(toImmutableList());
 
-            analysis.setUpdatedColumns(updatedColumns);
+            int tableColumnsCount = tableMetadata.getColumns().size();
+            List<ColumnMetadata> tableColumnMeta = tableMetadata.getColumns().stream().collect(toImmutableList());
+            Map<String, Type> tableColumnsTypeMap = new HashMap<>();
+            for (int i = 0; i < tableColumnsCount; i++) {
+                tableColumnsTypeMap.put(tableColumnMeta.get(i).getName(), tableColumnMeta.get(i).getType());
+            }
 
             // get immutableColumns from connector
             List<String> immutableColumns = new ArrayList<>();
@@ -673,7 +602,7 @@ class StatementAnalyzer
                     session,
                     warningCollector);
 
-            Scope tableScope = analyzer.analyzeForUpdate(table, scope, UpdateKind.UPDATE);
+            Scope tableScope = analyzer.analyze(table, scope);
             // validate the columns and set values
             if (node.getAssignmentItems().size() > 0) {
                 Set<String> updateColumnNames = new HashSet<>();
@@ -694,14 +623,9 @@ class StatementAnalyzer
                     ExpressionAnalysis expressionAnalysis = analyzeExpression(setValue, tableScope);
                     Type tableColumnType = tableColumnsTypeMap.get(updateColumnName);
                     Type setValueType = expressionAnalysis.getExpressionTypes().get(NodeRef.of(setValue));
-                    if (targetTableHandle.get().getConnectorHandle().isUpdateAsInsertSupported()
-                            && !typeCoercion.canCoerce(setValueType, tableColumnType)) {
+                    if (!typeCoercion.canCoerce(setValueType, tableColumnType)) {
                         throw new SemanticException(MISMATCHED_SET_COLUMN_TYPES, node, "Update column value %s has mismatched column type: %s ", setValue, tableColumnType);
                     }
-                    if (!tableColumnType.equals(setValueType)) {
-                        analysis.addCoercion(setValue, tableColumnType, typeCoercion.isTypeOnlyCoercion(setValueType, tableColumnType));
-                    }
-                    analysis.recordSubqueries(node, expressionAnalysis);
                 }
             }
             else {
@@ -715,6 +639,9 @@ class StatementAnalyzer
             node.getWhere().ifPresent(where -> analyzeWhere(node, tableScope, where));
 
             analysis.setUpdateType("UPDATE", tableName);
+
+            // check access right
+            accessControl.checkCanUpdateTable(session.getRequiredTransactionId(), session.getIdentity(), tableName);
 
             return createAndAssignScope(node, scope, Field.newUnqualified("rows", BIGINT));
         }
@@ -766,14 +693,6 @@ class StatementAnalyzer
         protected Scope visitCreateCube(CreateCube node, Optional<Scope> scope)
         {
             QualifiedObjectName targetCube = createQualifiedObjectName(session, node, node.getCubeName());
-
-            List<Property> properties = node.getProperties();
-            for (Property property : properties) {
-                if (property.getName().getValue().equalsIgnoreCase("transactional") && property.getValue().toString().equalsIgnoreCase("true")) {
-                    throw new SemanticException(NOT_SUPPORTED, node, "%s is a star-tree cube with transactional = true is not supported", node.getCubeName());
-                }
-            }
-
             CatalogName catalogName = metadata.getCatalogHandle(session, targetCube.getCatalogName())
                     .orElseThrow(() -> new PrestoException(NOT_FOUND, "Catalog not found: " + targetCube.getCatalogName()));
             if (!metadata.isPreAggregationSupported(session, catalogName)) {
@@ -797,7 +716,7 @@ class StatementAnalyzer
 
             Set<String> cubeSupportedFunctions = CubeAggregateFunction.SUPPORTED_FUNCTIONS;
             Set<FunctionCall> aggFunctions = node.getAggregations();
-            Scope queryScope = process(new Table(node.getSourceTableName()), scope);
+            Scope queryScope = process(new Table(node.getTableName()), scope);
             ImmutableList.Builder<Field> outputFields = ImmutableList.builder();
             for (FunctionCall aggFunction : aggFunctions) {
                 String argument = aggFunction.getArguments().isEmpty() || aggFunction.getArguments().get(0) instanceof LongLiteral ? null : ((Identifier) aggFunction.getArguments().get(0)).getValue();
@@ -821,37 +740,7 @@ class StatementAnalyzer
                     outputFields.add(Field.newUnqualified(aggFunctionName + "_" + "all" + (aggFunction.isDistinct() ? "_distinct" : ""), BIGINT));
                 }
             }
-            Optional<Expression> sourceFilterPredicate = node.getSourceFilter();
-            sourceFilterPredicate.ifPresent(predicate -> {
-                Set<Identifier> predicateColumns = ExpressionUtils.getIdentifiers(predicate);
-                node.getGroupingSet().stream()
-                        .filter(predicateColumns::contains)
-                        .findFirst()
-                        .ifPresent(identifier -> {
-                            throw new SemanticException(NOT_SUPPORTED, node, "Column '%s' not allowed in source filter predicate. Source filter predicate cannot contain any of the columns defined in Group property", identifier);
-                        });
-                //analyze expression to identify if coercions required
-                ExpressionAnalysis filterAnalysis = analyzeExpression(predicate, queryScope);
-                Type predicateType = filterAnalysis.getType(predicate);
-                if (!predicateType.equals(BOOLEAN) && !predicateType.equals(UNKNOWN)) {
-                    throw new SemanticException(TYPE_MISMATCH, predicate, "Filter property must evaluate to a boolean: actual type '%s'", predicateType);
-                }
-            });
-            List<Property> partitionedByExists = node.getProperties().stream()
-                    .filter(x -> x.getName().toString().equals("partitioned_by"))
-                    .collect(Collectors.toList());
-            if (partitionedByExists.size() != 0) {
-                ArrayConstructor values = (ArrayConstructor) partitionedByExists.get(0).getValue();
-                Set<String> partitionColumns = Sets.newHashSet(values.getValues().stream()
-                        .map(x -> x.toString())
-                        .map(x -> x.substring(1, x.length() - 1))
-                        .collect(Collectors.toList()));
-                if (!Sets.difference(partitionColumns, Sets.newHashSet(node.getGroupingSet().stream()
-                        .map(Identifier::getValue)
-                        .collect(Collectors.toList()))).isEmpty()) {
-                    throw new SemanticException(NOT_SUPPORTED, node, "Some columns in '" + String.join(",", partitionColumns) + "' in partitioned_by are not part of Cube.");
-                }
-            }
+
             return createAndAssignScope(node, scope, outputFields.build());
         }
 
@@ -866,7 +755,7 @@ class StatementAnalyzer
             Optional<TableHandle> targetTableHandle = metadata.getTableHandle(session, targetTable);
             if (targetTableHandle.isPresent()) {
                 if (node.isNotExists()) {
-                    analysis.setCreateTableAsSelectNoOp(true, targetTableHandle.get());
+                    analysis.setCreateTableAsSelectNoOp(true);
                     return createAndAssignScope(node, scope, Field.newUnqualified("rows", BIGINT));
                 }
                 throw new SemanticException(TABLE_ALREADY_EXISTS, node, "Destination table '%s' already exists", targetTable);
@@ -1005,12 +894,6 @@ class StatementAnalyzer
 
         @Override
         protected Scope visitCreateIndex(CreateIndex node, Optional<Scope> scope)
-        {
-            return createAndAssignScope(node, scope);
-        }
-
-        @Override
-        protected Scope visitFunctionProperty(FunctionProperty node, Optional<Scope> scope)
         {
             return createAndAssignScope(node, scope);
         }
@@ -1281,10 +1164,6 @@ class StatementAnalyzer
                 validateCreateIndex(table, scope);
             }
 
-            if (analysis.getOriginalStatement() instanceof UpdateIndex) {
-                validateUpdateIndex(table, scope);
-            }
-
             if (!table.getName().getPrefix().isPresent()) {
                 // is this a reference to a WITH query?
                 String name = table.getName().getSuffix();
@@ -1335,6 +1214,8 @@ class StatementAnalyzer
 
                     return createAndAssignScope(table, scope, fields);
                 }
+
+                throw new UnsupportedOperationException("WITH " + name);
             }
 
             QualifiedObjectName name = createQualifiedObjectName(session, table, table.getName());
@@ -1447,44 +1328,7 @@ class StatementAnalyzer
 
             analysis.registerTable(table, tableHandle.get());
 
-            if (updateKind.isPresent()) {
-                // Add the row id field
-                ColumnHandle rowIdColumnHandle;
-                switch (updateKind.get()) {
-                    case DELETE:
-                        rowIdColumnHandle = metadata.getDeleteRowIdColumnHandle(session, tableHandle.get());
-                        break;
-                    case UPDATE:
-                        List<ColumnMetadata> updatedColumnMetadata = analysis.getUpdatedColumns()
-                                .orElseThrow(() -> new VerifyException("updated columns not set"));
-                        Set<String> updatedColumnNames = updatedColumnMetadata.stream().map(ColumnMetadata::getName).collect(toImmutableSet());
-                        List<ColumnHandle> updatedColumns = columnHandles.entrySet().stream()
-                                .filter(entry -> updatedColumnNames.contains(entry.getKey()))
-                                .map(Map.Entry::getValue)
-                                .collect(toImmutableList());
-                        rowIdColumnHandle = metadata.getUpdateRowIdColumnHandle(session, tableHandle.get(), updatedColumns);
-                        break;
-                    default:
-                        throw new UnsupportedOperationException("Unknown UpdateKind " + updateKind.get());
-                }
-
-                Type type = metadata.getColumnMetadata(session, tableHandle.get(), rowIdColumnHandle).getType();
-                Field field = Field.newUnqualified(rowIdColumnHandle.getColumnName(), type);
-                fields.add(field);
-                analysis.setColumn(field, rowIdColumnHandle);
-                analysis.setRowIdHandle(table, rowIdColumnHandle);
-            }
-
-            List<Field> newOutputFields = fields.build();
-            Scope tableScope = createAndAssignScope(table, scope, newOutputFields);
-
-            if (updateKind.isPresent()) {
-                FieldReference reference = new FieldReference(newOutputFields.size() - 1);
-                analyzeExpression(reference, tableScope);
-                analysis.setRowIdField(table, reference);
-            }
-
-            return tableScope;
+            return createAndAssignScope(table, scope, fields.build());
         }
 
         @Override
@@ -1628,32 +1472,7 @@ class StatementAnalyzer
                 computeAndAssignOrderByScopeWithAggregation(node.getOrderBy().get(), sourceScope, outputScope, orderByAggregations, groupByExpressions, orderByGroupingOperations);
             }
 
-            //visit cubes associated with original Table
-            if (isEnableStarTreeIndex(session) && hasAggregates(node)) {
-                Collection<TableHandle> tableHandles = analysis.getTables();
-                tableHandles.forEach(this::analyzeCubes);
-            }
-
             return outputScope;
-        }
-
-        private void analyzeCubes(TableHandle originalTable)
-        {
-            if (cubeManager == null || !cubeManager.getMetaStore(STAR_TREE).isPresent()) {
-                //Skip if aggregation was part of subqueries and expressions, etc..
-                //StarTreeAggregation optimizer would be skipped as well
-                return;
-            }
-            CubeMetaStore cubeMetaStore = cubeManager.getMetaStore(STAR_TREE).get();
-            List<CubeMetadata> cubeMetadataList = cubeMetaStore.getMetadataList(originalTable.getFullyQualifiedName());
-            for (CubeMetadata cubeMetadata : cubeMetadataList) {
-                QualifiedObjectName cubeName = QualifiedObjectName.valueOf(cubeMetadata.getCubeName());
-                Optional<TableHandle> cubeHandle = metadata.getTableHandle(session, cubeName);
-                cubeHandle.ifPresent(cubeTH -> analysis.registerCubeForTable(originalTable, cubeTH));
-                if (!cubeHandle.isPresent()) {
-                    warningCollector.add(new PrestoWarning(CUBE_NOT_FOUND, String.format("Cube with name '%s' not found.", cubeName)));
-                }
-            }
         }
 
         @Override
@@ -1786,7 +1605,7 @@ class StatementAnalyzer
                     analysis.addCoercion(expression, BOOLEAN, false);
                 }
 
-                verifyNoAggregateWindowOrGroupingFunctions(metadata, expression, "JOIN clause");
+                Analyzer.verifyNoAggregateWindowOrGroupingFunctions(metadata, expression, "JOIN clause");
 
                 analysis.recordSubqueries(node, expressionAnalysis);
                 analysis.setJoinCriteria(node, expression);
@@ -1823,7 +1642,7 @@ class StatementAnalyzer
 
                 // ensure a comparison operator exists for the given types (applying coercions if necessary)
                 try {
-                    metadata.getFunctionAndTypeManager().resolveOperator(OperatorType.EQUAL, ImmutableList.of(
+                    metadata.resolveOperator(OperatorType.EQUAL, ImmutableList.of(
                             leftField.get().getType(), rightField.get().getType()));
                 }
                 catch (OperatorNotFoundException e) {
@@ -1943,13 +1762,6 @@ class StatementAnalyzer
             return createAndAssignScope(node, scope, fields);
         }
 
-        private void checkFunctionName(Statement node, QualifiedName functionName)
-        {
-            if (functionName.getParts().size() != 3) {
-                throw new SemanticException(INVALID_FUNCTION_NAME, node, format("Function name should be in the form of catalog.schema.function_name, found: %s", functionName));
-            }
-        }
-
         private void analyzeWindowFunctions(QuerySpecification node, List<Expression> outputExpressions, List<Expression> orderByExpressions)
         {
             analysis.setWindowFunctions(node, analyzeWindowFunctions(node, outputExpressions));
@@ -1961,7 +1773,7 @@ class StatementAnalyzer
         private List<FunctionCall> analyzeWindowFunctions(QuerySpecification node, List<Expression> expressions)
         {
             for (Expression expression : expressions) {
-                new WindowFunctionValidator(metadata.getFunctionAndTypeManager()).process(expression, analysis);
+                new WindowFunctionValidator().process(expression, analysis);
             }
 
             List<FunctionCall> windowFunctions = extractWindowFunctions(expressions);
@@ -2002,7 +1814,7 @@ class StatementAnalyzer
 
                 List<TypeSignature> argumentTypes = mappedCopy(windowFunction.getArguments(), expression -> analysis.getType(expression).getTypeSignature());
 
-                FunctionKind kind = metadata.getFunctionAndTypeManager().getFunctionMetadata(analysis.getFunctionHandle(windowFunction)).getFunctionKind();
+                FunctionKind kind = metadata.resolveFunction(windowFunction.getName(), fromTypeSignatures(argumentTypes)).getKind();
                 if (kind != AGGREGATE && kind != WINDOW) {
                     throw new SemanticException(MUST_BE_WINDOW_FUNCTION, node, "Not a window function: %s", windowFunction.getName());
                 }
@@ -2043,25 +1855,6 @@ class StatementAnalyzer
         {
             if (node.getHaving().isPresent()) {
                 Expression predicate = node.getHaving().get();
-
-                Map<String, Object> columnAliasMap = new HashMap<>();
-                List<SelectItem> selectItemList = node.getSelect().getSelectItems();
-                if (selectItemList.size() > 0) {
-                    for (SelectItem si : selectItemList) {
-                        if (si instanceof SingleColumn && (((SingleColumn) si).getAlias().isPresent())) {
-                            Expression ex = ((SingleColumn) si).getExpression();
-                            columnAliasMap.put(((SingleColumn) si).getAlias().get().getValue(), ex);
-                        }
-                    }
-                }
-                if (predicate instanceof ComparisonExpression) {
-                    if (((ComparisonExpression) predicate).getLeft() instanceof Identifier) {
-                        Expression leftExpr = (Expression) columnAliasMap.get(((Identifier) ((ComparisonExpression) predicate).getLeft()).getValue());
-                        if (leftExpr != null) {
-                            ((ComparisonExpression) predicate).setLeft(leftExpr);
-                        }
-                    }
-                }
 
                 ExpressionAnalysis expressionAnalysis = analyzeExpression(predicate, scope);
 
@@ -2184,21 +1977,6 @@ class StatementAnalyzer
                 for (GroupingElement groupingElement : node.getGroupBy().get().getGroupingElements()) {
                     if (groupingElement instanceof SimpleGroupBy) {
                         for (Expression column : groupingElement.getExpressions()) {
-                            Map<String, String> columnAliasMap = new HashMap<>();
-                            List<SelectItem> selectItemList = node.getSelect().getSelectItems();
-                            if (selectItemList.size() > 0) {
-                                for (SelectItem si : selectItemList) {
-                                    if (si instanceof SingleColumn) {
-                                        Expression ex = ((SingleColumn) si).getExpression();
-                                        if ((ex instanceof DereferenceExpression) && ((SingleColumn) si).getAlias().isPresent()) {
-                                            columnAliasMap.put(((SingleColumn) si).getAlias().get().getValue(), ((DereferenceExpression) ex).getField().getValue());
-                                        }
-                                        if ((ex instanceof Identifier) && ((SingleColumn) si).getAlias().isPresent()) {
-                                            columnAliasMap.put(((SingleColumn) si).getAlias().get().getValue(), ((Identifier) ex).getValue());
-                                        }
-                                    }
-                                }
-                            }
                             // simple GROUP BY expressions allow ordinals or arbitrary expressions
                             if (column instanceof LongLiteral) {
                                 long ordinal = ((LongLiteral) column).getValue();
@@ -2209,10 +1987,6 @@ class StatementAnalyzer
                                 column = outputExpressions.get(toIntExact(ordinal - 1));
                             }
                             else {
-                                if ((column instanceof Identifier) && columnAliasMap.containsKey(((Identifier) column).getValue())) {
-                                    String columnName = columnAliasMap.get(((Identifier) column).getValue());
-                                    column = new Identifier(((Identifier) column).getLocation().get(), columnName, ((Identifier) column).isDelimited());
-                                }
                                 analyzeExpression(column, scope);
                             }
 
@@ -2221,7 +1995,7 @@ class StatementAnalyzer
                                 sets.add(ImmutableList.of(ImmutableSet.of(field)));
                             }
                             else {
-                                verifyNoAggregateWindowOrGroupingFunctions(metadata, column, "GROUP BY clause");
+                                Analyzer.verifyNoAggregateWindowOrGroupingFunctions(metadata, column, "GROUP BY clause");
                                 analysis.recordSubqueries(node, analyzeExpression(column, scope));
                                 complexExpressions.add(column);
                             }
@@ -2456,7 +2230,7 @@ class StatementAnalyzer
 
         public void analyzeWhere(Node node, Scope scope, Expression predicate)
         {
-            verifyNoAggregateWindowOrGroupingFunctions(metadata, predicate, "WHERE clause");
+            Analyzer.verifyNoAggregateWindowOrGroupingFunctions(metadata, predicate, "WHERE clause");
 
             ExpressionAnalysis expressionAnalysis = analyzeExpression(predicate, scope);
             analysis.recordSubqueries(node, expressionAnalysis);
@@ -3067,7 +2841,6 @@ class StatementAnalyzer
                     createIndex.getIndexName().toString(),
                     tableName,
                     createIndex.getIndexType(),
-                    0L,
                     indexColumns,
                     partitions,
                     properties,
@@ -3108,77 +2881,6 @@ class StatementAnalyzer
                         break;
                     case NOT_FOUND:
                         heuristicIndexerManager.getIndexClient().addIndexRecord(placeHolder);
-                }
-            }
-        }
-        catch (IOException e) {
-            throw new UncheckedIOException(e);
-        }
-    }
-
-    private void validateUpdateIndex(Table table, Optional<Scope> scope)
-    {
-        UpdateIndex updateIndex = (UpdateIndex) analysis.getOriginalStatement();
-        IndexRecord indexRecord;
-        try {
-            indexRecord = heuristicIndexerManager.getIndexClient().lookUpIndexRecord(updateIndex.getIndexName().toString());
-        }
-        catch (IOException e) {
-            throw new UncheckedIOException("Error reading index records, ", e);
-        }
-
-        QualifiedObjectName tableFullName = QualifiedObjectName.valueOf(indexRecord.qualifiedTable);
-        accessControl.checkCanCreateIndex(session.getRequiredTransactionId(), session.getIdentity(), tableFullName);
-        String tableName = tableFullName.toString();
-
-        Optional<TableHandle> tableHandle = metadata.getTableHandle(session, tableFullName);
-        if (!tableHandle.isPresent()) {
-            throw new SemanticException(MISSING_ATTRIBUTE, table, "Unable to update index. " +
-                    "Index table '%s' may have been dropped from outside OLK. Index should also be dropped.", tableFullName);
-        }
-
-        List<Pair<String, Type>> indexColumns = new LinkedList<>();
-        for (String i : indexRecord.columns) {
-            indexColumns.add(new Pair<>(i, UNKNOWN));
-        }
-
-        try {
-            // Use this place holder to check the existence of index and lock the place
-            Properties properties = new Properties();
-            properties.setProperty(INPROGRESS_PROPERTY_KEY, "TRUE");
-            CreateIndexMetadata placeHolder = new CreateIndexMetadata(
-                    updateIndex.getIndexName().toString(),
-                    tableName,
-                    indexRecord.indexType,
-                    0L,
-                    indexColumns,
-                    indexRecord.partitions,
-                    properties,
-                    session.getUser(),
-                    UNDEFINED);
-
-            synchronized (StatementAnalyzer.class) {
-                IndexClient.RecordStatus recordStatus = heuristicIndexerManager.getIndexClient().lookUpIndexRecord(placeHolder);
-                switch (recordStatus) {
-                    case IN_PROGRESS_SAME_NAME:
-                        throw new SemanticException(INDEX_ALREADY_EXISTS, updateIndex,
-                                "Index '%s' is being created by another user. Check running queries for details. If there is no running query for this index, " +
-                                        "the index may be in an unexpected error state and should be dropped using 'DROP INDEX %s'",
-                                updateIndex.getIndexName().toString(), updateIndex.getIndexName().toString());
-                    case IN_PROGRESS_SAME_CONTENT:
-                        throw new SemanticException(INDEX_ALREADY_EXISTS, updateIndex,
-                                "Index with same (table,column,indexType) is being created by another user. Check running queries for details. " +
-                                        "If there is no running query for this index, the index may be in an unexpected error state and should be dropped using 'DROP INDEX'");
-                    case IN_PROGRESS_SAME_INDEX_PART_CONFLICT:
-                        if (indexRecord.partitions.isEmpty()) {
-                            throw new SemanticException(INDEX_ALREADY_EXISTS, updateIndex,
-                                    "Index with same (table,column,indexType) is being created by another user. Check running queries for details. " +
-                                            "If there is no running query for this index, the index may be in an unexpected error state and should be dropped using 'DROP INDEX %s'",
-                                    updateIndex.getIndexName().toString());
-                        }
-                        // allow different queries to run with explicitly same partitions
-                    case NOT_FOUND:
-                        throw new SemanticException(MISSING_INDEX, updateIndex, "Index with name '%s' does not exist", updateIndex.getIndexName().toString());
                 }
             }
         }

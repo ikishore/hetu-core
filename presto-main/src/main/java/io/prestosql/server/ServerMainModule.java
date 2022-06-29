@@ -13,7 +13,6 @@
  */
 package io.prestosql.server;
 
-import com.esotericsoftware.kryo.Kryo;
 import com.google.common.collect.ImmutableList;
 import com.google.inject.Binder;
 import com.google.inject.Key;
@@ -22,12 +21,12 @@ import com.google.inject.Scopes;
 import io.airlift.concurrent.BoundedExecutor;
 import io.airlift.configuration.AbstractConfigurationAwareModule;
 import io.airlift.http.server.HttpServerConfig;
-import io.airlift.http.server.TheServlet;
 import io.airlift.slice.Slice;
 import io.airlift.stats.GcMonitor;
 import io.airlift.stats.JmxGcMonitor;
 import io.airlift.stats.PauseMeter;
 import io.airlift.units.DataSize;
+import io.airlift.units.Duration;
 import io.prestosql.GroupByHashPageIndexerFactory;
 import io.prestosql.PagesIndexPageSorter;
 import io.prestosql.SystemSessionProperties;
@@ -37,16 +36,12 @@ import io.prestosql.catalog.CatalogStoreUtil;
 import io.prestosql.catalog.DynamicCatalogConfig;
 import io.prestosql.catalog.DynamicCatalogScanner;
 import io.prestosql.catalog.DynamicCatalogStore;
-import io.prestosql.catalog.showcatalog.ShowCatalogStore;
 import io.prestosql.client.NodeVersion;
 import io.prestosql.client.ServerInfo;
 import io.prestosql.connector.CatalogConnectorStore;
 import io.prestosql.connector.ConnectorManager;
 import io.prestosql.connector.DataCenterConnectorManager;
 import io.prestosql.connector.system.SystemConnectorModule;
-import io.prestosql.cost.FilterStatsCalculator;
-import io.prestosql.cost.ScalarStatsCalculator;
-import io.prestosql.cost.StatsNormalizer;
 import io.prestosql.cube.CubeManager;
 import io.prestosql.dynamicfilter.DynamicFilterCacheManager;
 import io.prestosql.event.SplitMonitor;
@@ -71,8 +66,6 @@ import io.prestosql.execution.scheduler.NetworkTopology;
 import io.prestosql.execution.scheduler.NodeScheduler;
 import io.prestosql.execution.scheduler.NodeSchedulerConfig;
 import io.prestosql.execution.scheduler.NodeSchedulerExporter;
-import io.prestosql.failuredetector.FailureDetectorManager;
-import io.prestosql.failuredetector.FailureRetryConfig;
 import io.prestosql.filesystem.FileSystemClientManager;
 import io.prestosql.heuristicindex.HeuristicIndexerManager;
 import io.prestosql.index.IndexManager;
@@ -88,7 +81,6 @@ import io.prestosql.metadata.CatalogManager;
 import io.prestosql.metadata.ColumnPropertyManager;
 import io.prestosql.metadata.DiscoveryNodeManager;
 import io.prestosql.metadata.ForNodeManager;
-import io.prestosql.metadata.FunctionAndTypeManager;
 import io.prestosql.metadata.HandleJsonModule;
 import io.prestosql.metadata.InternalNodeManager;
 import io.prestosql.metadata.Metadata;
@@ -97,23 +89,13 @@ import io.prestosql.metadata.SchemaPropertyManager;
 import io.prestosql.metadata.SessionPropertyManager;
 import io.prestosql.metadata.StaticCatalogStore;
 import io.prestosql.metadata.StaticCatalogStoreConfig;
-import io.prestosql.metadata.StaticFunctionNamespaceStore;
-import io.prestosql.metadata.StaticFunctionNamespaceStoreConfig;
 import io.prestosql.metadata.TablePropertyManager;
 import io.prestosql.metastore.HetuMetaStoreManager;
-import io.prestosql.operator.ExchangeClientConfig;
-import io.prestosql.operator.ExchangeClientFactory;
-import io.prestosql.operator.ExchangeClientSupplier;
-import io.prestosql.operator.ForExchange;
-import io.prestosql.operator.LookupJoinOperators;
-import io.prestosql.operator.OperatorStats;
-import io.prestosql.operator.PagesIndex;
+import io.prestosql.operator.*;
 import io.prestosql.operator.index.IndexJoinLookupStats;
 import io.prestosql.security.PasswordSecurityConfig;
 import io.prestosql.seedstore.SeedStoreManager;
 import io.prestosql.server.remotetask.HttpLocationFactory;
-import io.prestosql.snapshot.RecoveryConfig;
-import io.prestosql.snapshot.RecoveryUtils;
 import io.prestosql.spi.PageIndexerFactory;
 import io.prestosql.spi.PageSorter;
 import io.prestosql.spi.block.Block;
@@ -122,7 +104,6 @@ import io.prestosql.spi.connector.ConnectorSplit;
 import io.prestosql.spi.relation.DeterminismEvaluator;
 import io.prestosql.spi.relation.DomainTranslator;
 import io.prestosql.spi.type.Type;
-import io.prestosql.spi.type.TypeManager;
 import io.prestosql.spiller.FileSingleStreamSpillerFactory;
 import io.prestosql.spiller.GenericPartitioningSpillerFactory;
 import io.prestosql.spiller.GenericSpillerFactory;
@@ -171,7 +152,6 @@ import io.prestosql.version.EmbedVersion;
 import javax.annotation.PreDestroy;
 import javax.inject.Inject;
 import javax.inject.Singleton;
-import javax.servlet.Filter;
 
 import java.util.List;
 import java.util.concurrent.ExecutorService;
@@ -194,6 +174,7 @@ import static io.prestosql.protocol.SmileCodecBinder.smileCodecBinder;
 import static java.util.Objects.requireNonNull;
 import static java.util.concurrent.Executors.newCachedThreadPool;
 import static java.util.concurrent.Executors.newScheduledThreadPool;
+import static java.util.concurrent.TimeUnit.SECONDS;
 import static org.weakref.jmx.guice.ExportBinder.newExporter;
 
 public class ServerMainModule
@@ -243,7 +224,7 @@ public class ServerMainModule
     @Singleton
     public static BlockEncodingSerde createBlockEncodingSerde(Metadata metadata)
     {
-        return metadata.getFunctionAndTypeManager().getBlockEncodingSerde();
+        return metadata.getBlockEncodingSerde();
     }
 
     @Override
@@ -251,13 +232,11 @@ public class ServerMainModule
     {
         ServerConfig serverConfig = buildConfigObject(ServerConfig.class);
 
-        boolean gossip = ServerConfig.isGossip(serverConfig);
-
         if (serverConfig.isCoordinator()) {
-            install(new CoordinatorModule(gossip));
+            install(new CoordinatorModule());
         }
         else {
-            install(new WorkerModule(gossip));
+            install(new WorkerModule());
         }
 
         configBinder(binder).bindConfigDefaults(HttpServerConfig.class, httpServerConfig -> {
@@ -302,9 +281,6 @@ public class ServerMainModule
         // analyze properties
         binder.bind(AnalyzePropertyManager.class).in(Scopes.SINGLETON);
 
-        newSetBinder(binder, Filter.class, TheServlet.class).addBinding()
-                .to(HttpServerAvailableCheckFilter.class).in(Scopes.SINGLETON);
-
         // node manager
         discoveryBinder(binder).bindSelector("presto");
         binder.bind(DiscoveryNodeManager.class).in(Scopes.SINGLETON);
@@ -313,8 +289,8 @@ public class ServerMainModule
         httpClientBinder(binder).bindHttpClient("node-manager", ForNodeManager.class)
                 .withTracing()
                 .withConfigDefaults(config -> {
-                    config.setIdleTimeout(serverConfig.getHttpClientIdleTimeout());
-                    config.setRequestTimeout(serverConfig.getHttpClientRequestTimeout());
+                    config.setIdleTimeout(new Duration(30, SECONDS));
+                    config.setRequestTimeout(new Duration(10, SECONDS));
                 });
 
         // node scheduler
@@ -380,7 +356,9 @@ public class ServerMainModule
         binder.bind(OrderingCompiler.class).in(Scopes.SINGLETON);
         newExporter(binder).export(OrderingCompiler.class).withGeneratedName();
         binder.bind(PagesIndex.Factory.class).to(PagesIndex.DefaultFactory.class);
+        binder.bind(SharedPagesIndex.Factory.class).to(SharedPagesIndex.DefaultFactory.class);  //BQO
         binder.bind(LookupJoinOperators.class).in(Scopes.SINGLETON);
+        binder.bind(SharedJoinOperators.class).in(Scopes.SINGLETON);   //BQO
 
         jsonCodecBinder(binder).bindJsonCodec(TaskStatus.class);
         jsonCodecBinder(binder).bindJsonCodec(StageInfo.class);
@@ -391,17 +369,14 @@ public class ServerMainModule
         jsonCodecBinder(binder).bindJsonCodec(ExecutionFailureInfo.class);
         jaxrsBinder(binder).bind(PagesResponseWriter.class);
 
-        binder.bind(FailureDetectorManager.class).in(Scopes.SINGLETON);
-        configBinder(binder).bindConfig(FailureRetryConfig.class);
-
         // exchange client
         binder.bind(ExchangeClientSupplier.class).to(ExchangeClientFactory.class).in(Scopes.SINGLETON);
         httpClientBinder(binder).bindHttpClient("exchange", ForExchange.class)
                 .withTracing()
                 .withFilter(GenerateTraceTokenRequestFilter.class)
                 .withConfigDefaults(config -> {
-                    config.setIdleTimeout(serverConfig.getHttpClientIdleTimeout());
-                    config.setRequestTimeout(serverConfig.getHttpClientRequestTimeout());
+                    config.setIdleTimeout(new Duration(30, SECONDS));
+                    config.setRequestTimeout(new Duration(10, SECONDS));
                     config.setMaxConnectionsPerServer(250);
                     config.setMaxContentLength(new DataSize(32, MEGABYTE));
                 });
@@ -434,8 +409,6 @@ public class ServerMainModule
 
         binder.bind(StaticCatalogStore.class).in(Scopes.SINGLETON);
         configBinder(binder).bindConfig(StaticCatalogStoreConfig.class);
-
-        binder.bind(FunctionAndTypeManager.class).in(Scopes.SINGLETON);
         binder.bind(MetadataManager.class).in(Scopes.SINGLETON);
         binder.bind(Metadata.class).to(MetadataManager.class).in(Scopes.SINGLETON);
 
@@ -443,12 +416,9 @@ public class ServerMainModule
         binder.bind(DeterminismEvaluator.class).to(RowExpressionDeterminismEvaluator.class).in(Scopes.SINGLETON);
 
         // type
-        binder.bind(TypeManager.class).to(FunctionAndTypeManager.class).in(Scopes.SINGLETON);
         binder.bind(TypeAnalyzer.class).in(Scopes.SINGLETON);
         jsonBinder(binder).addDeserializerBinding(Type.class).to(TypeDeserializer.class);
         newSetBinder(binder, Type.class);
-
-        binder.bind(Kryo.class).in(Scopes.SINGLETON);
 
         // split manager
         binder.bind(SplitManager.class).in(Scopes.SINGLETON);
@@ -466,9 +436,6 @@ public class ServerMainModule
         binder.install(new HandleJsonModule());
 
         // connector
-        binder.bind(ScalarStatsCalculator.class).in(Scopes.SINGLETON);
-        binder.bind(StatsNormalizer.class).in(Scopes.SINGLETON);
-        binder.bind(FilterStatsCalculator.class).in(Scopes.SINGLETON);
         binder.bind(ConnectorManager.class).in(Scopes.SINGLETON);
         // binding the DataCenterConnectorManager class for loading the
         // DC connector sub catalogs
@@ -505,8 +472,7 @@ public class ServerMainModule
         // presto announcement
         discoveryBinder(binder).bindHttpAnnouncement("presto")
                 .addProperty("node_version", nodeVersion.toString())
-                .addProperty("coordinator", String.valueOf(serverConfig.isCoordinator()))
-                .addProperty("worker", String.valueOf(!serverConfig.isCoordinator() || buildConfigObject(NodeSchedulerConfig.class).isIncludeCoordinator()));
+                .addProperty("coordinator", String.valueOf(serverConfig.isCoordinator()));
 
         // server info resource
         jaxrsBinder(binder).bind(ServerInfoResource.class);
@@ -524,9 +490,6 @@ public class ServerMainModule
         binder.bind(CatalogStoreUtil.class).in(Scopes.SINGLETON);
         configBinder(binder).bindConfig(DynamicCatalogConfig.class);
 
-        // show catalog
-        binder.bind(ShowCatalogStore.class).in(Scopes.SINGLETON);
-
         // plugin manager
         binder.bind(PluginManager.class).in(Scopes.SINGLETON);
         configBinder(binder).bindConfig(PluginManagerConfig.class);
@@ -536,9 +499,6 @@ public class ServerMainModule
 
         binder.bind(CatalogManager.class).in(Scopes.SINGLETON);
         binder.bind(HetuMetaStoreManager.class).in(Scopes.SINGLETON);
-
-        binder.bind(StaticFunctionNamespaceStore.class).in(Scopes.SINGLETON);
-        configBinder(binder).bindConfig(StaticFunctionNamespaceStoreConfig.class);
 
         // block encodings
         jsonBinder(binder).addSerializerBinding(Block.class).to(BlockJsonSerde.Serializer.class);
@@ -558,10 +518,6 @@ public class ServerMainModule
 
         // HeuristicIndexerManager
         binder.bind(HeuristicIndexerManager.class).in(Scopes.SINGLETON);
-
-        // RecoveryUtils
-        binder.bind(RecoveryUtils.class).in(Scopes.SINGLETON);
-        configBinder(binder).bindConfig(RecoveryConfig.class);
 
         // Spiller
         binder.bind(SpillerFactory.class).to(GenericSpillerFactory.class).in(Scopes.SINGLETON);

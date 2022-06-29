@@ -14,10 +14,8 @@
 package io.prestosql.spi.function;
 
 import io.prestosql.spi.block.BlockBuilder;
-import io.prestosql.spi.snapshot.Restorable;
 
 public interface WindowFunction
-        extends Restorable
 {
     /**
      * Reset state for a new partition (including the first one).

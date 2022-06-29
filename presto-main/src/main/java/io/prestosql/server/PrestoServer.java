@@ -22,7 +22,6 @@ import io.airlift.discovery.client.Announcer;
 import io.airlift.discovery.client.DiscoveryModule;
 import io.airlift.event.client.JsonEventModule;
 import io.airlift.event.client.http.HttpEventModule;
-import io.airlift.http.server.HttpServerInfo;
 import io.airlift.http.server.HttpServerModule;
 import io.airlift.jaxrs.JaxrsModule;
 import io.airlift.jmx.JmxHttpModule;
@@ -33,7 +32,6 @@ import io.airlift.node.NodeModule;
 import io.airlift.tracetoken.TraceTokenModule;
 import io.prestosql.catalog.DynamicCatalogScanner;
 import io.prestosql.catalog.DynamicCatalogStore;
-import io.prestosql.catalog.showcatalog.ShowCatalogStore;
 import io.prestosql.discovery.HetuDiscoveryModule;
 import io.prestosql.dynamicfilter.CrossRegionDynamicFilterListener;
 import io.prestosql.dynamicfilter.DynamicFilterCacheManager;
@@ -43,25 +41,18 @@ import io.prestosql.eventlistener.EventListenerModule;
 import io.prestosql.execution.resourcegroups.ResourceGroupManager;
 import io.prestosql.execution.scheduler.NodeSchedulerConfig;
 import io.prestosql.execution.warnings.WarningCollectorModule;
-import io.prestosql.failuredetector.FailureDetectorManager;
 import io.prestosql.filesystem.FileSystemClientManager;
 import io.prestosql.heuristicindex.HeuristicIndexerManager;
-import io.prestosql.httpserver.HetuHttpServerInfo;
-import io.prestosql.httpserver.HetuHttpServerModule;
 import io.prestosql.jmx.HetuJmxModule;
 import io.prestosql.metadata.StaticCatalogStore;
-import io.prestosql.metadata.StaticFunctionNamespaceStore;
 import io.prestosql.metastore.HetuMetaStoreManager;
 import io.prestosql.protocol.SmileModule;
 import io.prestosql.security.AccessControlManager;
 import io.prestosql.security.AccessControlModule;
-import io.prestosql.security.GroupProviderManager;
 import io.prestosql.security.PasswordSecurityModule;
 import io.prestosql.seedstore.SeedStoreManager;
 import io.prestosql.server.security.PasswordAuthenticatorManager;
 import io.prestosql.server.security.ServerSecurityModule;
-import io.prestosql.snapshot.RecoveryUtils;
-import io.prestosql.spi.seedstore.SeedStoreSubType;
 import io.prestosql.sql.parser.SqlParserOptions;
 import io.prestosql.statestore.StateStoreLauncher;
 import io.prestosql.statestore.StateStoreProvider;
@@ -113,7 +104,7 @@ public class PrestoServer
         modules.add(
                 new NodeModule(),
                 Modules.override(new DiscoveryModule()).with(new HetuDiscoveryModule()),
-                Modules.override(new HttpServerModule()).with(new HetuHttpServerModule()),
+                new HttpServerModule(),
                 new JsonModule(),
                 new SmileModule(),
                 new JaxrsModule(),
@@ -146,39 +137,25 @@ public class PrestoServer
             injector.getInstance(PluginManager.class).loadPlugins();
             FileSystemClientManager fileSystemClientManager = injector.getInstance(FileSystemClientManager.class);
             fileSystemClientManager.loadFactoryConfigs();
-
-            FailureDetectorManager failureDetectorManager = injector.getInstance(FailureDetectorManager.class);
-            failureDetectorManager.loadFactoryConfigs();
-
-            injector.getInstance(SeedStoreManager.class).loadSeedStore();
-            if (injector.getInstance(SeedStoreManager.class).isSeedStoreOnYarnEnabled()) {
-                addSeedOnYarnInformation(
-                        injector.getInstance(ServerConfig.class),
-                        injector.getInstance(SeedStoreManager.class),
-                        (HetuHttpServerInfo) injector.getInstance(HttpServerInfo.class));
-            }
-            launchEmbeddedStateStore(injector.getInstance(HetuConfig.class), injector.getInstance(StateStoreLauncher.class));
-            injector.getInstance(StateStoreProvider.class).loadStateStore();
-            injector.getInstance(HetuMetaStoreManager.class).loadHetuMetastore(fileSystemClientManager); // relies on state-store
-
-            injector.getInstance(HeuristicIndexerManager.class).buildIndexClient(); // relies on metastore
-            injector.getInstance(StaticFunctionNamespaceStore.class).loadFunctionNamespaceManagers();
+            injector.getInstance(HetuMetaStoreManager.class).loadHetuMetastore(fileSystemClientManager);
+            injector.getInstance(HeuristicIndexerManager.class).buildIndexClient();
             injector.getInstance(StaticCatalogStore.class).loadCatalogs();
             injector.getInstance(DynamicCatalogStore.class).loadCatalogStores(fileSystemClientManager);
-            injector.getInstance(ShowCatalogStore.class).loadCatalogStores(fileSystemClientManager);
             injector.getInstance(DynamicCatalogScanner.class).start();
             injector.getInstance(SessionPropertyDefaults.class).loadConfigurationManager();
             injector.getInstance(ResourceGroupManager.class).loadConfigurationManager();
             injector.getInstance(AccessControlManager.class).loadSystemAccessControl();
             injector.getInstance(PasswordAuthenticatorManager.class).loadPasswordAuthenticator();
             injector.getInstance(EventListenerManager.class).loadConfiguredEventListener();
-            injector.getInstance(GroupProviderManager.class).loadConfiguredGroupProvider();
 
+            // Seed Store
+            injector.getInstance(SeedStoreManager.class).loadSeedStore();
+            // State Store
+            launchEmbeddedStateStore(injector.getInstance(HetuConfig.class), injector.getInstance(StateStoreLauncher.class));
+            injector.getInstance(StateStoreProvider.class).loadStateStore();
             // preload index (on coordinator only)
             if (injector.getInstance(ServerConfig.class).isCoordinator()) {
-                HeuristicIndexerManager heuristicIndexerManager = injector.getInstance(HeuristicIndexerManager.class);
-                heuristicIndexerManager.preloadIndex();
-                heuristicIndexerManager.initCache();
+                injector.getInstance(HeuristicIndexerManager.class).preloadIndex();
             }
             // register dynamic filter listener
             registerStateStoreListeners(
@@ -186,9 +163,6 @@ public class PrestoServer
                     injector.getInstance(DynamicFilterCacheManager.class),
                     injector.getInstance(ServerConfig.class),
                     injector.getInstance(NodeSchedulerConfig.class));
-
-            // Initialize snapshot Manager
-            injector.getInstance(RecoveryUtils.class).initialize();
 
             injector.getInstance(Announcer.class).start();
 
@@ -207,34 +181,6 @@ public class PrestoServer
         return ImmutableList.of();
     }
 
-    private static void addSeedOnYarnInformation(ServerConfig serverConfig,
-                                                 SeedStoreManager seedStoreManager,
-                                                 HetuHttpServerInfo httpServerInfo)
-    {
-        if (serverConfig == null || seedStoreManager == null || httpServerInfo == null) {
-            return;
-        }
-        if (!serverConfig.isCoordinator()) {
-            return;
-        }
-        String httpUri;
-        if (httpServerInfo.getHttpExternalUri() != null) {
-            httpUri = httpServerInfo.getHttpExternalUri().toString();
-        }
-        else if (httpServerInfo.getHttpsExternalUri() != null) {
-            httpUri = httpServerInfo.getHttpsExternalUri().toString();
-        }
-        else {
-            return;
-        }
-        try {
-            seedStoreManager.addSeed(SeedStoreSubType.ON_YARN, httpUri, false);
-        }
-        catch (IOException e) {
-            return;
-        }
-    }
-
     private static void launchEmbeddedStateStore(HetuConfig config, StateStoreLauncher launcher)
             throws Exception
     {
@@ -246,19 +192,18 @@ public class PrestoServer
 
     private static void logLocation(Logger log, String name, Path path)
     {
-        Path newPath = path;
-        if (!Files.exists(newPath, NOFOLLOW_LINKS)) {
+        if (!Files.exists(path, NOFOLLOW_LINKS)) {
             log.info("%s: [does not exist]", name);
             return;
         }
         try {
-            newPath = newPath.toAbsolutePath().toRealPath();
+            path = path.toAbsolutePath().toRealPath();
         }
         catch (IOException e) {
             log.info("%s: [not accessible]", name);
             return;
         }
-        log.info("%s: %s", name, newPath);
+        log.info("%s: %s", name, path);
     }
 
     private static void registerStateStoreListeners(

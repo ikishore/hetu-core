@@ -16,14 +16,14 @@ package io.prestosql.operator.scalar;
 import com.google.common.collect.ImmutableList;
 import io.airlift.slice.DynamicSliceOutput;
 import io.airlift.slice.SliceOutput;
-import io.prestosql.metadata.FunctionAndTypeManager;
-import io.prestosql.metadata.MetadataManager;
+import io.prestosql.metadata.Metadata;
 import io.prestosql.operator.DriverYieldSignal;
 import io.prestosql.operator.project.PageProcessor;
 import io.prestosql.spi.Page;
 import io.prestosql.spi.block.Block;
 import io.prestosql.spi.block.BlockBuilder;
-import io.prestosql.spi.function.FunctionHandle;
+import io.prestosql.spi.function.FunctionKind;
+import io.prestosql.spi.function.Signature;
 import io.prestosql.spi.relation.CallExpression;
 import io.prestosql.spi.relation.RowExpression;
 import io.prestosql.spi.type.ArrayType;
@@ -47,14 +47,12 @@ import org.openjdk.jmh.runner.options.VerboseMode;
 import org.openjdk.jmh.runner.options.WarmupMode;
 import org.testng.annotations.Test;
 
-import java.nio.charset.StandardCharsets;
 import java.util.List;
 import java.util.Optional;
 import java.util.concurrent.ThreadLocalRandom;
 import java.util.concurrent.TimeUnit;
 
 import static io.prestosql.memory.context.AggregatedMemoryContext.newSimpleAggregatedMemoryContext;
-import static io.prestosql.metadata.CastType.CAST;
 import static io.prestosql.metadata.MetadataManager.createTestMetadataManager;
 import static io.prestosql.spi.type.BigintType.BIGINT;
 import static io.prestosql.spi.type.DoubleType.DOUBLE;
@@ -112,13 +110,13 @@ public class BenchmarkJsonToArrayCast
                 default:
                     throw new UnsupportedOperationException();
             }
-            MetadataManager metadata = createTestMetadataManager();
-            FunctionAndTypeManager functionAndTypeManager = metadata.getFunctionAndTypeManager();
 
-            FunctionHandle functionHandle = functionAndTypeManager.lookupCast(CAST, JSON.getTypeSignature(), (new ArrayType(elementType)).getTypeSignature());
+            Signature signature = new Signature("$operator$CAST", FunctionKind.SCALAR, new ArrayType(elementType).getTypeSignature(), JSON.getTypeSignature());
+
             List<RowExpression> projections = ImmutableList.of(
-                    new CallExpression(CAST.name(), functionHandle, new ArrayType(elementType), ImmutableList.of(field(0, JSON)), Optional.empty()));
+                    new CallExpression(signature, new ArrayType(elementType), ImmutableList.of(field(0, JSON)), Optional.empty()));
 
+            Metadata metadata = createTestMetadataManager();
             pageProcessor = new ExpressionCompiler(metadata, new PageFunctionCompiler(metadata, 0))
                     .compilePageProcessor(Optional.empty(), projections)
                     .get();
@@ -137,7 +135,7 @@ public class BenchmarkJsonToArrayCast
                         jsonSlice.appendByte(',');
                     }
                     String value = generateRandomJsonValue(elementType);
-                    jsonSlice.appendBytes(value.getBytes(StandardCharsets.UTF_8));
+                    jsonSlice.appendBytes(value.getBytes());
                 }
                 jsonSlice.appendByte(']');
 

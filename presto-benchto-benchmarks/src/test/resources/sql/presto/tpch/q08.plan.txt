@@ -1,10 +1,10 @@
 remote exchange (GATHER, SINGLE, [])
     local exchange (GATHER, UNKNOWN, [])
         remote exchange (REPARTITION, ROUND_ROBIN, [])
-            final hashaggregation over (expr)
+            final aggregation over (expr)
                 local exchange (GATHER, SINGLE, [])
                     remote exchange (REPARTITION, HASH, ["expr"])
-                        partial hashaggregation over (expr)
+                        partial aggregation over (expr)
                             join (INNER, PARTITIONED):
                                 remote exchange (REPARTITION, HASH, ["suppkey_4"])
                                     join (INNER, PARTITIONED):

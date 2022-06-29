@@ -462,9 +462,9 @@ public class RcFileReader
     private Slice readLengthPrefixedString(SliceInput in)
             throws RcFileCorruptionException
     {
-        int localLength = toIntExact(readVInt(in));
-        verify(localLength <= MAX_METADATA_STRING_LENGTH, "Metadata string value is too long (%s) in RCFile %s", localLength, in);
-        return in.readSlice(localLength);
+        int length = toIntExact(readVInt(in));
+        verify(length <= MAX_METADATA_STRING_LENGTH, "Metadata string value is too long (%s) in RCFile %s", length, in);
+        return in.readSlice(length);
     }
 
     private void verify(boolean expression, String messageFormat, Object... args)

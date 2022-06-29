@@ -76,8 +76,7 @@ public class OrcDeleteDeltaPageSource
             DataSize tinyStripeThreshold,
             boolean lazyReadSmallRanges,
             boolean orcBloomFiltersEnabled,
-            FileFormatDataSourceStats stats,
-            long lastModifiedTime)
+            FileFormatDataSourceStats stats)
     {
         this.stats = requireNonNull(stats, "stats is null");
 
@@ -92,8 +91,7 @@ public class OrcDeleteDeltaPageSource
                     streamBufferSize,
                     lazyReadSmallRanges,
                     inputStream,
-                    stats,
-                    lastModifiedTime);
+                    stats);
         }
         catch (Exception e) {
             if (nullToEmpty(e.getMessage()).trim().equals("Filesystem closed") ||

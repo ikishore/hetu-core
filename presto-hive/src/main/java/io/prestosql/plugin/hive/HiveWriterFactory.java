@@ -19,9 +19,7 @@ import com.google.common.collect.ImmutableMap;
 import com.google.common.collect.ImmutableSet;
 import com.google.common.collect.Sets;
 import io.airlift.event.client.EventClient;
-import io.airlift.log.Logger;
 import io.airlift.units.DataSize;
-import io.prestosql.orc.OrcDataSourceId;
 import io.prestosql.plugin.hive.HdfsEnvironment.HdfsContext;
 import io.prestosql.plugin.hive.HiveSessionProperties.InsertExistingPartitionsBehavior;
 import io.prestosql.plugin.hive.LocationService.WriteInfo;
@@ -32,8 +30,6 @@ import io.prestosql.plugin.hive.metastore.Partition;
 import io.prestosql.plugin.hive.metastore.SortingColumn;
 import io.prestosql.plugin.hive.metastore.StorageFormat;
 import io.prestosql.plugin.hive.metastore.Table;
-import io.prestosql.plugin.hive.orc.HdfsOrcDataSource;
-import io.prestosql.plugin.hive.util.TempFileReader;
 import io.prestosql.spi.NodeManager;
 import io.prestosql.spi.Page;
 import io.prestosql.spi.PageSorter;
@@ -44,7 +40,6 @@ import io.prestosql.spi.session.PropertyMetadata;
 import io.prestosql.spi.type.Type;
 import io.prestosql.spi.type.TypeManager;
 import org.apache.hadoop.conf.Configuration;
-import org.apache.hadoop.fs.FileStatus;
 import org.apache.hadoop.fs.FileSystem;
 import org.apache.hadoop.fs.Path;
 import org.apache.hadoop.hive.common.FileUtils;
@@ -58,12 +53,10 @@ import org.apache.hadoop.io.compress.CompressionCodec;
 import org.apache.hadoop.io.compress.DefaultCodec;
 import org.apache.hadoop.mapred.JobConf;
 import org.apache.hive.common.util.ReflectionUtil;
-import org.joda.time.DateTimeZone;
 
 import java.io.IOException;
 import java.security.Principal;
 import java.util.ArrayList;
-import java.util.Arrays;
 import java.util.HashMap;
 import java.util.HashSet;
 import java.util.List;
@@ -78,7 +71,6 @@ import java.util.stream.Collectors;
 import static com.google.common.base.Preconditions.checkArgument;
 import static com.google.common.base.Preconditions.checkState;
 import static com.google.common.collect.ImmutableMap.toImmutableMap;
-import static io.airlift.units.DataSize.Unit.MEGABYTE;
 import static io.prestosql.plugin.hive.HiveErrorCode.HIVE_FILESYSTEM_ERROR;
 import static io.prestosql.plugin.hive.HiveErrorCode.HIVE_INVALID_METADATA;
 import static io.prestosql.plugin.hive.HiveErrorCode.HIVE_PARTITION_READ_ONLY;
@@ -97,7 +89,6 @@ import static io.prestosql.plugin.hive.util.ConfigurationUtils.toJobConf;
 import static io.prestosql.spi.StandardErrorCode.NOT_FOUND;
 import static java.lang.Math.min;
 import static java.lang.String.format;
-import static java.util.Locale.ENGLISH;
 import static java.util.Objects.requireNonNull;
 import static java.util.UUID.randomUUID;
 import static java.util.function.Function.identity;
@@ -108,8 +99,6 @@ import static org.apache.hadoop.hive.conf.HiveConf.ConfVars.COMPRESSRESULT;
 
 public class HiveWriterFactory
 {
-    private static Logger log = Logger.get(HiveWriterFactory.class);
-
     private static final int MAX_BUCKET_COUNT = 100_000;
     private static final int BUCKET_NUMBER_PADDING = Integer.toString(MAX_BUCKET_COUNT - 1).length();
 
@@ -140,7 +129,6 @@ public class HiveWriterFactory
     private final int maxOpenSortFiles;
     private final boolean immutablePartitions;
     private final InsertExistingPartitionsBehavior insertExistingPartitionsBehavior;
-    private final DateTimeZone parquetTimeZone;
 
     private final ConnectorSession session;
     private final OptionalInt bucketCount;
@@ -154,15 +142,6 @@ public class HiveWriterFactory
     private final HiveACIDWriteType acidWriteType;
 
     private final OrcFileWriterFactory orcFileWriterFactory;
-
-    // Snapshot: instead of writing to a "file", each snapshot is stored in a sub file "file.0", "file.1", etc.
-    // These sub files are then merged to the final file when the operator finishes.
-    private boolean isSnapshotEnabled;
-    // The snapshotSuffixes list records the "resumeCount" for each sub file index.
-    // File suffix includes both the resumeCount and the sub file index.
-    // This ensures that different runs create files with different names, to avoid any potential collision.
-    private final List<Long> snapshotSuffixes = new ArrayList<>();
-    private long resumeCount;
 
     public HiveWriterFactory(
             Set<HiveFileWriterFactory> fileWriterFactories,
@@ -186,7 +165,6 @@ public class HiveWriterFactory
             DataSize sortBufferSize,
             int maxOpenSortFiles,
             boolean immutablePartitions,
-            DateTimeZone parquetTimeZone,
             ConnectorSession session,
             NodeManager nodeManager,
             EventClient eventClient,
@@ -236,27 +214,26 @@ public class HiveWriterFactory
         if (immutablePartitions) {
             checkArgument(insertExistingPartitionsBehavior != InsertExistingPartitionsBehavior.APPEND, "insertExistingPartitionsBehavior cannot be APPEND");
         }
-        this.parquetTimeZone = requireNonNull(parquetTimeZone, "parquetTimeZone is null");
 
         this.acidWriteType = acidWriteType;
         // divide input columns into partition and data columns
         requireNonNull(inputColumns, "inputColumns is null");
-        ImmutableList.Builder<String> localPartitionColumnNames = ImmutableList.builder();
-        ImmutableList.Builder<Type> localPartitionColumnTypes = ImmutableList.builder();
-        ImmutableList.Builder<DataColumn> localDataColumns = ImmutableList.builder();
+        ImmutableList.Builder<String> partitionColumnNames = ImmutableList.builder();
+        ImmutableList.Builder<Type> partitionColumnTypes = ImmutableList.builder();
+        ImmutableList.Builder<DataColumn> dataColumns = ImmutableList.builder();
         for (HiveColumnHandle column : inputColumns) {
             HiveType hiveType = column.getHiveType();
             if (column.isPartitionKey()) {
-                localPartitionColumnNames.add(column.getName());
-                localPartitionColumnTypes.add(typeManager.getType(column.getTypeSignature()));
+                partitionColumnNames.add(column.getName());
+                partitionColumnTypes.add(typeManager.getType(column.getTypeSignature()));
             }
             else {
-                localDataColumns.add(new DataColumn(column.getName(), hiveType));
+                dataColumns.add(new DataColumn(column.getName(), hiveType));
             }
         }
-        this.partitionColumnNames = localPartitionColumnNames.build();
-        this.partitionColumnTypes = localPartitionColumnTypes.build();
-        this.dataColumns = localDataColumns.build();
+        this.partitionColumnNames = partitionColumnNames.build();
+        this.partitionColumnTypes = partitionColumnTypes.build();
+        this.dataColumns = dataColumns.build();
 
         Path writePath;
         if (isCreateTable) {
@@ -266,11 +243,11 @@ public class HiveWriterFactory
             writePath = writeInfo.getWritePath();
         }
         else {
-            Optional<Table> localTable = pageSinkMetadataProvider.getTable();
-            if (!localTable.isPresent()) {
+            Optional<Table> table = pageSinkMetadataProvider.getTable();
+            if (!table.isPresent()) {
                 throw new PrestoException(HIVE_INVALID_METADATA, format("Table %s.%s was dropped during insert", schemaName, tableName));
             }
-            this.table = localTable.get();
+            this.table = table.get();
             writePath = locationService.getQueryWriteInfo(locationHandle).getWritePath();
         }
 
@@ -290,12 +267,12 @@ public class HiveWriterFactory
                 .collect(toImmutableMap(PropertyMetadata::getName,
                         entry -> session.getProperty(entry.getName(), entry.getJavaType()).toString()));
 
-        Configuration localConf = hdfsEnvironment.getConfiguration(new HdfsContext(session, schemaName, tableName), writePath);
-        this.conf = toJobConf(localConf);
+        Configuration conf = hdfsEnvironment.getConfiguration(new HdfsContext(session, schemaName, tableName), writePath);
+        this.conf = toJobConf(conf);
 
         // make sure the FileSystem is created with the correct Configuration object
         try {
-            hdfsEnvironment.getFileSystem(session.getUser(), writePath, localConf);
+            hdfsEnvironment.getFileSystem(session.getUser(), writePath, conf);
         }
         catch (IOException e) {
             throw new PrestoException(HIVE_FILESYSTEM_ERROR, "Failed getting FileSystem: " + writePath, e);
@@ -304,18 +281,11 @@ public class HiveWriterFactory
         this.hiveWriterStats = requireNonNull(hiveWriterStats, "hiveWriterStats is null");
 
         this.orcFileWriterFactory = requireNonNull(orcFileWriterFactory, "orcFileWriterFactory is null");
-
-        this.isSnapshotEnabled = session.isSnapshotEnabled();
     }
 
     JobConf getConf()
     {
         return conf;
-    }
-
-    List<String> getPartitionValues(Page partitionColumns, int position)
-    {
-        return createPartitionValues(partitionColumnTypes, partitionColumns, position);
     }
 
     Optional<String> getPartitionName(Page partitionColumns, int position)
@@ -331,17 +301,7 @@ public class HiveWriterFactory
         return partitionName;
     }
 
-    public HiveWriter createWriter(List<String> partitionValues, OptionalInt bucketNumber, Optional<Options> vacuumOptions)
-    {
-        return createWriter(partitionValues, bucketNumber, vacuumOptions, false);
-    }
-
-    public HiveWriter createWriterForSnapshotMerge(List<String> partitionValues, OptionalInt bucketNumber, Optional<Options> vacuumOptions)
-    {
-        return createWriter(partitionValues, bucketNumber, vacuumOptions, true);
-    }
-
-    private HiveWriter createWriter(List<String> partitionValues, OptionalInt bucketNumber, Optional<Options> vacuumOptions, boolean forMerge)
+    public HiveWriter createWriter(Page partitionColumns, int position, OptionalInt bucketNumber, Optional<Options> vacuumOptions)
     {
         boolean isTxnTable = isTxnTable();
         if (bucketCount.isPresent()) {
@@ -357,14 +317,10 @@ public class HiveWriterFactory
             fileName = computeBucketedFileName(queryId, bucketNumber.getAsInt());
         }
         else {
-            // Snapshot: don't use UUID. File name needs to be deterministic.
-            if (isSnapshotEnabled) {
-                fileName = String.format(ENGLISH, "%s_%d_%d_%d", queryId, session.getTaskId().getAsInt(), session.getPipelineId().getAsInt(), session.getDriverId().getAsInt());
-            }
-            else {
-                fileName = queryId + "_" + randomUUID();
-            }
+            fileName = queryId + "_" + randomUUID();
         }
+
+        List<String> partitionValues = createPartitionValues(partitionColumnTypes, partitionColumns, position);
 
         Optional<String> partitionName;
         if (!partitionColumnNames.isEmpty()) {
@@ -583,6 +539,40 @@ public class HiveWriterFactory
             acidOptions = Optional.empty();
         }
 
+        conf.set("table.write.path", writeInfo.getWritePath().toString());
+        HiveFileWriter hiveFileWriter = null;
+        for (HiveFileWriterFactory fileWriterFactory : fileWriterFactories) {
+            Optional<HiveFileWriter> fileWriter = fileWriterFactory.createFileWriter(
+                    path,
+                    dataColumns.stream()
+                            .map(DataColumn::getName)
+                            .collect(toList()),
+                    outputStorageFormat,
+                    schema,
+                    conf,
+                    session,
+                    acidOptions,
+                    Optional.of(acidWriteType));
+            if (fileWriter.isPresent()) {
+                hiveFileWriter = fileWriter.get();
+                break;
+            }
+        }
+
+        if (hiveFileWriter == null) {
+            hiveFileWriter = new RecordFileWriter(
+                    path,
+                    dataColumns.stream()
+                            .map(DataColumn::getName)
+                            .collect(toList()),
+                    outputStorageFormat,
+                    schema,
+                    partitionStorageFormat.getEstimatedWriterSystemMemoryUsage(),
+                    conf,
+                    typeManager,
+                    session);
+        }
+
         FileSystem fileSystem;
         try {
             fileSystem = hdfsEnvironment.getFileSystem(session.getUser(), path, conf);
@@ -590,120 +580,38 @@ public class HiveWriterFactory
         catch (IOException e) {
             throw new PrestoException(HIVE_WRITER_OPEN_ERROR, e);
         }
-
-        if (isSnapshotEnabled) {
-            // Snapshot: use a recognizable name pattern, in case they need to be deleted/renamed
-            String oldFileName = path.getName();
-            String newFileName = toSnapshotFileName(oldFileName, queryId);
-            path = new Path(path.getParent(), newFileName);
-            if (fileNameWithExtension.equals(oldFileName)) {
-                fileNameWithExtension = newFileName;
-            }
-        }
-        HiveFileWriter hiveFileWriter = null;
-        if (isSnapshotEnabled && !forMerge) {
-            // Add a suffix to file name for sub files
-            String oldFileName = path.getName();
-            String newFileName = toSnapshotSubFile(oldFileName);
-            path = new Path(path.getParent(), newFileName);
-            if (fileNameWithExtension.equals(oldFileName)) {
-                fileNameWithExtension = newFileName;
-            }
-            // Always create a simple ORC writer for snapshot files. These will be merged in the end.
-            logContainingFolderInfo(fileSystem, path, "Creating SnapshotTempFileWriter for %s", path);
-            try {
-                Path finalPath = path;
-                hiveFileWriter = new SnapshotTempFileWriter(
-                        orcFileWriterFactory.createOrcDataSink(session, fileSystem, path),
-                        dataColumns.stream()
-                                .map(column -> column.getHiveType().getType(typeManager))
-                                .collect(Collectors.toList()));
-            }
-            catch (IOException e) {
-                throw new PrestoException(HiveErrorCode.HIVE_WRITER_OPEN_ERROR, "Error creating ORC file", e);
-            }
-        }
-        else {
-            conf.set("table.write.path", writeInfo.getWritePath().toString());
-            for (HiveFileWriterFactory fileWriterFactory : fileWriterFactories) {
-                Optional<HiveFileWriter> fileWriter = fileWriterFactory.createFileWriter(
-                        path,
-                        dataColumns.stream()
-                                .map(DataColumn::getName)
-                                .collect(toList()),
-                        outputStorageFormat,
-                        schema,
-                        conf,
-                        session,
-                        acidOptions,
-                        Optional.of(acidWriteType));
-                if (fileWriter.isPresent()) {
-                    hiveFileWriter = fileWriter.get();
-                    break;
-                }
-            }
-
-            if (isSnapshotEnabled) {
-                // TODO-cp-I2BZ0A: assuming all files to be of ORC type
-                checkState(hiveFileWriter instanceof OrcFileWriter, "Only support ORC format with snapshot");
-                logContainingFolderInfo(fileSystem, path, "Creating file writer for final result: %s", path);
-            }
-
-            if (hiveFileWriter == null) {
-                hiveFileWriter = new RecordFileWriter(
-                        path,
-                        dataColumns.stream()
-                                .map(DataColumn::getName)
-                                .collect(toList()),
-                        outputStorageFormat,
-                        schema,
-                        partitionStorageFormat.getEstimatedWriterSystemMemoryUsage(),
-                        conf,
-                        typeManager,
-                        parquetTimeZone,
-                        session);
-            }
-            if (isTxnTable) {
-                hiveFileWriter.initWriter(true, path, fileSystem);
-            }
+        if (isTxnTable) {
+            hiveFileWriter.initWriter(true, path, fileSystem);
         }
 
-        Path finalPath = path;
         String writerImplementation = hiveFileWriter.getClass().getName();
 
-        Consumer<HiveWriter> onCommit;
-        if (isSnapshotEnabled && !forMerge) {
-            // Only send "commit" event for the merged file
-            onCommit = hiveWriter -> {};
-        }
-        else {
-            onCommit = hiveWriter -> {
-                Optional<Long> size;
-                try {
-                    size = Optional.of(hdfsEnvironment.getFileSystem(session.getUser(), finalPath, conf).getFileStatus(finalPath).getLen());
-                }
-                catch (IOException | RuntimeException e) {
-                    // Do not fail the query if file system is not available
-                    size = Optional.empty();
-                }
+        Consumer<HiveWriter> onCommit = hiveWriter -> {
+            Optional<Long> size;
+            try {
+                size = Optional.of(hdfsEnvironment.getFileSystem(session.getUser(), path, conf).getFileStatus(path).getLen());
+            }
+            catch (IOException | RuntimeException e) {
+                // Do not fail the query if file system is not available
+                size = Optional.empty();
+            }
 
-                eventClient.post(new WriteCompletedEvent(
-                        session.getQueryId(),
-                        finalPath.toString(),
-                        schemaName,
-                        tableName,
-                        partitionName.orElse(null),
-                        outputStorageFormat.getOutputFormat(),
-                        writerImplementation,
-                        nodeManager.getCurrentNode().getVersion(),
-                        nodeManager.getCurrentNode().getHost(),
-                        session.getIdentity().getPrincipal().map(Principal::getName).orElse(null),
-                        nodeManager.getEnvironment(),
-                        sessionProperties,
-                        size.orElse(null),
-                        hiveWriter.getRowCount()));
-            };
-        }
+            eventClient.post(new WriteCompletedEvent(
+                    session.getQueryId(),
+                    path.toString(),
+                    schemaName,
+                    tableName,
+                    partitionName.orElse(null),
+                    outputStorageFormat.getOutputFormat(),
+                    writerImplementation,
+                    nodeManager.getCurrentNode().getVersion(),
+                    nodeManager.getCurrentNode().getHost(),
+                    session.getIdentity().getPrincipal().map(Principal::getName).orElse(null),
+                    nodeManager.getEnvironment(),
+                    sessionProperties,
+                    size.orElse(null),
+                    hiveWriter.getRowCount()));
+        };
 
         if (!sortedBy.isEmpty() || (isTxnTable() && HiveACIDWriteType.isUpdateOrDelete(acidWriteType))) {
             List<Type> types = dataColumns.stream()
@@ -761,10 +669,8 @@ public class HiveWriterFactory
                 fileNameWithExtension,
                 writeInfo.getWritePath().toString(),
                 writeInfo.getTargetPath().toString(),
-                path.toString(),
                 onCommit,
-                // Snapshot: only update stats when merging files
-                isSnapshotEnabled && !forMerge ? null : hiveWriterStats,
+                hiveWriterStats,
                 hiveFileWriter.getExtraPartitionFiles());
     }
 
@@ -880,135 +786,5 @@ public class HiveWriterFactory
     protected void setAdditionalSchemaProperties(Properties schema)
     {
         // No additional properties to set for Hive tables
-    }
-
-    static String toSnapshotFileName(String fileName, String queryId)
-    {
-        return fileName + "_snapshot_" + queryId;
-    }
-
-    static boolean isSnapshotFile(String fileName, String queryId)
-    {
-        String identifier = "_snapshot_" + queryId;
-        return fileName.contains(identifier);
-    }
-
-    static boolean isSnapshotSubFile(String fileName, String queryId)
-    {
-        return getSnapshotSubFileIndex(fileName, queryId) >= 0;
-    }
-
-    static long getSnapshotSubFileIndex(String fileName, String queryId)
-    {
-        String identifier = "_snapshot_" + queryId;
-        int index = fileName.indexOf(identifier);
-        if (index < 0) {
-            // Not a snapshot file
-            return index;
-        }
-        index += identifier.length();
-        if (index == fileName.length()) {
-            // Doesn't have a suffix
-            return -1;
-        }
-        String suffix = fileName.substring(fileName.indexOf('_', index) + 1); // Skip over '.' and '_'
-        return Long.valueOf(suffix);
-    }
-
-    static String removeSnapshotFileName(String fileName, String queryId)
-    {
-        String identifier = "_snapshot_" + queryId;
-        int index = fileName.indexOf(identifier);
-        return index > 0 ? fileName.substring(0, index) : fileName;
-    }
-
-    private String toSnapshotSubFile(String path)
-    {
-        return toSnapshotSubFile(path, resumeCount, snapshotSuffixes.size());
-    }
-
-    private String toSnapshotSubFile(String path, long resumeCount, int index)
-    {
-        return path + '.' + resumeCount + '_' + index;
-    }
-
-    public void mergeSubFiles(List<HiveWriter> writers)
-            throws IOException
-    {
-        if (writers.isEmpty()) {
-            return;
-        }
-
-        FileSystem fileSystem = hdfsEnvironment.getFileSystem(session.getUser(), new Path(writers.get(0).getFilePath()), conf);
-
-        List<Type> types = dataColumns.stream()
-                .map(column -> column.getHiveType().getType(typeManager))
-                .collect(toList());
-
-        for (HiveWriter writer : writers) {
-            String filePath = writer.getFilePath();
-
-            Path path = new Path(filePath);
-            logContainingFolderInfo(fileSystem, path, "Merging snapshot files to result file: %s", path);
-
-            // The snapshotSuffixes list records the "resumeCount" for each suffix.
-            // It doesn't has an entry for the current set of files, so an entry is added first.
-            // The resumeCount helps distinguish files created by different runs.
-            snapshotSuffixes.add(resumeCount);
-            for (int i = 0; i < snapshotSuffixes.size(); i++) {
-                long resume = snapshotSuffixes.get(i);
-                Path file = new Path(toSnapshotSubFile(filePath, resume, i));
-                if (fileSystem.exists(file)) {
-                    // TODO-cp-I2BZ0A: assuming all files to be of ORC type.
-                    // Using same parameters as used by SortingFileWriter
-                    FileStatus fileStatus = fileSystem.getFileStatus(file);
-                    try (TempFileReader reader = new TempFileReader(types, new HdfsOrcDataSource(
-                            new OrcDataSourceId(file.toString()),
-                            fileStatus.getLen(),
-                            new DataSize(1, MEGABYTE),
-                            new DataSize(8, MEGABYTE),
-                            new DataSize(8, MEGABYTE),
-                            false,
-                            fileSystem.open(file),
-                            new FileFormatDataSourceStats(),
-                            fileStatus.getModificationTime()))) {
-                        while (reader.hasNext()) {
-                            writer.append(reader.next());
-                        }
-                    }
-                    // DO NOT delete the sub file, in case we need to resume. Delete them when the query finishes.
-                }
-            }
-        }
-    }
-
-    private void logContainingFolderInfo(FileSystem fileSystem, Path path, String message, Object... params)
-    {
-        try {
-            if (log.isDebugEnabled()) {
-                log.debug(message, params);
-                Arrays.stream(fileSystem.listStatus(path.getParent())).forEach(file -> {
-                    log.debug("%d\t%s", file.getLen(), file.getPath());
-                });
-            }
-        }
-        catch (IOException e) {
-            log.debug(e, "Failed to list folder content for %s: %s", path, e.getMessage());
-        }
-    }
-
-    public Object capture()
-    {
-        // hiveWriterStats is not captured. They are not updated for sub-files.
-        // Increment suffix so that each resume generates a new set of files
-        snapshotSuffixes.add(resumeCount);
-        return snapshotSuffixes;
-    }
-
-    public void restore(Object obj, long resumeCount)
-    {
-        snapshotSuffixes.clear();
-        snapshotSuffixes.addAll((List<Long>) obj);
-        this.resumeCount = resumeCount;
     }
 }

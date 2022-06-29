@@ -23,9 +23,10 @@ import io.prestosql.spi.plan.PlanNode;
 import io.prestosql.spi.plan.PlanNodeId;
 import io.prestosql.spi.plan.ProjectNode;
 import io.prestosql.spi.plan.Symbol;
-import io.prestosql.spi.relation.RowExpression;
 import io.prestosql.sql.planner.iterative.Lookup;
 import io.prestosql.sql.planner.plan.InternalPlanVisitor;
+import io.prestosql.sql.relational.OriginalExpressionUtils;
+import io.prestosql.sql.tree.Expression;
 
 import java.util.ArrayList;
 import java.util.Collection;
@@ -36,7 +37,9 @@ import java.util.Optional;
 
 import static com.google.common.base.Preconditions.checkState;
 import static com.google.common.collect.ImmutableList.toImmutableList;
+import static com.google.common.collect.Maps.transformValues;
 import static io.prestosql.spi.plan.JoinNode.Type.INNER;
+import static io.prestosql.sql.relational.OriginalExpressionUtils.castToExpression;
 import static io.prestosql.sql.relational.ProjectNodeUtils.isIdentity;
 import static java.util.Objects.requireNonNull;
 
@@ -47,8 +50,8 @@ import static java.util.Objects.requireNonNull;
  */
 public class JoinGraph
 {
-    private final Optional<Map<Symbol, RowExpression>> assignments;
-    private final List<RowExpression> filters;
+    private final Optional<Map<Symbol, Expression>> assignments;
+    private final List<Expression> filters;
     private final List<PlanNode> nodes; // nodes in order of their appearance in tree plan (left, right, parent)
     private final Multimap<PlanNodeId, Edge> edges;
     private final PlanNodeId rootId;
@@ -89,8 +92,8 @@ public class JoinGraph
             List<PlanNode> nodes,
             Multimap<PlanNodeId, Edge> edges,
             PlanNodeId rootId,
-            List<RowExpression> filters,
-            Optional<Map<Symbol, RowExpression>> assignments)
+            List<Expression> filters,
+            Optional<Map<Symbol, Expression>> assignments)
     {
         this.nodes = nodes;
         this.edges = edges;
@@ -99,26 +102,26 @@ public class JoinGraph
         this.assignments = assignments;
     }
 
-    public JoinGraph withAssignments(Map<Symbol, RowExpression> assignments)
+    public JoinGraph withAssignments(Map<Symbol, Expression> assignments)
     {
         return new JoinGraph(nodes, edges, rootId, filters, Optional.of(assignments));
     }
 
-    public Optional<Map<Symbol, RowExpression>> getAssignments()
+    public Optional<Map<Symbol, Expression>> getAssignments()
     {
         return assignments;
     }
 
-    public JoinGraph withFilter(RowExpression expression)
+    public JoinGraph withFilter(Expression expression)
     {
-        ImmutableList.Builder<RowExpression> rowExpressionBuilder = ImmutableList.builder();
-        rowExpressionBuilder.addAll(this.filters);
-        rowExpressionBuilder.add(expression);
+        ImmutableList.Builder<Expression> filters = ImmutableList.builder();
+        filters.addAll(this.filters);
+        filters.add(expression);
 
-        return new JoinGraph(nodes, edges, rootId, rowExpressionBuilder.build(), assignments);
+        return new JoinGraph(nodes, edges, rootId, filters.build(), assignments);
     }
 
-    public List<RowExpression> getFilters()
+    public List<Expression> getFilters()
     {
         return filters;
     }
@@ -187,16 +190,16 @@ public class JoinGraph
             checkState(!edges.containsKey(node.getId()), "Node [%s] appeared in two JoinGraphs", node);
         }
 
-        List<PlanNode> planNodes = ImmutableList.<PlanNode>builder()
+        List<PlanNode> nodes = ImmutableList.<PlanNode>builder()
                 .addAll(this.nodes)
                 .addAll(other.nodes)
                 .build();
 
-        ImmutableMultimap.Builder<PlanNodeId, Edge> edgeBuilder = ImmutableMultimap.<PlanNodeId, Edge>builder()
+        ImmutableMultimap.Builder<PlanNodeId, Edge> edges = ImmutableMultimap.<PlanNodeId, Edge>builder()
                 .putAll(this.edges)
                 .putAll(other.edges);
 
-        List<RowExpression> joinedFilters = ImmutableList.<RowExpression>builder()
+        List<Expression> joinedFilters = ImmutableList.<Expression>builder()
                 .addAll(this.filters)
                 .addAll(other.filters)
                 .build();
@@ -209,11 +212,11 @@ public class JoinGraph
 
             PlanNode left = context.getSymbolSource(leftSymbol);
             PlanNode right = context.getSymbolSource(rightSymbol);
-            edgeBuilder.put(left.getId(), new Edge(right, leftSymbol, rightSymbol));
-            edgeBuilder.put(right.getId(), new Edge(left, rightSymbol, leftSymbol));
+            edges.put(left.getId(), new Edge(right, leftSymbol, rightSymbol));
+            edges.put(right.getId(), new Edge(left, rightSymbol, leftSymbol));
         }
 
-        return new JoinGraph(planNodes, edgeBuilder.build(), newRoot, joinedFilters, Optional.empty());
+        return new JoinGraph(nodes, edges.build(), newRoot, joinedFilters, Optional.empty());
     }
 
     private static class Builder
@@ -252,7 +255,7 @@ public class JoinGraph
         public JoinGraph visitFilter(FilterNode node, Context context)
         {
             JoinGraph graph = node.getSource().accept(this, context);
-            return graph.withFilter(node.getPredicate());
+            return graph.withFilter(castToExpression(node.getPredicate()));
         }
 
         @Override
@@ -269,7 +272,7 @@ public class JoinGraph
             JoinGraph graph = left.joinWith(right, node.getCriteria(), context, node.getId());
 
             if (node.getFilter().isPresent()) {
-                return graph.withFilter(node.getFilter().get());
+                return graph.withFilter(castToExpression(node.getFilter().get()));
             }
             return graph;
         }
@@ -279,7 +282,7 @@ public class JoinGraph
         {
             if (isIdentity(node)) {
                 JoinGraph graph = node.getSource().accept(this, context);
-                return graph.withAssignments(node.getAssignments().getMap());
+                return graph.withAssignments(transformValues(node.getAssignments().getMap(), OriginalExpressionUtils::castToExpression));
             }
             return visitPlan(node, context);
         }

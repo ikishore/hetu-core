@@ -1,5 +1,5 @@
 /*
- * Copyright (C) 2018-2021. Huawei Technologies Co., Ltd. All rights reserved.
+ * Copyright (C) 2018-2020. Huawei Technologies Co., Ltd. All rights reserved.
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
  * You may obtain a copy of the License at
@@ -67,7 +67,6 @@ import java.util.OptionalLong;
 import static io.prestosql.spi.connector.ConnectorPageSink.NOT_BLOCKED;
 import static java.lang.String.format;
 import static org.testng.Assert.assertEquals;
-import static org.testng.Assert.assertTrue;
 
 /**
  * TestHBase
@@ -97,7 +96,7 @@ public class TestHBase
         table = TestUtils.createHBaseTableHandle();
         schemaTableName = new SchemaTableName("hbase", "test_table");
         hconn = new TestHBaseClientConnection(hCConf, hetuMetastore.getHetuMetastore());
-        hconn.createConnection();
+        hconn.getConn();
         session = new TestingConnectorSession("root");
         hcm = new HBaseConnectorMetadata(hconn);
         hConnector =
@@ -105,7 +104,7 @@ public class TestHBase
                         new HBaseConnectorMetadataFactory(hconn, hCConf),
                         new HBaseSplitManager(hconn),
                         new HBasePageSinkProvider(hconn),
-                        new HBasePageSourceProvider(new HBaseRecordSetProvider(hconn), hconn),
+                        new HBasePageSourceProvider(new HBaseRecordSetProvider(hconn)),
                         Optional.empty(),
                         null);
     }
@@ -342,9 +341,9 @@ public class TestHBase
     {
         HBaseConnectorId h1 = new HBaseConnectorId();
         HBaseConnectorId h2 = new HBaseConnectorId();
-        HBaseConnectorId.setConnectorId("hbase");
-        HBaseConnectorId.setConnectorId("hbase");
-        assertEquals(true, HBaseConnectorId.getConnectorId().equals(HBaseConnectorId.getConnectorId()));
+        h1.setConnectorId("hbase");
+        h2.setConnectorId("hbase");
+        assertEquals(true, h1.getConnectorId().equals(h2.getConnectorId()));
         assertEquals(h1.hashCode(), h2.hashCode());
         assertEquals(h1.toString(), h2.toString());
     }
@@ -415,13 +414,9 @@ public class TestHBase
                     hpsp.createPageSink(
                             new HBaseTransactionHandle(), session, (ConnectorInsertTableHandle) insertHandler);
 
-            long completedBytes = cps.getCompletedBytes();
-            long sysMemUsage = cps.getSystemMemoryUsage();
-            long cpuNanos = cps.getValidationCpuNanos();
-
-            assertTrue(cpuNanos >= 0);
-            assertTrue(sysMemUsage >= 0);
-            assertTrue(completedBytes >= 0);
+            cps.getCompletedBytes();
+            cps.getSystemMemoryUsage();
+            cps.getValidationCpuNanos();
 
             int[] offsets = {0, 4};
             Block rowkey = new VariableWidthBlock(1, TestSliceUtils.createSlice("0001"), offsets, Optional.empty());

@@ -19,7 +19,6 @@ import com.google.common.collect.ImmutableMap;
 import com.google.common.collect.ImmutableSet;
 import com.google.common.collect.Iterables;
 import com.google.common.collect.Lists;
-import io.airlift.log.Logger;
 import io.airlift.slice.Slice;
 import io.airlift.slice.Slices;
 import io.airlift.units.DataSize;
@@ -44,10 +43,8 @@ import io.prestosql.spi.type.VarbinaryType;
 import io.prestosql.spi.type.VarcharType;
 import org.apache.hadoop.conf.Configuration;
 import org.apache.hadoop.fs.Path;
-import org.apache.hadoop.hive.common.type.Date;
 import org.apache.hadoop.hive.common.type.HiveChar;
 import org.apache.hadoop.hive.common.type.HiveDecimal;
-import org.apache.hadoop.hive.common.type.Timestamp;
 import org.apache.hadoop.hive.ql.exec.FileSinkOperator.RecordWriter;
 import org.apache.hadoop.hive.ql.io.orc.OrcFile;
 import org.apache.hadoop.hive.ql.io.orc.OrcFile.ReaderOptions;
@@ -58,11 +55,11 @@ import org.apache.hadoop.hive.ql.io.orc.OrcUtil;
 import org.apache.hadoop.hive.ql.io.orc.Reader;
 import org.apache.hadoop.hive.ql.io.orc.RecordReader;
 import org.apache.hadoop.hive.serde2.Serializer;
-import org.apache.hadoop.hive.serde2.io.DateWritableV2;
+import org.apache.hadoop.hive.serde2.io.DateWritable;
 import org.apache.hadoop.hive.serde2.io.HiveCharWritable;
 import org.apache.hadoop.hive.serde2.io.HiveDecimalWritable;
 import org.apache.hadoop.hive.serde2.io.ShortWritable;
-import org.apache.hadoop.hive.serde2.io.TimestampWritableV2;
+import org.apache.hadoop.hive.serde2.io.TimestampWritable;
 import org.apache.hadoop.hive.serde2.objectinspector.ObjectInspector;
 import org.apache.hadoop.hive.serde2.objectinspector.SettableStructObjectInspector;
 import org.apache.hadoop.hive.serde2.objectinspector.StructField;
@@ -87,7 +84,11 @@ import java.io.FileOutputStream;
 import java.io.IOException;
 import java.math.BigDecimal;
 import java.math.BigInteger;
-import java.nio.charset.StandardCharsets;
+import java.sql.Date;
+import java.sql.Timestamp;
+import java.time.LocalDate;
+import java.time.ZoneId;
+import java.time.ZonedDateTime;
 import java.util.ArrayList;
 import java.util.HashMap;
 import java.util.HashSet;
@@ -138,6 +139,7 @@ import static io.prestosql.spi.type.Varchars.truncateToLength;
 import static io.prestosql.testing.DateTimeTestingUtils.sqlTimestampOf;
 import static io.prestosql.testing.TestingConnectorSession.SESSION;
 import static java.util.Arrays.asList;
+import static java.util.concurrent.TimeUnit.SECONDS;
 import static java.util.stream.Collectors.toList;
 import static org.apache.hadoop.hive.serde2.ColumnProjectionUtils.READ_ALL_COLUMNS;
 import static org.apache.hadoop.hive.serde2.ColumnProjectionUtils.READ_COLUMN_IDS_CONF_STR;
@@ -165,7 +167,6 @@ import static org.testng.FileAssert.fail;
 
 public class OrcTester
 {
-    private static final Logger log = Logger.get(OrcTester.class);
     public static final DataSize MAX_BLOCK_SIZE = new DataSize(1, MEGABYTE);
     public static final DateTimeZone HIVE_STORAGE_TIME_ZONE = DateTimeZone.forID("America/Bahia_Banderas");
 
@@ -528,7 +529,7 @@ public class OrcTester
             Map<Integer, TupleDomainFilter> filters)
             throws IOException
     {
-        OrcDataSource orcDataSource = new FileOrcDataSource(tempFile.getFile(), new DataSize(1, MEGABYTE), new DataSize(1, MEGABYTE), new DataSize(1, MEGABYTE), true, tempFile.getFile().lastModified());
+        OrcDataSource orcDataSource = new FileOrcDataSource(tempFile.getFile(), new DataSize(1, MEGABYTE), new DataSize(1, MEGABYTE), new DataSize(1, MEGABYTE), true);
         OrcReader orcReader = new OrcReader(orcDataSource, OrcFileTail.readFrom(orcDataSource, Optional.empty()), new DataSize(1, MEGABYTE), new DataSize(1, MEGABYTE), new DataSize(1, MEGABYTE));
 
         assertEquals(orcReader.getColumnNames(), makeColumnNames(types.size()));
@@ -616,14 +617,14 @@ public class OrcTester
                     }
                 }
                 else if (type == TIMESTAMP) {
-                    return filter.testLong(((SqlTimestamp) value).getMillis());
+                    return filter.testLong(((SqlTimestamp) value).getMillisUtc());
                 }
                 else if (type == VARCHAR) {
                     return filter.testBytes(((String) value).getBytes(), 0, ((String) value).length());
                 }
                 else if (type instanceof CharType) {
                     String charString = String.valueOf(value);
-                    return filter.testBytes(charString.getBytes(StandardCharsets.UTF_8), 0, charString.length());
+                    return filter.testBytes(charString.getBytes(), 0, charString.length());
                 }
                 else if (type == VARBINARY) {
                     byte[] binary = ((SqlVarbinary) value).getBytes();
@@ -717,7 +718,7 @@ public class OrcTester
     private static void assertColumnValueEquals(Type type, Object actual, Object expected)
     {
         if (actual == null) {
-            assertNull(expected);
+            assertEquals(actual, expected);
             return;
         }
         String baseType = type.getTypeSignature().getBase();
@@ -752,7 +753,6 @@ public class OrcTester
                         iterator.remove();
                     }
                     catch (AssertionError ignored) {
-                        log.debug(ignored.getMessage());
                     }
                 }
             }
@@ -791,7 +791,7 @@ public class OrcTester
     static OrcRecordReader createCustomOrcRecordReader(TempFile tempFile, OrcPredicate predicate, Type type, int initialBatchSize)
             throws IOException
     {
-        OrcDataSource orcDataSource = new FileOrcDataSource(tempFile.getFile(), new DataSize(1, MEGABYTE), new DataSize(1, MEGABYTE), new DataSize(1, MEGABYTE), true, tempFile.getFile().lastModified());
+        OrcDataSource orcDataSource = new FileOrcDataSource(tempFile.getFile(), new DataSize(1, MEGABYTE), new DataSize(1, MEGABYTE), new DataSize(1, MEGABYTE), true);
         OrcReader orcReader = new OrcReader(orcDataSource, new DataSize(1, MEGABYTE), new DataSize(1, MEGABYTE), MAX_BLOCK_SIZE);
 
         assertEquals(orcReader.getColumnNames(), ImmutableList.of("test"));
@@ -811,7 +811,7 @@ public class OrcTester
             throws IOException
     {
         OrcDataSource orcDataSource = new FileOrcDataSource(tempFile.getFile(), new DataSize(1, MEGABYTE),
-                new DataSize(1, MEGABYTE), new DataSize(1, MEGABYTE), true, tempFile.getFile().lastModified());
+                new DataSize(1, MEGABYTE), new DataSize(1, MEGABYTE), true);
         OrcReader orcReader = new OrcReader(orcDataSource, new DataSize(1, MEGABYTE), new DataSize(1, MEGABYTE),
                 MAX_BLOCK_SIZE);
 
@@ -850,6 +850,7 @@ public class OrcTester
                 new OrcWriterOptions(),
                 false,
                 ImmutableMap.of(),
+                HIVE_STORAGE_TIME_ZONE,
                 true,
                 BOTH,
                 stats, Optional.empty(), Optional.empty());
@@ -862,7 +863,7 @@ public class OrcTester
 
         writer.write(new Page(blockBuilder.build()));
         writer.close();
-        writer.validate(new FileOrcDataSource(outputFile, new DataSize(1, MEGABYTE), new DataSize(1, MEGABYTE), new DataSize(1, MEGABYTE), true, outputFile.lastModified()));
+        writer.validate(new FileOrcDataSource(outputFile, new DataSize(1, MEGABYTE), new DataSize(1, MEGABYTE), new DataSize(1, MEGABYTE), true));
     }
 
     private static void writeValue(Type type, BlockBuilder blockBuilder, Object value)
@@ -906,7 +907,7 @@ public class OrcTester
                 type.writeLong(blockBuilder, days);
             }
             else if (TIMESTAMP.equals(type)) {
-                long millis = ((SqlTimestamp) value).getMillis();
+                long millis = ((SqlTimestamp) value).getMillisUtc();
                 type.writeLong(blockBuilder, millis);
             }
             else {
@@ -969,8 +970,7 @@ public class OrcTester
 
         Reader reader = OrcFile.createReader(
                 new Path(tempFile.getFile().getAbsolutePath()),
-                new ReaderOptions(configuration)
-                        .useUTCTimestamp(true));
+                new ReaderOptions(configuration));
         RecordReader recordReader = reader.rows();
 
         StructObjectInspector rowInspector = (StructObjectInspector) reader.getObjectInspector();
@@ -989,9 +989,8 @@ public class OrcTester
         assertFalse(iterator.hasNext());
     }
 
-    private static Object decodeRecordReaderValue(Type type, Object inputActualValue)
+    private static Object decodeRecordReaderValue(Type type, Object actualValue)
     {
-        Object actualValue = inputActualValue;
         if (actualValue instanceof BooleanWritable) {
             actualValue = ((BooleanWritable) actualValue).get();
         }
@@ -1001,8 +1000,8 @@ public class OrcTester
         else if (actualValue instanceof BytesWritable) {
             actualValue = new SqlVarbinary(((BytesWritable) actualValue).copyBytes());
         }
-        else if (actualValue instanceof DateWritableV2) {
-            actualValue = new SqlDate(((DateWritableV2) actualValue).getDays());
+        else if (actualValue instanceof DateWritable) {
+            actualValue = new SqlDate(((DateWritable) actualValue).getDays());
         }
         else if (actualValue instanceof DoubleWritable) {
             actualValue = ((DoubleWritable) actualValue).get();
@@ -1032,8 +1031,9 @@ public class OrcTester
         else if (actualValue instanceof Text) {
             actualValue = actualValue.toString();
         }
-        else if (actualValue instanceof TimestampWritableV2) {
-            actualValue = sqlTimestampOf(((TimestampWritableV2) actualValue).getTimestamp().toEpochMilli());
+        else if (actualValue instanceof TimestampWritable) {
+            TimestampWritable timestamp = (TimestampWritable) actualValue;
+            actualValue = sqlTimestampOf((timestamp.getSeconds() * 1000) + (timestamp.getNanos() / 1000000L), SESSION);
         }
         else if (actualValue instanceof OrcStruct) {
             List<Object> fields = new ArrayList<>();
@@ -1217,10 +1217,19 @@ public class OrcTester
             return ((SqlVarbinary) value).getBytes();
         }
         if (type.equals(DATE)) {
-            return Date.ofEpochDay(((SqlDate) value).getDays());
+            int days = ((SqlDate) value).getDays();
+            LocalDate localDate = LocalDate.ofEpochDay(days);
+            ZonedDateTime zonedDateTime = localDate.atStartOfDay(ZoneId.systemDefault());
+
+            long millis = SECONDS.toMillis(zonedDateTime.toEpochSecond());
+            Date date = new Date(0);
+            // millis must be set separately to avoid masking
+            date.setTime(millis);
+            return date;
         }
         if (type.equals(TIMESTAMP)) {
-            return Timestamp.ofEpochMilli(((SqlTimestamp) value).getMillis());
+            long millisUtc = ((SqlTimestamp) value).getMillisUtc();
+            return new Timestamp(millisUtc);
         }
         if (type instanceof DecimalType) {
             return HiveDecimal.create(((SqlDecimal) value).toBigDecimal());
@@ -1378,12 +1387,12 @@ public class OrcTester
 
     private static Type arrayType(Type elementType)
     {
-        return METADATA.getFunctionAndTypeManager().getParameterizedType(StandardTypes.ARRAY, ImmutableList.of(TypeSignatureParameter.of(elementType.getTypeSignature())));
+        return METADATA.getParameterizedType(StandardTypes.ARRAY, ImmutableList.of(TypeSignatureParameter.of(elementType.getTypeSignature())));
     }
 
     public static Type mapType(Type keyType, Type valueType)
     {
-        return METADATA.getFunctionAndTypeManager().getParameterizedType(StandardTypes.MAP, ImmutableList.of(TypeSignatureParameter.of(keyType.getTypeSignature()), TypeSignatureParameter.of(valueType.getTypeSignature())));
+        return METADATA.getParameterizedType(StandardTypes.MAP, ImmutableList.of(TypeSignatureParameter.of(keyType.getTypeSignature()), TypeSignatureParameter.of(valueType.getTypeSignature())));
     }
 
     private static Type rowType(Type... fieldTypes)
@@ -1394,6 +1403,6 @@ public class OrcTester
             Type fieldType = fieldTypes[i];
             typeSignatureParameters.add(TypeSignatureParameter.of(new NamedTypeSignature(Optional.of(new RowFieldName(filedName, false)), fieldType.getTypeSignature())));
         }
-        return METADATA.getFunctionAndTypeManager().getParameterizedType(StandardTypes.ROW, typeSignatureParameters.build());
+        return METADATA.getParameterizedType(StandardTypes.ROW, typeSignatureParameters.build());
     }
 }

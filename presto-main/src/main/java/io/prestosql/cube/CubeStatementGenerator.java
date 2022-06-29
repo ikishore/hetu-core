@@ -1,5 +1,5 @@
 /*
- * Copyright (C) 2018-2021. Huawei Technologies Co., Ltd. All rights reserved.
+ * Copyright (C) 2018-2020. Huawei Technologies Co., Ltd. All rights reserved.
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
  * You may obtain a copy of the License at
@@ -19,9 +19,14 @@ import io.hetu.core.spi.cube.CubeStatement;
 import io.hetu.core.spi.cube.aggregator.AggregationSignature;
 import io.prestosql.spi.connector.ColumnHandle;
 import io.prestosql.spi.plan.AggregationNode;
+import io.prestosql.spi.plan.FilterNode;
 import io.prestosql.spi.plan.Symbol;
 import io.prestosql.spi.relation.RowExpression;
 import io.prestosql.spi.relation.VariableReferenceExpression;
+import io.prestosql.sql.ExpressionFormatter;
+import io.prestosql.sql.planner.SymbolsExtractor;
+import io.prestosql.sql.planner.optimizations.StarTreeAggregationRule;
+import io.prestosql.sql.planner.planprinter.RowExpressionFormatter;
 import io.prestosql.sql.relational.OriginalExpressionUtils;
 import io.prestosql.sql.tree.Expression;
 import io.prestosql.sql.tree.LongLiteral;
@@ -30,12 +35,8 @@ import io.prestosql.sql.tree.SymbolReference;
 import java.util.Collections;
 import java.util.List;
 import java.util.Map;
-
-import static io.hetu.core.spi.cube.CubeAggregateFunction.AVG;
-import static io.hetu.core.spi.cube.CubeAggregateFunction.COUNT;
-import static io.hetu.core.spi.cube.CubeAggregateFunction.MAX;
-import static io.hetu.core.spi.cube.CubeAggregateFunction.MIN;
-import static io.hetu.core.spi.cube.CubeAggregateFunction.SUM;
+import java.util.Optional;
+import java.util.Set;
 
 public class CubeStatementGenerator
 {
@@ -44,9 +45,9 @@ public class CubeStatementGenerator
         //utility class
     }
 
-    public static CubeStatement generate(
-            String fromTable,
+    public static CubeStatement generate(String fromTable,
             AggregationNode aggregationNode,
+            FilterNode filterNode,
             Map<String, Object> symbolMappings)
     {
         CubeStatement.Builder builder = CubeStatement.newBuilder();
@@ -97,11 +98,36 @@ public class CubeStatementGenerator
         for (Symbol symbol : aggregationNode.getGroupingKeys()) {
             Object column = symbolMappings.get(symbol.getName());
             if (column instanceof ColumnHandle) {
-                builder.groupByAddString(((ColumnHandle) column).getColumnName());
+                builder.groupBy(((ColumnHandle) column).getColumnName());
             }
             else {
                 // Don't know how to handle it
                 throw new IllegalArgumentException("Column " + symbol + " is not an actual column");
+            }
+        }
+
+        if (filterNode != null) {
+            RowExpression predicate = filterNode.getPredicate();
+            Set<Symbol> expressionSymbols = SymbolsExtractor.extractUnique(predicate);
+            for (Symbol symbol : expressionSymbols) {
+                Object column = symbolMappings.get(symbol.getName());
+                if (column instanceof ColumnHandle) {
+                    builder.select(((ColumnHandle) column).getColumnName());
+                    builder.groupBy(((ColumnHandle) column).getColumnName());
+                }
+                else {
+                    // Don't know how to handle it
+                    throw new IllegalArgumentException("Column " + symbol + " is not an actual column");
+                }
+            }
+
+            if (OriginalExpressionUtils.isExpression(predicate)) {
+                Expression expression = OriginalExpressionUtils.castToExpression(predicate);
+                builder.where(ExpressionFormatter.formatExpression(expression, Optional.empty()));
+            }
+            else {
+                String predicateString = new RowExpressionFormatter().formatRowExpression(predicate);
+                builder.where(predicateString);
             }
         }
         return builder.build();
@@ -109,30 +135,35 @@ public class CubeStatementGenerator
 
     public static Map<Symbol, AggregationSignature> createSignature(AggregationNode.Aggregation aggregation, Symbol symbol, Object argument)
     {
-        String aggregationName = aggregation.getFunctionCall().getDisplayName();
+        String aggregationName = aggregation.getSignature().getName();
         boolean distinct = aggregation.isDistinct();
         Map<Symbol, AggregationSignature> signature = Collections.emptyMap();
         if (argument instanceof ColumnHandle) {
             String columnName = ((ColumnHandle) argument).getColumnName();
-            if (SUM.getName().equals(aggregationName)) {
+            if (StarTreeAggregationRule.SUM.equals(aggregationName)) {
+                // SUM aggregation
                 signature = Collections.singletonMap(symbol, AggregationSignature.sum(columnName, distinct));
             }
-            else if (AVG.getName().equals(aggregationName)) {
+            else if (StarTreeAggregationRule.AVG.equals(aggregationName)) {
+                // AVG aggregation
                 signature = Collections.singletonMap(symbol, AggregationSignature.avg(columnName, distinct));
             }
-            else if (COUNT.getName().equals(aggregationName)) {
+            else if (StarTreeAggregationRule.COUNT.equals(aggregationName)) {
+                // COUNT(columnName)
                 signature = Collections.singletonMap(symbol, AggregationSignature.count(columnName, distinct));
             }
-            else if (MIN.getName().equals(aggregationName)) {
+            else if (StarTreeAggregationRule.MIN.equals(aggregationName)) {
+                // MIN aggregation
                 signature = Collections.singletonMap(symbol, AggregationSignature.min(columnName, distinct));
             }
-            else if (MAX.getName().equals(aggregationName)) {
+            else if (StarTreeAggregationRule.MAX.equals(aggregationName)) {
+                // MAX aggregation
                 signature = Collections.singletonMap(symbol, AggregationSignature.max(columnName, distinct));
             }
         }
         else if (argument == null || (argument instanceof LongLiteral && ((LongLiteral) argument).getValue() == 1)) {
             // COUNT aggregation
-            if (COUNT.getName().equals(aggregationName) && !aggregation.isDistinct()) {
+            if (StarTreeAggregationRule.COUNT.equals(aggregationName) && !aggregation.isDistinct()) {
                 // COUNT(1)
                 // TODO: Validate the assumption: Non distinct count is always count(*)
                 signature = Collections.singletonMap(symbol, AggregationSignature.count());

@@ -135,11 +135,11 @@ public class TpchMetadata
 
     public TpchMetadata(ColumnNaming columnNaming, boolean predicatePushdownEnabled, boolean partitioningEnabled)
     {
-        ImmutableSet.Builder<String> tableNamesBuilder = ImmutableSet.builder();
+        ImmutableSet.Builder<String> tableNames = ImmutableSet.builder();
         for (TpchTable<?> tpchTable : TpchTable.getTables()) {
-            tableNamesBuilder.add(tpchTable.getTableName());
+            tableNames.add(tpchTable.getTableName());
         }
-        this.tableNames = tableNamesBuilder.build();
+        this.tableNames = tableNames.build();
         this.columnNaming = columnNaming;
         this.predicatePushdownEnabled = predicatePushdownEnabled;
         this.partitioningEnabled = partitioningEnabled;
@@ -257,7 +257,7 @@ public class TpchMetadata
     }
 
     @Override
-    public TableStatistics getTableStatistics(ConnectorSession session, ConnectorTableHandle tableHandle, Constraint constraint, boolean includeColumnStatistics)
+    public TableStatistics getTableStatistics(ConnectorSession session, ConnectorTableHandle tableHandle, Constraint constraint)
     {
         TpchTableHandle tpchTableHandle = (TpchTableHandle) tableHandle;
         String tableName = tpchTableHandle.getTableName();
@@ -394,7 +394,7 @@ public class TpchMetadata
     public ColumnMetadata getColumnMetadata(ConnectorSession session, ConnectorTableHandle tableHandle, ColumnHandle columnHandle)
     {
         ConnectorTableMetadata tableMetadata = getTableMetadata(session, tableHandle);
-        String columnName = columnHandle.getColumnName();
+        String columnName = ((TpchColumnHandle) columnHandle).getColumnName();
 
         for (ColumnMetadata column : tableMetadata.getColumns()) {
             if (column.getName().equals(columnName)) {
@@ -463,7 +463,6 @@ public class TpchMetadata
                 localProperties);
     }
 
-    @Override
     public Optional<ConstraintApplicationResult<ConnectorTableHandle>> applyFilter(ConnectorSession session, ConnectorTableHandle table, Constraint constraint)
     {
         TpchTableHandle handle = (TpchTableHandle) table;
@@ -583,12 +582,6 @@ public class TpchMetadata
      */
     @Override
     public boolean isExecutionPlanCacheSupported(ConnectorSession session, ConnectorTableHandle handle)
-    {
-        return true;
-    }
-
-    @Override
-    public boolean isSnapshotSupportedAsInput(ConnectorSession session, ConnectorTableHandle handle)
     {
         return true;
     }

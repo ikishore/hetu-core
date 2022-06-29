@@ -17,6 +17,7 @@ import io.prestosql.operator.scalar.AbstractTestFunctions;
 import org.testng.annotations.Test;
 
 import static io.prestosql.spi.StandardErrorCode.DIVISION_BY_ZERO;
+import static io.prestosql.spi.StandardErrorCode.INVALID_CAST_ARGUMENT;
 import static io.prestosql.spi.function.OperatorType.INDETERMINATE;
 import static io.prestosql.spi.type.BigintType.BIGINT;
 import static io.prestosql.spi.type.BooleanType.BOOLEAN;
@@ -26,7 +27,6 @@ import static io.prestosql.spi.type.RealType.REAL;
 import static io.prestosql.spi.type.SmallintType.SMALLINT;
 import static io.prestosql.spi.type.TinyintType.TINYINT;
 import static io.prestosql.spi.type.VarcharType.VARCHAR;
-import static io.prestosql.sql.analyzer.SemanticErrorCode.INVALID_LITERAL;
 import static java.lang.String.format;
 
 public class TestTinyintOperators
@@ -37,7 +37,7 @@ public class TestTinyintOperators
     {
         assertFunction("TINYINT'37'", TINYINT, (byte) 37);
         assertFunction("TINYINT'17'", TINYINT, (byte) 17);
-        assertInvalidCastWithSemanticErrorCode("TINYINT'" + ((long) Byte.MAX_VALUE + 1L) + "'", INVALID_LITERAL);
+        assertInvalidCast("TINYINT'" + ((long) Byte.MAX_VALUE + 1L) + "'");
     }
 
     @Test
@@ -52,7 +52,7 @@ public class TestTinyintOperators
     {
         assertFunction("TINYINT'-37'", TINYINT, (byte) -37);
         assertFunction("TINYINT'-17'", TINYINT, (byte) -17);
-        assertInvalidFunction("TINYINT'-" + Byte.MIN_VALUE + "'", INVALID_LITERAL);
+        assertInvalidFunction("TINYINT'-" + Byte.MIN_VALUE + "'", INVALID_CAST_ARGUMENT);
     }
 
     @Test

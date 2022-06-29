@@ -1,5 +1,5 @@
 /*
- * Copyright (C) 2018-2021. Huawei Technologies Co., Ltd. All rights reserved.
+ * Copyright (C) 2018-2020. Huawei Technologies Co., Ltd. All rights reserved.
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
  * You may obtain a copy of the License at
@@ -33,24 +33,13 @@ public class HeuristicIndexUtils
     {
     }
 
-    /**
-     * Given one of these expressions types:
-     * - partition=1
-     * - partition=1 or partition=2
-     * - partition in (1,2)
-     * - partition=1 or partition in (2)
-     *
-     * extract the partitions as a list of key=value pairs
-     * @param expression
-     * @return
-     */
     public static List<String> extractPartitions(Expression expression)
     {
         if (expression instanceof ComparisonExpression) {
             ComparisonExpression exp = (ComparisonExpression) expression;
 
             if (exp.getOperator() == ComparisonExpression.Operator.EQUAL) {
-                return Collections.singletonList(parsePartitionName(exp.getLeft().toString()) + "=" + parsePartitionValue(exp.getRight().toString()));
+                return Collections.singletonList(exp.getLeft().toString() + "=" + parseSpecialPartitionValues(exp.getRight().toString()));
             }
         }
         else if (expression instanceof LogicalBinaryExpression) {
@@ -68,11 +57,9 @@ public class HeuristicIndexUtils
                 InListExpression inListExpression = (InListExpression) valueList;
                 List<String> res = new LinkedList<>();
                 for (Expression expr : inListExpression.getValues()) {
-                    res.add(parsePartitionName(((InPredicate) expression).getValue().toString()) + "=" + parsePartitionValue(expr.toString()));
+                    res.add(((InPredicate) expression).getValue().toString() + "=" + parseSpecialPartitionValues(expr.toString()));
                 }
-                if (res.size() > 0) {
-                    return res;
-                }
+                return res;
             }
         }
 
@@ -80,29 +67,16 @@ public class HeuristicIndexUtils
                 "e.g. partition=1 or partition=2/partition in (1,2)");
     }
 
-    private static String parsePartitionValue(String rightVal)
+    private static String parseSpecialPartitionValues(String rightVal)
     {
-        // quoted value, e.g. 'value'
         if (rightVal.matches("^'.*'$")) {
             return rightVal.substring(1, rightVal.length() - 1);
         }
-        // typed value
-        // e.g. DATE '1234' or BIGINT '5'
-        else if (rightVal.matches("^.*\\s'.*'$")) {
-            return rightVal.replaceAll("^.*\\s*'(.*)'$", "$1");
+
+        else if (rightVal.matches("^date\\s'.*'$")) {
+            return rightVal.replaceAll("^date\\s*'(.*)'$", "$1");
         }
 
         return rightVal;
-    }
-
-    private static String parsePartitionName(String leftVal)
-    {
-        // quoted, e.g. "a"
-        if (leftVal.startsWith("\"")) {
-            return leftVal.substring(1, leftVal.length() - 1).trim();
-        }
-
-        // unquoted
-        return leftVal;
     }
 }

@@ -19,13 +19,13 @@ import io.prestosql.spi.block.LazyBlock;
 
 import java.util.function.LongConsumer;
 
-public final class PageUtils
+final class PageUtils
 {
     private PageUtils()
     {
     }
 
-    public static <T> Page recordMaterializedBytes(Page page, LongConsumer sizeInBytesConsumer)
+    static <T> Page recordMaterializedBytes(Page page, LongConsumer sizeInBytesConsumer)
     {
         // account processed bytes from lazy blocks only when they are loaded
         Block<T>[] blocks = new Block[page.getChannelCount()];

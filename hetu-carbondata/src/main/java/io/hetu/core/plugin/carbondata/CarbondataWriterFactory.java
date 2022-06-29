@@ -31,6 +31,7 @@ import io.prestosql.plugin.hive.OrcFileWriterFactory;
 import io.prestosql.plugin.hive.metastore.HivePageSinkMetadataProvider;
 import io.prestosql.plugin.hive.metastore.SortingColumn;
 import io.prestosql.spi.NodeManager;
+import io.prestosql.spi.Page;
 import io.prestosql.spi.PageSorter;
 import io.prestosql.spi.connector.ConnectorSession;
 import io.prestosql.spi.type.TypeManager;
@@ -47,7 +48,6 @@ import java.util.Set;
 
 import static java.util.Objects.requireNonNull;
 import static org.apache.hadoop.hive.metastore.api.hive_metastoreConstants.META_TABLE_LOCATION;
-import static org.joda.time.DateTimeZone.UTC;
 
 public class CarbondataWriterFactory
         extends HiveWriterFactory
@@ -88,7 +88,7 @@ public class CarbondataWriterFactory
                 additionalTableParameters, bucketCount, sortedBy, locationHandle,
                 locationService, queryId, pageSinkMetadataProvider,
                 typeManager, hdfsEnvironment, pageSorter, sortBufferSize,
-                maxOpenSortFiles, immutablePartitions, UTC, session, nodeManager,
+                maxOpenSortFiles, immutablePartitions, session, nodeManager,
                 eventClient, hiveSessionProperties, hiveWriterStats, orcFileWriterFactory);
 
         this.additionalJobConf = requireNonNull(additionalJobConf, "Additional JobConf is null");
@@ -120,20 +120,19 @@ public class CarbondataWriterFactory
     }
 
     @Override
-    public HiveWriter createWriter(List<String> partitionValues, OptionalInt bucketNumber, Optional<Options> vacuumOptions)
+    public HiveWriter createWriter(Page partitionColumns, int position, OptionalInt bucketNumber, Optional<Options> vacuumOptions)
     {
         /* set Additional JobConf */
         JobConf jobConf = getSuperJobConf();
 
         additionalJobConf.forEach((k, v) -> jobConf.set(k, v));
-        return super.createWriter(partitionValues, bucketNumber, vacuumOptions);
+        return super.createWriter(partitionColumns, position, bucketNumber, vacuumOptions);
     }
 
     protected void checkWriteMode(LocationService.WriteInfo writeInfo)
     {
     }
 
-    @Override
     protected void setAdditionalSchemaProperties(Properties schema)
     {
         schema.setProperty(META_TABLE_LOCATION, locationService.getTableWriteInfo(locationHandle, false).getTargetPath().toString());

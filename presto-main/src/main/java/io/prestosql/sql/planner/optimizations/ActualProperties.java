@@ -64,20 +64,19 @@ public class ActualProperties
 
     private ActualProperties(
             Global global,
-            List<? extends LocalProperty<Symbol>> inputLocalProperties,
+            List<? extends LocalProperty<Symbol>> localProperties,
             Map<Symbol, NullableValue> constants)
     {
         requireNonNull(global, "globalProperties is null");
-        requireNonNull(inputLocalProperties, "inputLocalProperties is null");
+        requireNonNull(localProperties, "localProperties is null");
         requireNonNull(constants, "constants is null");
 
         this.global = global;
 
         // The constants field implies a ConstantProperty in localProperties (but not vice versa).
         // Let's make sure to include the constants into the local constant properties.
-        List<? extends LocalProperty<Symbol>> localPropertieList = inputLocalProperties;
-        Set<Symbol> localConstants = LocalProperties.extractLeadingConstants(localPropertieList);
-        localPropertieList = LocalProperties.stripLeadingConstants(localPropertieList);
+        Set<Symbol> localConstants = LocalProperties.extractLeadingConstants(localProperties);
+        localProperties = LocalProperties.stripLeadingConstants(localProperties);
 
         Set<Symbol> updatedLocalConstants = ImmutableSet.<Symbol>builder()
                 .addAll(localConstants)
@@ -86,7 +85,7 @@ public class ActualProperties
 
         List<LocalProperty<Symbol>> updatedLocalProperties = LocalProperties.normalizeAndPrune(ImmutableList.<LocalProperty<Symbol>>builder()
                 .addAll(transform(updatedLocalConstants, ConstantProperty::new))
-                .addAll(localPropertieList)
+                .addAll(localProperties)
                 .build());
 
         this.localProperties = ImmutableList.copyOf(updatedLocalProperties);
@@ -317,11 +316,11 @@ public class ActualProperties
 
         public ActualProperties build()
         {
-            List<LocalProperty<Symbol>> properties = this.localProperties;
+            List<LocalProperty<Symbol>> localProperties = this.localProperties;
             if (unordered) {
-                properties = filteredCopy(this.localProperties, property -> !property.isOrderSensitive());
+                localProperties = filteredCopy(this.localProperties, property -> !property.isOrderSensitive());
             }
-            return new ActualProperties(global, properties, constants);
+            return new ActualProperties(global, localProperties, constants);
         }
     }
 

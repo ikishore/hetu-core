@@ -25,12 +25,10 @@ import io.prestosql.spi.type.FunctionType;
 import io.prestosql.spi.type.Type;
 import io.prestosql.sql.parser.SqlParser;
 import io.prestosql.sql.planner.PlanSymbolAllocator;
-import io.prestosql.sql.planner.RowExpressionInterpreter;
 import io.prestosql.sql.planner.TypeAnalyzer;
 import io.prestosql.sql.planner.TypeProvider;
 import io.prestosql.sql.planner.iterative.Rule;
 import io.prestosql.sql.relational.OriginalExpressionUtils;
-import io.prestosql.sql.relational.RowExpressionOptimizer;
 import io.prestosql.sql.relational.SqlToRowExpressionTranslator;
 import io.prestosql.sql.tree.Expression;
 import io.prestosql.sql.tree.LambdaArgumentDeclaration;
@@ -73,8 +71,7 @@ public class TranslateExpressions
             {
                 Map<NodeRef<Expression>, Type> types = analyzeCallExpressionTypes(callExpression, session, planSymbolAllocator.getTypes());
                 return new CallExpression(
-                        callExpression.getDisplayName(),
-                        callExpression.getFunctionHandle(),
+                        callExpression.getSignature(),
                         callExpression.getType(),
                         callExpression.getArguments().stream()
                                 .map(expression -> removeOriginalExpression(expression, session, types, context))
@@ -93,13 +90,12 @@ public class TranslateExpressions
                 ImmutableMap.Builder<NodeRef<Expression>, Type> builder = ImmutableMap.<NodeRef<Expression>, Type>builder();
                 TypeAnalyzer typeAnalyzer = new TypeAnalyzer(sqlParser, metadata);
                 if (!lambdaExpressions.isEmpty()) {
-                    List<FunctionType> functionTypes = metadata.getFunctionAndTypeManager().getFunctionMetadata(callExpression.getFunctionHandle()).getArgumentTypes()
-                            .stream()
+                    List<FunctionType> functionTypes = callExpression.getSignature().getArgumentTypes().stream()
                             .filter(typeSignature -> typeSignature.getBase().equals(FunctionType.NAME))
                             .map(metadata::getType)
                             .map(FunctionType.class::cast)
                             .collect(toImmutableList());
-                    InternalAggregationFunction internalAggregationFunction = metadata.getFunctionAndTypeManager().getAggregateFunctionImplementation(callExpression.getFunctionHandle());
+                    InternalAggregationFunction internalAggregationFunction = metadata.getAggregateFunctionImplementation(callExpression.getSignature());
                     List<Class<?>> lambdaInterfaces = internalAggregationFunction.getLambdaInterfaces();
                     verify(lambdaExpressions.size() == functionTypes.size());
                     verify(lambdaExpressions.size() == lambdaInterfaces.size());
@@ -149,8 +145,7 @@ public class TranslateExpressions
 
             private RowExpression toRowExpression(Expression expression, Map<NodeRef<Expression>, Type> types, Map<Symbol, Integer> layout, Session session)
             {
-                RowExpression rowExpression = SqlToRowExpressionTranslator.translate(expression, FunctionKind.SCALAR, types, layout, metadata.getFunctionAndTypeManager(), session, false);
-                return new RowExpressionOptimizer(metadata).optimize(rowExpression, RowExpressionInterpreter.Level.SERIALIZABLE, session.toConnectorSession());
+                return SqlToRowExpressionTranslator.translate(expression, FunctionKind.SCALAR, types, layout, metadata, session, false);
             }
 
             private RowExpression removeOriginalExpression(RowExpression expression, Rule.Context context, Map<Symbol, Integer> layout)

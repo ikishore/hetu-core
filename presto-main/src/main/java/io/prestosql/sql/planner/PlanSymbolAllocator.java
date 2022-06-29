@@ -57,7 +57,6 @@ public class PlanSymbolAllocator
         return newSymbol(symbolHint.getName(), symbols.get(symbolHint));
     }
 
-    @Override
     public Symbol newSymbol(String nameHint, Type type)
     {
         return newSymbol(nameHint, type, null);
@@ -68,27 +67,26 @@ public class PlanSymbolAllocator
         return newSymbol("$hashValue", BigintType.BIGINT);
     }
 
-    @Override
     public Symbol newSymbol(String nameHint, Type type, String suffix)
     {
         requireNonNull(nameHint, "name is null");
         requireNonNull(type, "type is null");
 
         // TODO: workaround for the fact that QualifiedName lowercases parts
-        String nameHintLower = nameHint.toLowerCase(ENGLISH);
+        nameHint = nameHint.toLowerCase(ENGLISH);
 
         // don't strip the tail if the only _ is the first character
-        int index = nameHintLower.lastIndexOf("_");
+        int index = nameHint.lastIndexOf("_");
         if (index > 0) {
-            String tail = nameHintLower.substring(index + 1);
+            String tail = nameHint.substring(index + 1);
 
             // only strip if tail is numeric or _ is the last character
-            if (Ints.tryParse(tail) != null || index == nameHintLower.length() - 1) {
-                nameHintLower = nameHintLower.substring(0, index);
+            if (Ints.tryParse(tail) != null || index == nameHint.length() - 1) {
+                nameHint = nameHint.substring(0, index);
             }
         }
 
-        String unique = nameHintLower;
+        String unique = nameHint;
 
         if (suffix != null) {
             unique = unique + "$" + suffix;
@@ -146,8 +144,7 @@ public class PlanSymbolAllocator
             nameHint = ((VariableReferenceExpression) expression).getName();
         }
         else if (expression instanceof CallExpression) {
-            String[] names = ((CallExpression) expression).getDisplayName().split("\\.");
-            nameHint = names[names.length - 1];
+            nameHint = ((CallExpression) expression).getSignature().getName();
         }
         return newSymbol(nameHint, expression.getType(), suffix);
     }

@@ -58,8 +58,7 @@ public class OrderByBenchmark
                 new PagesIndex.TestingFactory(false),
                 false,
                 Optional.empty(),
-                new OrderingCompiler(),
-                false);
+                new OrderingCompiler());
 
         return ImmutableList.of(tableScanOperator, limitOperator, orderByOperator);
     }

@@ -46,8 +46,6 @@ import java.util.regex.Pattern;
 
 import static io.airlift.concurrent.Threads.daemonThreadsNamed;
 import static io.airlift.units.DataSize.Unit.GIGABYTE;
-import static io.prestosql.testing.TestingPagesSerdeFactory.TESTING_SERDE_FACTORY;
-import static io.prestosql.testing.TestingRecoveryUtils.NOOP_RECOVERY_UTILS;
 import static io.prestosql.testing.TestingSession.testSessionBuilder;
 import static java.lang.String.format;
 import static java.util.concurrent.Executors.newCachedThreadPool;
@@ -109,16 +107,14 @@ public class TestMemoryTracking
                 notificationExecutor,
                 yieldExecutor,
                 queryMaxSpillSize,
-                spillSpaceTracker,
-                NOOP_RECOVERY_UTILS);
+                spillSpaceTracker);
         taskContext = queryContext.addTaskContext(
                 new TaskStateMachine(new TaskId("query", 0, 0), notificationExecutor),
                 testSessionBuilder().build(),
                 true,
                 true,
                 OptionalInt.empty(),
-                Optional.empty(),
-                TESTING_SERDE_FACTORY);
+                Optional.empty());
         pipelineContext = taskContext.addPipelineContext(0, true, true, false);
         driverContext = pipelineContext.addDriverContext();
         operatorContext = driverContext.addOperatorContext(1, new PlanNodeId("a"), "test-operator");

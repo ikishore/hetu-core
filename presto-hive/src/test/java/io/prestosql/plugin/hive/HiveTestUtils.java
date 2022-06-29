@@ -37,7 +37,7 @@ import io.prestosql.spi.connector.ColumnHandle;
 import io.prestosql.spi.connector.ConnectorSession;
 import io.prestosql.spi.dynamicfilter.BloomFilterDynamicFilter;
 import io.prestosql.spi.dynamicfilter.DynamicFilter;
-import io.prestosql.spi.function.FunctionHandle;
+import io.prestosql.spi.function.Signature;
 import io.prestosql.spi.heuristicindex.IndexMetadata;
 import io.prestosql.spi.predicate.TupleDomain;
 import io.prestosql.spi.type.ArrayType;
@@ -52,15 +52,12 @@ import io.prestosql.spi.util.BloomFilter;
 import io.prestosql.testing.NoOpIndexClient;
 import io.prestosql.testing.TestingConnectorSession;
 import io.prestosql.type.InternalTypeManager;
-import org.apache.hadoop.hive.common.type.Timestamp;
 
 import java.io.ByteArrayOutputStream;
 import java.io.IOException;
 import java.lang.invoke.MethodHandle;
 import java.math.BigDecimal;
 import java.time.Duration;
-import java.time.LocalDateTime;
-import java.time.ZoneOffset;
 import java.util.HashSet;
 import java.util.List;
 import java.util.Optional;
@@ -73,7 +70,6 @@ import static io.prestosql.plugin.hive.HiveType.HIVE_LONG;
 import static io.prestosql.spi.function.OperatorType.IS_DISTINCT_FROM;
 import static io.prestosql.spi.type.Decimals.encodeScaledValue;
 import static io.prestosql.spi.type.TypeSignature.parseTypeSignature;
-import static io.prestosql.sql.analyzer.TypeSignatureProvider.fromTypes;
 import static java.util.stream.Collectors.toList;
 
 public final class HiveTestUtils
@@ -85,8 +81,8 @@ public final class HiveTestUtils
     public static final ConnectorSession SESSION = new TestingConnectorSession(
             new HiveSessionProperties(new HiveConfig().setOrcLazyReadSmallRanges(false), new OrcFileWriterConfig(), new ParquetFileWriterConfig()).getSessionProperties());
 
-    public static final Metadata METADATA = createTestMetadataManager();
-    public static final TypeManager TYPE_MANAGER = new InternalTypeManager(METADATA.getFunctionAndTypeManager());
+    private static final Metadata METADATA = createTestMetadataManager();
+    public static final TypeManager TYPE_MANAGER = new InternalTypeManager(METADATA);
 
     public static final HdfsEnvironment HDFS_ENVIRONMENT = createTestHdfsEnvironment(new HiveConfig());
 
@@ -97,7 +93,7 @@ public final class HiveTestUtils
         FileFormatDataSourceStats stats = new FileFormatDataSourceStats();
         HdfsEnvironment testHdfsEnvironment = createTestHdfsEnvironment(hiveConfig);
         return ImmutableSet.<HivePageSourceFactory>builder()
-                .add(new RcFilePageSourceFactory(TYPE_MANAGER, testHdfsEnvironment, stats, hiveConfig))
+                .add(new RcFilePageSourceFactory(TYPE_MANAGER, testHdfsEnvironment, stats))
                 .add(new OrcPageSourceFactory(TYPE_MANAGER, hiveConfig, testHdfsEnvironment, stats, OrcCacheStore.builder().newCacheStore(
                         new HiveConfig().getOrcFileTailCacheLimit(), Duration.ofMillis(new HiveConfig().getOrcFileTailCacheTtl().toMillis()),
                         new HiveConfig().getOrcStripeFooterCacheLimit(),
@@ -107,13 +103,8 @@ public final class HiveTestUtils
                         Duration.ofMillis(new HiveConfig().getOrcBloomFiltersCacheTtl().toMillis()),
                         new HiveConfig().getOrcRowDataCacheMaximumWeight(), Duration.ofMillis(new HiveConfig().getOrcRowDataCacheTtl().toMillis()),
                         new HiveConfig().isOrcCacheStatsMetricCollectionEnabled())))
-                .add(new ParquetPageSourceFactory(TYPE_MANAGER, testHdfsEnvironment, stats, hiveConfig))
+                .add(new ParquetPageSourceFactory(TYPE_MANAGER, testHdfsEnvironment, stats))
                 .build();
-    }
-
-    public static HiveRecordCursorProvider createGenericHiveRecordCursorProvider(HdfsEnvironment hdfsEnvironment)
-    {
-        return new GenericHiveRecordCursorProvider(hdfsEnvironment);
     }
 
     public static Set<HiveSelectivePageSourceFactory> getDefaultHiveSelectiveFactories(HiveConfig hiveConfig)
@@ -197,21 +188,21 @@ public final class HiveTestUtils
 
     public static MapType mapType(Type keyType, Type valueType)
     {
-        return (MapType) METADATA.getFunctionAndTypeManager().getParameterizedType(StandardTypes.MAP, ImmutableList.of(
+        return (MapType) METADATA.getParameterizedType(StandardTypes.MAP, ImmutableList.of(
                 TypeSignatureParameter.of(keyType.getTypeSignature()),
                 TypeSignatureParameter.of(valueType.getTypeSignature())));
     }
 
     public static ArrayType arrayType(Type elementType)
     {
-        return (ArrayType) METADATA.getFunctionAndTypeManager().getParameterizedType(
+        return (ArrayType) METADATA.getParameterizedType(
                 StandardTypes.ARRAY,
                 ImmutableList.of(TypeSignatureParameter.of(elementType.getTypeSignature())));
     }
 
     public static RowType rowType(List<NamedTypeSignature> elementTypeSignatures)
     {
-        return (RowType) METADATA.getFunctionAndTypeManager().getParameterizedType(
+        return (RowType) METADATA.getParameterizedType(
                 StandardTypes.ROW,
                 ImmutableList.copyOf(elementTypeSignatures.stream()
                         .map(TypeSignatureParameter::of)
@@ -230,8 +221,8 @@ public final class HiveTestUtils
 
     public static MethodHandle distinctFromOperator(Type type)
     {
-        FunctionHandle operatorHandle = METADATA.getFunctionAndTypeManager().resolveOperatorFunctionHandle(IS_DISTINCT_FROM, fromTypes(type, type));
-        return METADATA.getFunctionAndTypeManager().getBuiltInScalarFunctionImplementation(operatorHandle).getMethodHandle();
+        Signature signature = METADATA.resolveOperator(IS_DISTINCT_FROM, ImmutableList.of(type, type));
+        return METADATA.getScalarFunctionImplementation(signature).getMethodHandle();
     }
 
     public static boolean isDistinctFrom(MethodHandle handle, Block left, Block right)
@@ -244,9 +235,9 @@ public final class HiveTestUtils
         }
     }
 
-    public static Supplier<List<Set<DynamicFilter>>> createTestDynamicFilterSupplier(String filterKey, List<Long> filterValues)
+    public static Supplier<Set<DynamicFilter>> createTestDynamicFilterSupplier(String filterKey, List<Long> filterValues)
     {
-        Supplier<List<Set<DynamicFilter>>> dynamicFilterSupplier = () -> {
+        Supplier<Set<DynamicFilter>> dynamicFilterSupplier = () -> {
             Set<DynamicFilter> dynamicFilters = new HashSet<>();
             ColumnHandle columnHandle = new HiveColumnHandle(filterKey, HIVE_LONG, parseTypeSignature(StandardTypes.BIGINT), 0, PARTITION_KEY, Optional.empty());
             BloomFilter filter = new BloomFilter(1024 * 1024, 0.01);
@@ -257,17 +248,11 @@ public final class HiveTestUtils
                 dynamicFilters.add(new BloomFilterDynamicFilter("filter", columnHandle, out.toByteArray(), DynamicFilter.Type.GLOBAL));
             }
             catch (IOException e) {
-                // could be ignored
             }
 
-            return ImmutableList.of(dynamicFilters);
+            return dynamicFilters;
         };
 
         return dynamicFilterSupplier;
-    }
-
-    public static Timestamp hiveTimestamp(LocalDateTime local)
-    {
-        return Timestamp.ofEpochSecond(local.toEpochSecond(ZoneOffset.UTC), local.getNano());
     }
 }

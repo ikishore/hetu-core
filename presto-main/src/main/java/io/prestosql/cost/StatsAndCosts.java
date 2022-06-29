@@ -91,8 +91,8 @@ public class StatsAndCosts
     {
         Iterable<PlanNode> planIterator = Traverser.forTree(PlanNode::getSources)
                 .depthFirstPreOrder(root);
-        ImmutableMap.Builder<PlanNodeId, PlanNodeStatsEstimate> tmpStats = ImmutableMap.builder();
-        ImmutableMap.Builder<PlanNodeId, PlanCostEstimate> tmpCosts = ImmutableMap.builder();
+        ImmutableMap.Builder<PlanNodeId, PlanNodeStatsEstimate> stats = ImmutableMap.builder();
+        ImmutableMap.Builder<PlanNodeId, PlanCostEstimate> costs = ImmutableMap.builder();
         Set<PlanNodeId> visitedPlanNodeId = new HashSet<>();
         for (PlanNode node : planIterator) {
             PlanNodeId id = node.getId();
@@ -102,37 +102,32 @@ public class StatsAndCosts
             }
 
             visitedPlanNodeId.add(id);
-            tmpStats.put(id, statsProvider.getStats(node));
-            tmpCosts.put(id, costProvider.getCost(node));
+            stats.put(id, statsProvider.getStats(node));
+            costs.put(id, costProvider.getCost(node));
         }
-        return new StatsAndCosts(tmpStats.build(), tmpCosts.build());
+        return new StatsAndCosts(stats.build(), costs.build());
     }
 
     public static StatsAndCosts create(StageInfo stageInfo)
     {
         ImmutableMap.Builder<PlanNodeId, PlanNodeStatsEstimate> planNodeStats = ImmutableMap.builder();
         ImmutableMap.Builder<PlanNodeId, PlanCostEstimate> planNodeCosts = ImmutableMap.builder();
-        Set<PlanNodeId> visitedPlanNodeId = new HashSet<>();
-        reconstructStatsAndCosts(stageInfo, planNodeStats, planNodeCosts, visitedPlanNodeId);
+        reconstructStatsAndCosts(stageInfo, planNodeStats, planNodeCosts);
         return new StatsAndCosts(planNodeStats.build(), planNodeCosts.build());
     }
 
     private static void reconstructStatsAndCosts(
             StageInfo stage,
             ImmutableMap.Builder<PlanNodeId, PlanNodeStatsEstimate> planNodeStats,
-            ImmutableMap.Builder<PlanNodeId, PlanCostEstimate> planNodeCosts,
-            Set<PlanNodeId> visitedPlanNodeId)
+            ImmutableMap.Builder<PlanNodeId, PlanCostEstimate> planNodeCosts)
     {
         PlanFragment planFragment = stage.getPlan();
         if (planFragment != null) {
-            if (!visitedPlanNodeId.contains(planFragment.getRoot().getId())) {
-                visitedPlanNodeId.add(planFragment.getRoot().getId());
-                planNodeStats.putAll(planFragment.getStatsAndCosts().getStats());
-                planNodeCosts.putAll(planFragment.getStatsAndCosts().getCosts());
-            }
+            planNodeStats.putAll(planFragment.getStatsAndCosts().getStats());
+            planNodeCosts.putAll(planFragment.getStatsAndCosts().getCosts());
         }
         for (StageInfo subStage : stage.getSubStages()) {
-            reconstructStatsAndCosts(subStage, planNodeStats, planNodeCosts, visitedPlanNodeId);
+            reconstructStatsAndCosts(subStage, planNodeStats, planNodeCosts);
         }
     }
 }

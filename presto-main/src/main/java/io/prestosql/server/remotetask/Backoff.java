@@ -15,8 +15,8 @@ package io.prestosql.server.remotetask;
 
 import com.google.common.annotations.VisibleForTesting;
 import com.google.common.base.Ticker;
+import com.google.common.collect.ImmutableList;
 import io.airlift.units.Duration;
-import io.prestosql.spi.failuredetector.IBackoff;
 
 import javax.annotation.concurrent.ThreadSafe;
 
@@ -31,19 +31,27 @@ import static java.util.concurrent.TimeUnit.NANOSECONDS;
 
 @ThreadSafe
 public class Backoff
-        implements IBackoff
 {
-    protected final int minTries;
-    protected final long maxFailureIntervalNanos;
-    protected final Ticker ticker;
-    protected final long[] backoffDelayIntervalsNanos;
+    private static final int MIN_RETRIES = 3;
+    private static final List<Duration> DEFAULT_BACKOFF_DELAY_INTERVALS = ImmutableList.<Duration>builder()
+            .add(new Duration(0, MILLISECONDS))
+            .add(new Duration(50, MILLISECONDS))
+            .add(new Duration(100, MILLISECONDS))
+            .add(new Duration(200, MILLISECONDS))
+            .add(new Duration(500, MILLISECONDS))
+            .build();
 
-    protected long firstFailureTime;
-    protected long lastFailureTime;
-    protected long failureCount;
-    protected long failureRequestTimeTotal;
+    private final int minTries;
+    private final long maxFailureIntervalNanos;
+    private final Ticker ticker;
+    private final long[] backoffDelayIntervalsNanos;
 
-    protected long lastRequestStart;
+    private long firstFailureTime;
+    private long lastFailureTime;
+    private long failureCount;
+    private long failureRequestTimeTotal;
+
+    private long lastRequestStart;
 
     public Backoff(Duration maxFailureInterval)
     {
@@ -100,30 +108,19 @@ public class Backoff
     {
         lastRequestStart = 0;
         firstFailureTime = 0;
-        resetFailureCount();
-        lastFailureTime = 0;
-    }
-
-    protected synchronized void resetFailureCount()
-    {
         failureCount = 0;
-    }
-
-    protected synchronized void updateFailureCount()
-    {
-        failureCount++;
+        lastFailureTime = 0;
     }
 
     /**
      * @return true if the failure is considered permanent
-     * min retried and maxErrorDuration is passed.
      */
     public synchronized boolean failure()
     {
         long now = ticker.read();
 
         lastFailureTime = now;
-        updateFailureCount();
+        failureCount++;
         if (lastRequestStart != 0) {
             failureRequestTimeTotal += now - lastRequestStart;
             lastRequestStart = 0;
@@ -135,7 +132,7 @@ public class Backoff
             return false;
         }
 
-        if (getFailureCount() < minTries) {
+        if (failureCount < minTries) {
             return false;
         }
 
@@ -145,12 +142,12 @@ public class Backoff
 
     public synchronized long getBackoffDelayNanos()
     {
-        int tmpFailureCount = (int) min(backoffDelayIntervalsNanos.length, getFailureCount());
-        if (tmpFailureCount == 0) {
+        int failureCount = (int) min(backoffDelayIntervalsNanos.length, this.failureCount);
+        if (failureCount == 0) {
             return 0;
         }
         // expected amount of time to delay from the last failure time
-        long currentDelay = backoffDelayIntervalsNanos[tmpFailureCount - 1];
+        long currentDelay = backoffDelayIntervalsNanos[failureCount - 1];
 
         // calculate expected delay from now
         long nanosSinceLastFailure = ticker.read() - lastFailureTime;

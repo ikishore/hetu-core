@@ -27,11 +27,11 @@ import io.airlift.bytecode.instruction.LabelNode;
 import io.airlift.slice.Slice;
 import io.prestosql.spi.block.BlockBuilder;
 import io.prestosql.spi.connector.ConnectorSession;
-import io.prestosql.spi.function.BuiltInScalarFunctionImplementation;
-import io.prestosql.spi.function.BuiltInScalarFunctionImplementation.ArgumentProperty;
-import io.prestosql.spi.function.BuiltInScalarFunctionImplementation.NullConvention;
-import io.prestosql.spi.function.BuiltInScalarFunctionImplementation.ScalarImplementationChoice;
 import io.prestosql.spi.function.ScalarFunctionImplementation;
+import io.prestosql.spi.function.ScalarFunctionImplementation.ArgumentProperty;
+import io.prestosql.spi.function.ScalarFunctionImplementation.NullConvention;
+import io.prestosql.spi.function.ScalarFunctionImplementation.ScalarImplementationChoice;
+import io.prestosql.spi.function.Signature;
 import io.prestosql.spi.type.Type;
 import io.prestosql.sql.gen.InputReferenceCompiler.InputReferenceNode;
 
@@ -43,18 +43,11 @@ import java.util.Optional;
 
 import static com.google.common.base.Preconditions.checkArgument;
 import static com.google.common.base.Preconditions.checkState;
-import static com.google.common.collect.ImmutableList.toImmutableList;
 import static io.airlift.bytecode.OpCode.NOP;
 import static io.airlift.bytecode.expression.BytecodeExpressions.constantFalse;
 import static io.airlift.bytecode.expression.BytecodeExpressions.constantTrue;
 import static io.airlift.bytecode.expression.BytecodeExpressions.invokeDynamic;
-import static io.prestosql.spi.function.BuiltInScalarFunctionImplementation.ArgumentProperty.valueTypeArgumentProperty;
-import static io.prestosql.spi.function.BuiltInScalarFunctionImplementation.ArgumentType.VALUE_TYPE;
-import static io.prestosql.spi.function.BuiltInScalarFunctionImplementation.NullConvention.BLOCK_AND_POSITION;
-import static io.prestosql.spi.function.BuiltInScalarFunctionImplementation.NullConvention.RETURN_NULL_ON_NULL;
-import static io.prestosql.spi.function.BuiltInScalarFunctionImplementation.NullConvention.USE_BOXED_TYPE;
-import static io.prestosql.spi.function.BuiltInScalarFunctionImplementation.NullConvention.USE_NULL_FLAG;
-import static io.prestosql.spi.function.BuiltInScalarFunctionImplementation.ReturnPlaceConvention.STACK;
+import static io.prestosql.spi.function.ScalarFunctionImplementation.ArgumentType.VALUE_TYPE;
 import static io.prestosql.sql.gen.Bootstrap.BOOTSTRAP_METHOD;
 import static java.lang.String.format;
 
@@ -174,7 +167,7 @@ public final class BytecodeUtils
                 .setDescription("invoke " + name);
 
         List<Class<?>> stackTypes = new ArrayList<>();
-        if (function instanceof BuiltInScalarFunctionImplementation && ((BuiltInScalarFunctionImplementation) function).getInstanceFactory().isPresent()) {
+        if (function.getInstanceFactory().isPresent()) {
             checkArgument(instance.isPresent());
         }
 
@@ -185,7 +178,7 @@ public final class BytecodeUtils
         int realParameterIndex = 0;
 
         // Go through all the choices in the function and then pick the best one
-        List<ScalarImplementationChoice> choices = getAllScalarFunctionImplementationChoices(function);
+        List<ScalarImplementationChoice> choices = function.getAllChoices();
         ScalarImplementationChoice bestChoice = null;
         for (ScalarImplementationChoice currentChoice : choices) {
             boolean isValid = true;
@@ -346,6 +339,11 @@ public final class BytecodeUtils
         return invokeDynamic(BOOTSTRAP_METHOD, ImmutableList.of(binding.getBindingId()), name, binding.getType());
     }
 
+    public static BytecodeExpression invoke(Binding binding, Signature signature)
+    {
+        return invoke(binding, signature.getName());
+    }
+
     public static BytecodeNode generateWrite(CallSiteBinder callSiteBinder, Scope scope, Variable wasNullVariable, Type type)
     {
         Class<?> valueJavaType = type.getJavaType();
@@ -380,31 +378,5 @@ public final class BytecodeUtils
                                 .getVariable(tempOutput)
                                 .getVariable(tempValue)
                                 .invokeInterface(Type.class, methodName, void.class, BlockBuilder.class, valueJavaType)));
-    }
-
-    public static List<ScalarImplementationChoice> getAllScalarFunctionImplementationChoices(ScalarFunctionImplementation function)
-    {
-        if (function instanceof BuiltInScalarFunctionImplementation) {
-            return ((BuiltInScalarFunctionImplementation) function).getAllChoices();
-        }
-        return ImmutableList.of(new ScalarImplementationChoice(
-                function.isNullable(),
-                function.getInvocationConvention().getArgumentConventions().stream().map(invocationArgumentConvention -> {
-                    switch (invocationArgumentConvention) {
-                        case NEVER_NULL:
-                            return valueTypeArgumentProperty(RETURN_NULL_ON_NULL);
-                        case BOXED_NULLABLE:
-                            return valueTypeArgumentProperty(USE_BOXED_TYPE);
-                        case NULL_FLAG:
-                            return valueTypeArgumentProperty(USE_NULL_FLAG);
-                        case BLOCK_POSITION:
-                            return valueTypeArgumentProperty(BLOCK_AND_POSITION);
-                        default:
-                            throw new UnsupportedOperationException(format("InvocationArgumentConvention %s cannot be a value type", invocationArgumentConvention));
-                    }
-                }).collect(toImmutableList()),
-                STACK,
-                function.getMethodHandle(),
-                Optional.empty()));
     }
 }

@@ -70,10 +70,11 @@ public class TableScanStatsRule
     protected Optional<PlanNodeStatsEstimate> doCalculate(TableScanNode node, StatsProvider sourceStats, Lookup lookup, Session session, TypeProvider types)
     {
         // TODO Construct predicate like AddExchanges's LayoutConstraintEvaluator
+//        System.out.println("TableScan Stats Rule: doCalculate ");
         TupleDomain<ColumnHandle> predicate = metadata.getTableProperties(session, node.getTable()).getPredicate();
         Constraint constraint = new Constraint(predicate);
 
-        TableStatistics tableStatistics = metadata.getTableStatistics(session, node.getTable(), constraint, true);
+        TableStatistics tableStatistics = metadata.getTableStatistics(session, node.getTable(), constraint);
         verify(tableStatistics != null, "tableStatistics is null for %s", node);
 
         Map<Symbol, SymbolStatsEstimate> outputSymbolStats = new HashMap<>();
@@ -81,7 +82,7 @@ public class TableScanStatsRule
         Map<ColumnHandle, Symbol> assignments = ImmutableBiMap.copyOf(node.getAssignments()).inverse();
 
         boolean isPredicatesPushDown = false;
-        if ((predicate.isAll() || predicate.getDomains().get().equals(node.getEnforcedConstraint().getDomains().get()))
+        if (predicate.isAll()
                 && !(node.getEnforcedConstraint().isAll() || node.getEnforcedConstraint().isNone())) {
             predicate = node.getEnforcedConstraint();
             isPredicatesPushDown = true;
@@ -129,7 +130,7 @@ public class TableScanStatsRule
 
             Expression pushDownExpression = domainTranslator.toPredicate(predicate.transform(assignments :: get));
             PlanNodeStatsEstimate estimate = filterStatsCalculator.filterStats(tableEstimates, pushDownExpression, session, types);
-            if ((isDefaultFilterFactorEnabled(session) || sourceStats.isEnforceDefaultFilterFactor()) && estimate.isOutputRowCountUnknown()) {
+            if (isDefaultFilterFactorEnabled(session) && estimate.isOutputRowCountUnknown()) {
                 PlanNodeStatsEstimate finalTableEstimates = tableEstimates;
                 estimate = tableEstimates.mapOutputRowCount(sourceRowCount -> finalTableEstimates.getOutputRowCount() * UNKNOWN_FILTER_COEFFICIENT);
             }
@@ -140,7 +141,7 @@ public class TableScanStatsRule
         return Optional.of(tableEstimates);
     }
 
-    public static SymbolStatsEstimate toSymbolStatistics(TableStatistics tableStatistics, ColumnStatistics columnStatistics, Type type)
+    private static SymbolStatsEstimate toSymbolStatistics(TableStatistics tableStatistics, ColumnStatistics columnStatistics, Type type)
     {
         requireNonNull(tableStatistics, "tableStatistics is null");
         requireNonNull(columnStatistics, "columnStatistics is null");

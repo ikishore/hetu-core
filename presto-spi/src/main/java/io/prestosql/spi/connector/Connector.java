@@ -13,7 +13,6 @@
  */
 package io.prestosql.spi.connector;
 
-import io.prestosql.spi.function.ExternalFunctionHub;
 import io.prestosql.spi.procedure.Procedure;
 import io.prestosql.spi.session.PropertyMetadata;
 import io.prestosql.spi.transaction.IsolationLevel;
@@ -22,7 +21,6 @@ import java.util.Collection;
 import java.util.Collections;
 import java.util.List;
 import java.util.Map;
-import java.util.Optional;
 import java.util.Set;
 
 import static java.util.Collections.emptyList;
@@ -212,13 +210,5 @@ public interface Connector
     default ConnectorMetadata getConnectorMetadata()
     {
         throw new UnsupportedOperationException();
-    }
-
-    /**
-     * return a external function hub which contain external function information
-     */
-    default Optional<ExternalFunctionHub> getExternalFunctionHub()
-    {
-        return Optional.empty();
     }
 }

@@ -19,31 +19,31 @@ import io.prestosql.spi.Page;
 
 import java.util.List;
 import java.util.concurrent.ThreadLocalRandom;
-import java.util.function.BiConsumer;
+import java.util.function.Consumer;
 
 import static java.util.Objects.requireNonNull;
 
 class RandomExchanger
         implements LocalExchanger
 {
-    private final List<BiConsumer<PageReference, String>> buffers;
+    private final List<Consumer<PageReference>> buffers;
     private final LocalExchangeMemoryManager memoryManager;
 
-    public RandomExchanger(List<BiConsumer<PageReference, String>> buffers, LocalExchangeMemoryManager memoryManager)
+    public RandomExchanger(List<Consumer<PageReference>> buffers, LocalExchangeMemoryManager memoryManager)
     {
         this.buffers = ImmutableList.copyOf(requireNonNull(buffers, "buffers is null"));
         this.memoryManager = requireNonNull(memoryManager, "memoryManager is null");
     }
 
     @Override
-    public void accept(Page page, String origin)
+    public void accept(Page page)
     {
         memoryManager.updateMemoryUsage(page.getRetainedSizeInBytes());
 
         PageReference pageReference = new PageReference(page, 1, () -> memoryManager.updateMemoryUsage(-page.getRetainedSizeInBytes()));
 
         int randomIndex = ThreadLocalRandom.current().nextInt(buffers.size());
-        buffers.get(randomIndex).accept(pageReference, origin);
+        buffers.get(randomIndex).accept(pageReference);
     }
 
     @Override

@@ -21,8 +21,6 @@ import io.prestosql.spi.Page;
 import io.prestosql.spi.PageBuilder;
 import io.prestosql.spi.block.BlockBuilder;
 import io.prestosql.spi.connector.ConnectorSession;
-import io.prestosql.spi.connector.QualifiedObjectName;
-import io.prestosql.spi.function.BuiltInFunctionHandle;
 import io.prestosql.spi.function.OperatorType;
 import io.prestosql.spi.relation.RowExpression;
 import io.prestosql.spi.type.Type;
@@ -108,8 +106,8 @@ public class BenchmarkEqualsOperator
 
     private static RowExpression createConjunction(RowExpression left, RowExpression right)
     {
-        return call(QualifiedObjectName.valueOfDefaultFunction("OR").toString(),
-                new BuiltInFunctionHandle(internalScalarFunction(QualifiedObjectName.valueOfDefaultFunction("OR"), BOOLEAN.getTypeSignature(), BOOLEAN.getTypeSignature(), BOOLEAN.getTypeSignature())),
+        return call(
+                internalScalarFunction("OR", BOOLEAN.getTypeSignature(), BOOLEAN.getTypeSignature(), BOOLEAN.getTypeSignature()),
                 BOOLEAN,
                 left,
                 right);
@@ -117,8 +115,8 @@ public class BenchmarkEqualsOperator
 
     private static RowExpression createComparison(int leftField, int rightField)
     {
-        return call(OperatorType.EQUAL.getFunctionName().toString(),
-                new BuiltInFunctionHandle(internalOperator(OperatorType.EQUAL, BOOLEAN.getTypeSignature(), BIGINT.getTypeSignature(), BIGINT.getTypeSignature())),
+        return call(
+                internalOperator(OperatorType.EQUAL, BOOLEAN.getTypeSignature(), BIGINT.getTypeSignature(), BIGINT.getTypeSignature()),
                 BOOLEAN,
                 field(leftField, BIGINT),
                 field(rightField, BIGINT));

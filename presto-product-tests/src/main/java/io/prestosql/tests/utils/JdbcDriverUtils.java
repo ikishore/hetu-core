@@ -63,10 +63,9 @@ public class JdbcDriverUtils
         return null;
     }
 
-    public static void setSessionProperty(Connection connection, String key, String inputValue)
+    public static void setSessionProperty(Connection connection, String key, String value)
             throws SQLException
     {
-        String value = inputValue;
         if (usingPrestoJdbcDriver(connection)) {
             PrestoConnection prestoConnection = connection.unwrap(PrestoConnection.class);
             prestoConnection.setSessionProperty(key, value);

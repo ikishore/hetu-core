@@ -25,12 +25,7 @@ import io.prestosql.spi.relation.RowExpression;
 
 import javax.annotation.concurrent.Immutable;
 
-import java.util.ArrayList;
-import java.util.Collections;
-import java.util.List;
-import java.util.Map;
-import java.util.Optional;
-import java.util.UUID;
+import java.util.*;
 
 import static com.google.common.base.MoreObjects.toStringHelper;
 import static com.google.common.base.Preconditions.checkArgument;
@@ -41,9 +36,12 @@ import static java.util.Objects.requireNonNull;
 public class TableScanNode
         extends PlanNode
 {
+    private final Long querySet;
+
     private final TableHandle table;
     private final List<Symbol> outputSymbols;
-    private final Map<Symbol, ColumnHandle> assignments;
+    private final Map<Symbol, ColumnHandle> assignments; // symbol -> column
+    private final Map<Integer, String> predicateCollector;
 
     private final TupleDomain<ColumnHandle> enforcedConstraint;
     private final Optional<RowExpression> predicate;
@@ -72,6 +70,8 @@ public class TableScanNode
     public TableScanNode(
             @JsonProperty("id") PlanNodeId id,
             @JsonProperty("table") TableHandle table,
+            @JsonProperty("querySet") Long querySet,
+            @JsonProperty("predicateCollector") Map<Integer, String> predicateCollector,
             @JsonProperty("outputSymbols") List<Symbol> outputs,
             @JsonProperty("assignments") Map<Symbol, ColumnHandle> assignments,
             @JsonProperty("predicate") Optional<RowExpression> predicate,
@@ -83,9 +83,39 @@ public class TableScanNode
         // This constructor is for JSON deserialization only. Do not use.
         super(id);
         this.table = requireNonNull(table, "table is null");
+        this.querySet = querySet;
+        this.predicateCollector = predicateCollector;
         this.outputSymbols = ImmutableList.copyOf(requireNonNull(outputs, "outputs is null"));
         this.assignments = ImmutableMap.copyOf(requireNonNull(assignments, "assignments is null"));
-        checkArgument(assignments.keySet().containsAll(outputs), "assignments does not cover all of outputs");
+        checkArgument(assignments.keySet().containsAll(outputs) || outputs.get(outputs.size()-1).getName().startsWith("query_set"), "assignments does not cover all of outputs");
+        this.enforcedConstraint = null;
+        this.predicate = predicate;
+        this.strategy = strategy;
+        this.reuseTableScanMappingId = reuseTableScanMappingId;
+        this.filterExpr = null;
+        this.consumerTableScanNodeCount = consumerTableScanNodeCount;
+        this.forDelete = forDelete;
+    }
+
+    public TableScanNode(
+            PlanNodeId id,
+            TableHandle table,
+            List<Symbol> outputs,
+            Map<Symbol, ColumnHandle> assignments,
+            Optional<RowExpression> predicate,
+            ReuseExchangeOperator.STRATEGY strategy,
+            UUID reuseTableScanMappingId,
+            Integer consumerTableScanNodeCount,
+            boolean forDelete)
+    {
+        // This constructor is for JSON deserialization only. Do not use.
+        super(id);
+        this.table = requireNonNull(table, "table is null");
+        this.querySet = 1L;
+        this.predicateCollector = new HashMap<>();
+        this.outputSymbols = ImmutableList.copyOf(requireNonNull(outputs, "outputs is null"));
+        this.assignments = ImmutableMap.copyOf(requireNonNull(assignments, "assignments is null"));
+        checkArgument(assignments.keySet().containsAll(outputs) || outputs.get(outputs.size()-1).getName().startsWith("query_set"), "assignments does not cover all of outputs");
         this.enforcedConstraint = null;
         this.predicate = predicate;
         this.strategy = strategy;
@@ -109,9 +139,70 @@ public class TableScanNode
     {
         super(id);
         this.table = requireNonNull(table, "table is null");
+        this.querySet = 1L;
+        this.predicateCollector = new HashMap<>();
         this.outputSymbols = ImmutableList.copyOf(requireNonNull(outputs, "outputs is null"));
         this.assignments = ImmutableMap.copyOf(requireNonNull(assignments, "assignments is null"));
-        checkArgument(assignments.keySet().containsAll(outputs), "assignments does not cover all of outputs");
+        checkArgument(assignments.keySet().containsAll(outputs) || outputs.get(outputs.size()-1).getName().startsWith("query_set"), "assignments does not cover all of outputs");
+        this.enforcedConstraint = requireNonNull(enforcedConstraint, "enforcedConstraint is null");
+        this.predicate = requireNonNull(predicate, "predicate expression cannot be empty");
+        this.strategy = strategy;
+        this.reuseTableScanMappingId = reuseTableScanMappingId;
+        this.filterExpr = null;
+        this.consumerTableScanNodeCount = consumerTableScanNodeCount;
+        this.forDelete = forDelete;
+    }
+
+    public TableScanNode(
+            PlanNodeId id,
+            TableHandle table,
+            Long querySet,
+            List<Symbol> outputs,
+            Map<Symbol, ColumnHandle> assignments,
+            TupleDomain<ColumnHandle> enforcedConstraint,
+            Optional<RowExpression> predicate,
+            ReuseExchangeOperator.STRATEGY strategy,
+            UUID reuseTableScanMappingId,
+            Integer consumerTableScanNodeCount,
+            boolean forDelete)
+    {
+        super(id);
+        this.table = requireNonNull(table, "table is null");
+        this.querySet = querySet;
+        this.predicateCollector = new HashMap<>();
+        this.outputSymbols = ImmutableList.copyOf(requireNonNull(outputs, "outputs is null"));
+        this.assignments = ImmutableMap.copyOf(requireNonNull(assignments, "assignments is null"));
+        checkArgument(assignments.keySet().containsAll(outputs) || outputs.get(outputs.size()-1).getName().startsWith("query_set"), "assignments does not cover all of outputs");
+        this.enforcedConstraint = requireNonNull(enforcedConstraint, "enforcedConstraint is null");
+        this.predicate = requireNonNull(predicate, "predicate expression cannot be empty");
+        this.strategy = strategy;
+        this.reuseTableScanMappingId = reuseTableScanMappingId;
+        this.filterExpr = null;
+        this.consumerTableScanNodeCount = consumerTableScanNodeCount;
+        this.forDelete = forDelete;
+    }
+
+    public TableScanNode(
+            PlanNodeId id,
+            TableHandle table,
+            Long querySet,
+            Map<Integer, String> predicateCollector,
+            List<Symbol> outputs,
+            Map<Symbol, ColumnHandle> assignments,
+            TupleDomain<ColumnHandle> enforcedConstraint,
+            Optional<RowExpression> predicate,
+            ReuseExchangeOperator.STRATEGY strategy,
+            UUID reuseTableScanMappingId,
+            Integer consumerTableScanNodeCount,
+            boolean forDelete)
+    {
+        super(id);
+        this.table = requireNonNull(table, "table is null");
+        this.querySet = querySet;
+        this.predicateCollector = predicateCollector;
+        this.outputSymbols = ImmutableList.copyOf(requireNonNull(outputs, "outputs is null"));
+        this.assignments = ImmutableMap.copyOf(requireNonNull(assignments, "assignments is null"));
+        checkArgument(assignments.keySet().containsAll(outputs) || outputs.get(outputs.size()-1).getName().startsWith("query_set"), "assignments does not cover all of outputs");
         this.enforcedConstraint = requireNonNull(enforcedConstraint, "enforcedConstraint is null");
         this.predicate = requireNonNull(predicate, "predicate expression cannot be empty");
         this.strategy = strategy;
@@ -139,6 +230,23 @@ public class TableScanNode
     public void setReuseTableScanMappingId(UUID reuseTableScanMappingId)
     {
         this.reuseTableScanMappingId = reuseTableScanMappingId;
+    }
+
+    public void addPredicate(Integer queryId, String predicate)
+    {
+        predicateCollector.put(queryId, predicate);
+    }
+
+    @JsonProperty("predicateCollector")
+    public Map<Integer, String> getPredicateCollector()
+    {
+        return predicateCollector;
+    }
+
+    @JsonProperty("querySet")
+    public Long getQuerySet()
+    {
+        return querySet;
     }
 
     @JsonProperty("table")
@@ -287,7 +395,7 @@ public class TableScanNode
         return true;
     }
 
-    public static String getActualColName(String var)
+    public String getActualColName(String var)
     {
         // TODO: Instead of stripping off _, we can get corresponding name from assigments column mapping.
         int index = var.lastIndexOf("_");
@@ -299,7 +407,7 @@ public class TableScanNode
         }
     }
 
-    private static boolean isInteger(String st)
+    private boolean isInteger(String st)
     {
         try {
             Integer.parseInt(st);

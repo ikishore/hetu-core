@@ -32,7 +32,6 @@ import io.prestosql.tests.tpch.TpchIndexedData;
 import io.prestosql.tests.tpch.TpchIndexedData.IndexedTable;
 import io.prestosql.tests.tpch.TpchScaledTable;
 
-import java.nio.charset.StandardCharsets;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Set;
@@ -182,7 +181,7 @@ public class ThriftIndexedTpchService
                     }
                     else {
                         checkArgument(bytes != null);
-                        result.add(new String(bytes, startOffset, sizes[index], StandardCharsets.UTF_8));
+                        result.add(new String(bytes, startOffset, sizes[index]));
                         startOffset += sizes[index];
                     }
                 }

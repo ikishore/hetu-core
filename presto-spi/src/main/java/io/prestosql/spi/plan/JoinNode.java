@@ -20,6 +20,8 @@ import com.google.common.collect.ImmutableMap;
 import com.google.common.collect.ImmutableSet;
 import io.prestosql.spi.relation.RowExpression;
 
+import java.util.*;
+
 import javax.annotation.concurrent.Immutable;
 
 import java.util.HashSet;
@@ -53,6 +55,9 @@ public class JoinNode
     private final Optional<DistributionType> distributionType;
     private final Optional<Boolean> spillable;
     private final Map<String, Symbol> dynamicFilters;
+
+
+    public Map<String, Symbol> symbolNamesToAbsoluteNames = new HashMap<String, Symbol>();
 
     @JsonCreator
     public JoinNode(
@@ -93,6 +98,7 @@ public class JoinNode
         this.spillable = spillable;
         this.dynamicFilters = ImmutableMap.copyOf(requireNonNull(dynamicFilters, "dynamicFilters is null"));
 
+
         Set<Symbol> inputSymbols = ImmutableSet.<Symbol>builder()
                 .addAll(left.getOutputSymbols())
                 .addAll(right.getOutputSymbols())
@@ -118,9 +124,9 @@ public class JoinNode
                     distributionType.get());
         }
 
-        for (Symbol symbol : dynamicFilters.values()) {
-            checkArgument(right.getOutputSymbols().contains(symbol), "Right join input doesn't contain symbol for dynamic filter: %s", symbol);
-        }
+//        for (Symbol symbol : dynamicFilters.values()) {
+//            checkArgument(right.getOutputSymbols().contains(symbol), "Right join input doesn't contain symbol for dynamic filter: %s", symbol);
+//        }
     }
 
     public JoinNode flipChildren()

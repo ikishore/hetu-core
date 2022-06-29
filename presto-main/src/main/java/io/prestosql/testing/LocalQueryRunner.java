@@ -13,7 +13,6 @@
  */
 package io.prestosql.testing;
 
-import com.esotericsoftware.kryo.Kryo;
 import com.google.common.collect.ImmutableList;
 import com.google.common.collect.ImmutableMap;
 import com.google.common.collect.ImmutableSet;
@@ -42,10 +41,7 @@ import io.prestosql.cost.CostCalculator;
 import io.prestosql.cost.CostCalculatorUsingExchanges;
 import io.prestosql.cost.CostCalculatorWithEstimatedExchanges;
 import io.prestosql.cost.CostComparator;
-import io.prestosql.cost.FilterStatsCalculator;
-import io.prestosql.cost.ScalarStatsCalculator;
 import io.prestosql.cost.StatsCalculator;
-import io.prestosql.cost.StatsNormalizer;
 import io.prestosql.cost.TaskCountEstimator;
 import io.prestosql.cube.CubeManager;
 import io.prestosql.dynamicfilter.DynamicFilterCacheManager;
@@ -80,10 +76,6 @@ import io.prestosql.execution.scheduler.LegacyNetworkTopology;
 import io.prestosql.execution.scheduler.NodeScheduler;
 import io.prestosql.execution.scheduler.NodeSchedulerConfig;
 import io.prestosql.execution.warnings.WarningCollector;
-import io.prestosql.failuredetector.FailureDetectorManager;
-import io.prestosql.failuredetector.FailureRetryConfig;
-import io.prestosql.failuredetector.NoOpFailureDetector;
-import io.prestosql.failuredetector.TimeoutFailureRetryFactory;
 import io.prestosql.filesystem.FileSystemClientManager;
 import io.prestosql.heuristicindex.HeuristicIndexerManager;
 import io.prestosql.index.IndexManager;
@@ -91,29 +83,20 @@ import io.prestosql.memory.MemoryManagerConfig;
 import io.prestosql.metadata.AnalyzePropertyManager;
 import io.prestosql.metadata.CatalogManager;
 import io.prestosql.metadata.ColumnPropertyManager;
-import io.prestosql.metadata.FunctionAndTypeManager;
 import io.prestosql.metadata.HandleResolver;
 import io.prestosql.metadata.InMemoryNodeManager;
 import io.prestosql.metadata.Metadata;
 import io.prestosql.metadata.MetadataManager;
 import io.prestosql.metadata.MetadataUtil;
+import io.prestosql.metadata.QualifiedObjectName;
 import io.prestosql.metadata.QualifiedTablePrefix;
 import io.prestosql.metadata.SchemaPropertyManager;
 import io.prestosql.metadata.SessionPropertyManager;
 import io.prestosql.metadata.Split;
 import io.prestosql.metadata.TablePropertyManager;
 import io.prestosql.metastore.HetuMetaStoreManager;
-import io.prestosql.operator.Driver;
-import io.prestosql.operator.DriverContext;
-import io.prestosql.operator.DriverFactory;
-import io.prestosql.operator.LookupJoinOperators;
-import io.prestosql.operator.OperatorContext;
-import io.prestosql.operator.OutputFactory;
-import io.prestosql.operator.PagesIndex;
-import io.prestosql.operator.StageExecutionDescriptor;
-import io.prestosql.operator.TaskContext;
+import io.prestosql.operator.*;
 import io.prestosql.operator.index.IndexJoinLookupStats;
-import io.prestosql.security.GroupProviderManager;
 import io.prestosql.seedstore.SeedStoreManager;
 import io.prestosql.server.InternalCommunicationConfig;
 import io.prestosql.server.PluginManager;
@@ -121,14 +104,11 @@ import io.prestosql.server.PluginManagerConfig;
 import io.prestosql.server.ServerConfig;
 import io.prestosql.server.SessionPropertyDefaults;
 import io.prestosql.server.security.PasswordAuthenticatorManager;
-import io.prestosql.snapshot.RecoveryConfig;
 import io.prestosql.spi.PageIndexerFactory;
 import io.prestosql.spi.PageSorter;
 import io.prestosql.spi.Plugin;
 import io.prestosql.spi.connector.CatalogName;
 import io.prestosql.spi.connector.ConnectorFactory;
-import io.prestosql.spi.connector.QualifiedObjectName;
-import io.prestosql.spi.failuredetector.FailureRetryPolicy;
 import io.prestosql.spi.metadata.TableHandle;
 import io.prestosql.spi.operator.ReuseExchangeOperator;
 import io.prestosql.spi.plan.PlanNode;
@@ -212,7 +192,6 @@ import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
-import java.util.Properties;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.ScheduledExecutorService;
 import java.util.concurrent.TimeUnit;
@@ -255,9 +234,6 @@ public class LocalQueryRunner
     private final PageSorter pageSorter;
     private final PageIndexerFactory pageIndexerFactory;
     private final MetadataManager metadata;
-    private final ScalarStatsCalculator scalarStatsCalculator;
-    private final StatsNormalizer statsNormalizer;
-    private final FilterStatsCalculator filterStatsCalculator;
     private final StatsCalculator statsCalculator;
     private final CostCalculator costCalculator;
     private final CostCalculator estimatedExchangesCostCalculator;
@@ -273,7 +249,6 @@ public class LocalQueryRunner
     private final FileSingleStreamSpillerFactory singleStreamSpillerFactory;
     private final SpillerFactory spillerFactory;
     private final PartitioningSpillerFactory partitioningSpillerFactory;
-    private final HetuMetaStoreManager hetuMetaStoreManager;
 
     private final PageFunctionCompiler pageFunctionCompiler;
     private final ExpressionCompiler expressionCompiler;
@@ -347,10 +322,9 @@ public class LocalQueryRunner
         this.planOptimizerManager = new ConnectorPlanOptimizerManager();
 
         this.metadata = new MetadataManager(
-                new FunctionAndTypeManager(transactionManager, featuresConfig, new HandleResolver(), ImmutableSet.of(), new Kryo()),
                 featuresConfig,
                 // new HetuConfig object passed, if split filtering is needed in the runner, a modified HetuConfig object with filter settings manually set must be used.
-                new SessionPropertyManager(new SystemSessionProperties(new QueryManagerConfig(), taskManagerConfig, new MemoryManagerConfig(), featuresConfig, new HetuConfig(), new RecoveryConfig())),
+                new SessionPropertyManager(new SystemSessionProperties(new QueryManagerConfig(), taskManagerConfig, new MemoryManagerConfig(), featuresConfig, new HetuConfig())),
                 new SchemaPropertyManager(),
                 new TablePropertyManager(),
                 new ColumnPropertyManager(),
@@ -361,10 +335,7 @@ public class LocalQueryRunner
         this.planFragmenter = new PlanFragmenter(this.metadata, this.nodePartitioningManager, new QueryManagerConfig());
         this.joinCompiler = new JoinCompiler(metadata);
         this.pageIndexerFactory = new GroupByHashPageIndexerFactory(joinCompiler);
-        this.statsNormalizer = new StatsNormalizer();
-        this.scalarStatsCalculator = new ScalarStatsCalculator(metadata);
-        this.filterStatsCalculator = new FilterStatsCalculator(metadata, scalarStatsCalculator, statsNormalizer);
-        this.statsCalculator = createNewStatsCalculator(metadata, scalarStatsCalculator, statsNormalizer, filterStatsCalculator);
+        this.statsCalculator = createNewStatsCalculator(metadata);
         this.taskCountEstimator = new TaskCountEstimator(() -> nodeCountForStats);
         this.costCalculator = new CostCalculatorUsingExchanges(taskCountEstimator);
         this.estimatedExchangesCostCalculator = new CostCalculatorWithEstimatedExchanges(costCalculator, taskCountEstimator);
@@ -377,7 +348,7 @@ public class LocalQueryRunner
 
         NodeInfo nodeInfo = new NodeInfo("test");
         FileSystemClientManager fileSystemClientManager = new FileSystemClientManager();
-        this.hetuMetaStoreManager = new HetuMetaStoreManager();
+        HetuMetaStoreManager hetuMetaStoreManager = new HetuMetaStoreManager();
         heuristicIndexerManager = new HeuristicIndexerManager(fileSystemClientManager, hetuMetaStoreManager);
         this.cubeManager = new CubeManager(featuresConfig, hetuMetaStoreManager);
         this.connectorManager = new ConnectorManager(
@@ -406,8 +377,7 @@ public class LocalQueryRunner
                 new NodeSchedulerConfig(),
                 heuristicIndexerManager,
                 new RowExpressionDomainTranslator(metadata),
-                new RowExpressionDeterminismEvaluator(metadata),
-                new FilterStatsCalculator(metadata, scalarStatsCalculator, statsNormalizer));
+                new RowExpressionDeterminismEvaluator(metadata));
 
         GlobalSystemConnectorFactory globalSystemConnectorFactory = new GlobalSystemConnectorFactory(ImmutableSet.of(
                 new NodeSystemTable(nodeManager),
@@ -423,17 +393,6 @@ public class LocalQueryRunner
         SeedStoreManager seedStoreManager = new SeedStoreManager(fileSystemClientManager);
         HttpServerConfig httpServerConfig = new HttpServerConfig();
         httpServerConfig.setHttpEnabled(false);
-
-        FailureRetryConfig cfg = new FailureRetryConfig();
-        cfg.setFailureRetryPolicyProfile("test");
-        Properties prop = new Properties();
-        prop.setProperty(FailureRetryPolicy.FD_RETRY_TYPE, cfg.getFailureRetryPolicyProfile());
-        prop.setProperty(FailureRetryPolicy.MAX_RETRY_COUNT, "10");
-        prop.setProperty(FailureRetryPolicy.MAX_TIMEOUT_DURATION, "60s");
-        FailureDetectorManager.addFrConfigs(cfg.getFailureRetryPolicyProfile(), prop);
-        FailureDetectorManager.addFailureRetryFactory(new TimeoutFailureRetryFactory());
-        FailureDetectorManager failureDetectorManager = new FailureDetectorManager(cfg, new NoOpFailureDetector());
-
         this.pluginManager = new PluginManager(
                 nodeInfo,
                 new PluginManagerConfig(),
@@ -443,7 +402,6 @@ public class LocalQueryRunner
                 accessControl,
                 new PasswordAuthenticatorManager(),
                 new EventListenerManager(),
-                new GroupProviderManager(),
                 cubeManager,
                 new LocalStateStoreProvider(seedStoreManager), // Hetu: LocalStateProvider
                 new EmbeddedStateStoreLauncher(seedStoreManager,
@@ -454,8 +412,7 @@ public class LocalQueryRunner
                 seedStoreManager,
                 fileSystemClientManager,
                 hetuMetaStoreManager,
-                heuristicIndexerManager,
-                failureDetectorManager);
+                heuristicIndexerManager);
 
         connectorManager.addConnectorFactory(globalSystemConnectorFactory);
         connectorManager.createConnection(GlobalSystemConnector.NAME, GlobalSystemConnector.NAME, ImmutableMap.of());
@@ -493,12 +450,12 @@ public class LocalQueryRunner
         dataDefinitionTask = ImmutableMap.<Class<? extends Statement>, DataDefinitionTask<?>>builder()
                 .put(CreateTable.class, new CreateTableTask())
                 .put(CreateView.class, new CreateViewTask(sqlParser, featuresConfig))
-                .put(DropTable.class, new DropTableTask(cubeManager))
+                .put(DropTable.class, new DropTableTask(null))
                 .put(DropView.class, new DropViewTask())
-                .put(Comment.class, new CommentTask())
-                .put(RenameColumn.class, new RenameColumnTask(cubeManager))
-                .put(RenameTable.class, new RenameTableTask(cubeManager))
+                .put(RenameColumn.class, new RenameColumnTask())
+                .put(RenameTable.class, new RenameTableTask())
                 .put(RenameIndex.class, new RenameIndexTask())
+                .put(Comment.class, new CommentTask())
                 .put(ResetSession.class, new ResetSessionTask())
                 .put(SetSession.class, new SetSessionTask())
                 .put(Prepare.class, new PrepareTask(sqlParser))
@@ -510,7 +467,7 @@ public class LocalQueryRunner
                 .build();
 
         SpillerStats spillerStats = new SpillerStats();
-        this.singleStreamSpillerFactory = new FileSingleStreamSpillerFactory(metadata, spillerStats, featuresConfig, nodeSpillConfig, fileSystemClientManager);
+        this.singleStreamSpillerFactory = new FileSingleStreamSpillerFactory(metadata, spillerStats, featuresConfig, nodeSpillConfig);
         this.partitioningSpillerFactory = new GenericPartitioningSpillerFactory(this.singleStreamSpillerFactory);
         this.spillerFactory = new GenericSpillerFactory(singleStreamSpillerFactory);
     }
@@ -524,12 +481,6 @@ public class LocalQueryRunner
     public static LocalQueryRunner queryRunnerWithFakeNodeCountForStats(Session defaultSession, int nodeCount)
     {
         return new LocalQueryRunner(defaultSession, new FeaturesConfig(), new NodeSpillConfig(), false, false, nodeCount);
-    }
-
-    public void loadMetastore(Map<String, String> config)
-            throws IOException
-    {
-        hetuMetaStoreManager.loadHetuMetastore(new FileSystemClientManager(), config);
     }
 
     @Override
@@ -550,7 +501,7 @@ public class LocalQueryRunner
 
     public void addType(Type type)
     {
-        metadata.getFunctionAndTypeManager().addType(type);
+        metadata.addType(type);
     }
 
     @Override
@@ -582,13 +533,11 @@ public class LocalQueryRunner
         return planOptimizerManager;
     }
 
-    @Override
     public PageSourceManager getPageSourceManager()
     {
         return pageSourceManager;
     }
 
-    @Override
     public SplitManager getSplitManager()
     {
         return splitManager;
@@ -802,8 +751,7 @@ public class LocalQueryRunner
 
         NodeInfo nodeInfo = new NodeInfo("test");
 
-        FileSystemClientManager fileSystemClientManager = new FileSystemClientManager();
-        SeedStoreManager seedStoreManager = new SeedStoreManager(fileSystemClientManager);
+        SeedStoreManager seedStoreManager = new SeedStoreManager(new FileSystemClientManager());
         StateStoreProvider stateStoreProvider = new LocalStateStoreProvider(seedStoreManager);
         LocalExecutionPlanner executionPlanner = new LocalExecutionPlanner(
                 metadata,
@@ -823,15 +771,18 @@ public class LocalQueryRunner
                 singleStreamSpillerFactory,
                 partitioningSpillerFactory,
                 new PagesIndex.TestingFactory(false),
+                new SharedPagesIndex.TestingFactory(false),  //BQO
                 joinCompiler,
                 new LookupJoinOperators(),
+                new SharedJoinOperators(),  //BQO
                 new OrderingCompiler(),
                 nodeInfo,
                 stateStoreProvider,
                 new StateStoreListenerManager(stateStoreProvider),
                 new DynamicFilterCacheManager(),
                 heuristicIndexerManager,
-                cubeManager);
+                cubeManager
+        );
 
         // plan query
         StageExecutionDescriptor stageExecutionDescriptor = subplan.getFragment().getStageExecutionDescriptor();
@@ -842,10 +793,10 @@ public class LocalQueryRunner
                 subplan.getFragment().getPartitioningScheme().getOutputLayout(),
                 plan.getTypes(),
                 subplan.getFragment().getPartitionedSources(),
-                null,
                 outputFactory,
                 Optional.empty(),
                 Optional.empty(),
+                null,
                 null);
 
         // generate sources
@@ -860,8 +811,7 @@ public class LocalQueryRunner
                     stageExecutionDescriptor.isScanGroupedExecution(tableScan.getId()) ? GROUPED_SCHEDULING : UNGROUPED_SCHEDULING,
                     null,
                     Optional.empty(), Collections.emptyMap(), ImmutableSet.of(),
-                    tableScan.getStrategy() != ReuseExchangeOperator.STRATEGY.REUSE_STRATEGY_DEFAULT,
-                    tableScan.getId());
+                    tableScan.getStrategy() != ReuseExchangeOperator.STRATEGY.REUSE_STRATEGY_DEFAULT);
 
             ImmutableSet.Builder<ScheduledSplit> scheduledSplits = ImmutableSet.builder();
             while (!splitSource.isFinished()) {
@@ -895,6 +845,7 @@ public class LocalQueryRunner
             DriverFactory driverFactory = driverFactoriesBySource.get(source.getPlanNodeId());
             checkState(driverFactory != null);
             boolean partitioned = partitionedSources.contains(driverFactory.getSourceId().get());
+            System.out.println("Partitioned " + partitioned + " " + source.toString());
             for (ScheduledSplit split : source.getSplits()) {
                 DriverContext driverContext = taskContext.addPipelineContext(driverFactory.getPipelineId(), driverFactory.isInputDriver(), driverFactory.isOutputDriver(), partitioned).addDriverContext();
                 Driver driver = driverFactory.createDriver(driverContext);
@@ -979,7 +930,7 @@ public class LocalQueryRunner
         LogicalPlanner logicalPlanner = new LogicalPlanner(session, optimizers, new PlanSanityChecker(true), idAllocator, metadata, new TypeAnalyzer(sqlParser, metadata), statsCalculator, costCalculator, warningCollector);
 
         Analysis analysis = analyzer.analyze(preparedQuery.getStatement());
-        return logicalPlanner.plan(analysis, false, stage);
+        return logicalPlanner.plan(analysis, stage);
     }
 
     private static List<Split> getNextBatch(SplitSource splitSource)

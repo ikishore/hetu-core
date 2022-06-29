@@ -16,7 +16,7 @@ package io.prestosql.plugin.hive;
 import com.google.common.base.Joiner;
 import com.google.common.collect.ImmutableList;
 import com.google.common.collect.ImmutableMap;
-import com.google.common.util.concurrent.ListeningExecutorService;
+import com.google.common.io.Files;
 import io.airlift.json.JsonCodec;
 import io.airlift.slice.Slices;
 import io.airlift.tpch.LineItem;
@@ -25,23 +25,18 @@ import io.airlift.tpch.LineItemGenerator;
 import io.airlift.tpch.TpchColumnType;
 import io.airlift.tpch.TpchColumnTypes;
 import io.prestosql.GroupByHashPageIndexerFactory;
-import io.prestosql.plugin.hive.authentication.GenericExceptionAction;
 import io.prestosql.plugin.hive.authentication.HiveIdentity;
 import io.prestosql.plugin.hive.metastore.HiveMetastore;
 import io.prestosql.plugin.hive.metastore.HivePageSinkMetadata;
 import io.prestosql.spi.Page;
 import io.prestosql.spi.PageBuilder;
-import io.prestosql.spi.PageIndexer;
-import io.prestosql.spi.PageIndexerFactory;
 import io.prestosql.spi.block.BlockBuilder;
-import io.prestosql.spi.block.IntArrayBlock;
 import io.prestosql.spi.connector.ConnectorPageSink;
 import io.prestosql.spi.connector.ConnectorPageSource;
 import io.prestosql.spi.connector.ConnectorSession;
 import io.prestosql.spi.connector.ConnectorTableHandle;
 import io.prestosql.spi.connector.SchemaTableName;
 import io.prestosql.spi.type.Type;
-import io.prestosql.spi.type.TypeManager;
 import io.prestosql.sql.gen.JoinCompiler;
 import io.prestosql.testing.MaterializedResult;
 import io.prestosql.testing.TestingConnectorSession;
@@ -50,9 +45,7 @@ import org.apache.hadoop.fs.Path;
 import org.testng.annotations.Test;
 
 import java.io.File;
-import java.io.IOException;
 import java.util.ArrayList;
-import java.util.Collections;
 import java.util.List;
 import java.util.Optional;
 import java.util.OptionalInt;
@@ -83,15 +76,9 @@ import static io.prestosql.spi.type.VarcharType.createUnboundedVarcharType;
 import static io.prestosql.testing.assertions.Assert.assertEquals;
 import static java.lang.Math.round;
 import static java.lang.String.format;
-import static java.nio.file.Files.createTempDirectory;
 import static java.util.stream.Collectors.toList;
 import static org.apache.hadoop.hive.metastore.api.hive_metastoreConstants.FILE_INPUT_FORMAT;
 import static org.apache.hadoop.hive.serde.serdeConstants.SERIALIZATION_LIB;
-import static org.mockito.Matchers.anyInt;
-import static org.mockito.Matchers.anyObject;
-import static org.mockito.Mockito.doAnswer;
-import static org.mockito.Mockito.mock;
-import static org.mockito.Mockito.when;
 import static org.testng.Assert.assertTrue;
 
 public class TestHivePageSink
@@ -106,13 +93,12 @@ public class TestHivePageSink
             throws Exception
     {
         HiveConfig config = new HiveConfig();
-        File tempDir = createTempDirectory(getClass().getName()).toFile();
+        File tempDir = Files.createTempDir();
         try {
             HiveMetastore metastore = createTestingFileHiveMetastore(new File(tempDir, "metastore"));
             for (HiveStorageFormat format : HiveStorageFormat.values()) {
-                if (format == HiveStorageFormat.CSV || format == HiveStorageFormat.MULTIDELIMIT) {
+                if (format == HiveStorageFormat.CSV) {
                     // CSV supports only unbounded VARCHAR type, which is not provided by lineitem
-                    // MULTIDELIMIT is supported only when field.delim property is specified
                     continue;
                 }
                 config.setHiveStorageFormat(format);
@@ -137,14 +123,7 @@ public class TestHivePageSink
 
     private static String makeFileName(File tempDir, HiveConfig config)
     {
-        try {
-            return tempDir.getCanonicalPath() + "/" + config.getHiveStorageFormat().name() + "." + config.getHiveCompressionCodec().name();
-        }
-        catch (IOException e) {
-            System.out.println("error when make fileName");
-            // could be ignored
-        }
-        return null;
+        return tempDir.getAbsolutePath() + "/" + config.getHiveStorageFormat().name() + "." + config.getHiveCompressionCodec().name();
     }
 
     private static long writeTestFile(HiveConfig config, HiveMetastore metastore, String outputPath)
@@ -233,33 +212,25 @@ public class TestHivePageSink
         splitProperties.setProperty(SERIALIZATION_LIB, config.getHiveStorageFormat().getSerDe());
         splitProperties.setProperty("columns", Joiner.on(',').join(getColumnHandles().stream().map(HiveColumnHandle::getName).collect(toList())));
         splitProperties.setProperty("columns.types", Joiner.on(',').join(getColumnHandles().stream().map(HiveColumnHandle::getHiveType).map(hiveType -> hiveType.getHiveTypeName().toString()).collect(toList())));
-        HiveSplitWrapper split = null;
-        try {
-            split = HiveSplitWrapper.wrap(new HiveSplit(
-                    SCHEMA_NAME,
-                    TABLE_NAME,
-                    "",
-                    "file:///" + outputFile.getCanonicalPath(),
-                    0,
-                    outputFile.length(),
-                    outputFile.length(),
-                    0,
-                    splitProperties,
-                    ImmutableList.of(),
-                    ImmutableList.of(),
-                    OptionalInt.empty(),
-                    false,
-                    ImmutableMap.of(),
-                    Optional.empty(),
-                    false,
-                    Optional.empty(),
-                    Optional.empty(),
-                    false,
-                    ImmutableMap.of()));
-        }
-        catch (IOException e) {
-            System.out.println(e.getMessage());
-        }
+        HiveSplitWrapper split = HiveSplitWrapper.wrap(new HiveSplit(
+                SCHEMA_NAME,
+                TABLE_NAME,
+                "",
+                "file:///" + outputFile.getAbsolutePath(),
+                0,
+                outputFile.length(),
+                outputFile.length(),
+                0,
+                splitProperties,
+                ImmutableList.of(),
+                ImmutableList.of(),
+                OptionalInt.empty(),
+                false,
+                ImmutableMap.of(),
+                Optional.empty(),
+                false,
+                Optional.empty(),
+                Optional.empty(), false));
         ConnectorTableHandle table = new HiveTableHandle(SCHEMA_NAME, TABLE_NAME, ImmutableMap.of(), ImmutableList.of(), Optional.empty());
         HivePageSourceProvider provider = new HivePageSourceProvider(config, HiveTestUtils.createTestHdfsEnvironment(config), HiveTestUtils.getDefaultHiveRecordCursorProvider(config), HiveTestUtils.getDefaultHiveDataStreamFactories(config), HiveTestUtils.TYPE_MANAGER, HiveTestUtils.getNoOpIndexCache(), getDefaultHiveSelectiveFactories(config));
         return provider.createPageSource(transaction, getSession(config), split, table, ImmutableList.copyOf(getColumnHandles()));
@@ -307,7 +278,7 @@ public class TestHivePageSink
         return new TestingConnectorSession(new HiveSessionProperties(config, new OrcFileWriterConfig(), new ParquetFileWriterConfig()).getSessionProperties());
     }
 
-    public static List<HiveColumnHandle> getColumnHandles()
+    private static List<HiveColumnHandle> getColumnHandles()
     {
         ImmutableList.Builder<HiveColumnHandle> handles = ImmutableList.builder();
         List<LineItemColumn> columns = getTestColumns();
@@ -343,104 +314,5 @@ public class TestHivePageSink
             default:
                 throw new UnsupportedOperationException();
         }
-    }
-
-    // Used to test snapshot. Input pages has 1 row and 1 column. Partition is based on this column.
-    private HivePageSink prepareHivePageSink()
-            throws IOException
-    {
-        // Mock all relevant dependencies
-        HiveWriterFactory writerFactory = mock(HiveWriterFactory.class);
-        HiveColumnHandle hiveColumnHandle = mock(HiveColumnHandle.class);
-        HdfsEnvironment hdfsEnvironment = mock(HdfsEnvironment.class);
-        PageIndexerFactory pageIndexerFactory = mock(PageIndexerFactory.class);
-        PageIndexer pageIndexer = mock(PageIndexer.class);
-        JsonCodec jsonCodec = mock(JsonCodec.class);
-        ConnectorSession connectorSession = mock(ConnectorSession.class);
-
-        // Mocked necessary but uninteresting methods
-        when(connectorSession.isSnapshotEnabled()).thenReturn(true);
-        when(connectorSession.isRecoveryEnabled()).thenReturn(true);
-        when(connectorSession.getTaskId()).thenReturn(OptionalInt.of(1));
-        when(pageIndexerFactory.createPageIndexer(anyObject())).thenReturn(pageIndexer);
-        when(jsonCodec.toJsonBytes(anyObject())).thenReturn(new byte[0]);
-        when(writerFactory.isTxnTable()).thenReturn(false);
-        HiveWriter hiveWriter = mock(HiveWriter.class);
-        when(hiveWriter.getVerificationTask()).thenReturn(Optional.empty());
-        when(writerFactory.createWriter(anyObject(), anyObject(), anyObject())).thenReturn(hiveWriter);
-        when(writerFactory.createWriterForSnapshotMerge(anyObject(), anyObject(), anyObject())).thenReturn(hiveWriter);
-        when(writerFactory.getPartitionName(anyObject(), anyInt())).thenReturn(Optional.empty());
-        when(hiveColumnHandle.isPartitionKey()).thenReturn(true);
-
-        // When hdfsEnvironment.doAs() is called, simply invoke the passed in action
-        when(hdfsEnvironment.doAs(anyObject(), (GenericExceptionAction) anyObject())).thenAnswer(invocation ->
-                ((GenericExceptionAction) invocation.getArguments()[1]).run());
-        doAnswer(invocation -> {
-            ((Runnable) invocation.getArguments()[1]).run();
-            return null;
-        }).when(hdfsEnvironment).doAs(anyObject(), (Runnable) anyObject());
-
-        // The only entry in the page is a integer. We use it to determine partition index.
-        // That is, page1 with value 0 is in partition 0; page2 with value 1 is in partition 1.
-        // Some functions' return values depend on the number of partitions.
-        // Store that as an array entry below, so that other mocked methods can use it.
-        int[] maxIndex = new int[1];
-        when(pageIndexer.indexPage(anyObject()))
-                .thenAnswer(invocation -> {
-                    maxIndex[0] = (int) ((Page) invocation.getArguments()[0]).getBlock(0).get(0);
-                    return new int[] {maxIndex[0]};
-                });
-        when(pageIndexer.getMaxIndex()).thenAnswer(invocation -> maxIndex[0]);
-        doAnswer(invocation -> {
-            assertEquals(((List) invocation.getArguments()[0]).size(), maxIndex[0] + 1);
-            return null;
-        }).when(writerFactory).mergeSubFiles(anyObject());
-
-        return new HivePageSink(
-                writerFactory,
-                Collections.singletonList(hiveColumnHandle),
-                Optional.empty(),
-                pageIndexerFactory,
-                mock(TypeManager.class),
-                hdfsEnvironment,
-                10,
-                mock(ListeningExecutorService.class),
-                jsonCodec,
-                connectorSession,
-                HiveACIDWriteType.INSERT,
-                mock(HiveWritableTableHandle.class));
-    }
-
-    @Test
-    public void testSnapshotFinish()
-            throws IOException
-    {
-        HivePageSink hivePageSink = prepareHivePageSink();
-        Page page1 = new Page(new IntArrayBlock(1, Optional.empty(), new int[] {0}));
-        Page page2 = new Page(new IntArrayBlock(1, Optional.empty(), new int[] {1}));
-        hivePageSink.appendPage(page1);
-        Object state = hivePageSink.capture(null);
-        hivePageSink.appendPage(page2);
-        hivePageSink.capture(null);
-        hivePageSink.restore(state, null, 2);
-        hivePageSink.appendPage(page2);
-        hivePageSink.finish();
-    }
-
-    @Test
-    public void testSnapshotAbort()
-            throws IOException
-    {
-        HivePageSink hivePageSink = prepareHivePageSink();
-
-        Page page1 = new Page(new IntArrayBlock(1, Optional.empty(), new int[] {0}));
-        Page page2 = new Page(new IntArrayBlock(1, Optional.empty(), new int[] {1}));
-        hivePageSink.appendPage(page1);
-        Object state = hivePageSink.capture(null);
-        hivePageSink.appendPage(page2);
-        hivePageSink.capture(null);
-        hivePageSink.restore(state, null, 2);
-        hivePageSink.appendPage(page2);
-        hivePageSink.abort();
     }
 }

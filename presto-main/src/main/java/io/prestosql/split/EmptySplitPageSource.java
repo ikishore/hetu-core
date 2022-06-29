@@ -20,7 +20,6 @@ import io.prestosql.spi.block.Block;
 import io.prestosql.spi.connector.UpdatablePageSource;
 
 import java.util.Collection;
-import java.util.List;
 import java.util.concurrent.CompletableFuture;
 
 import static java.util.concurrent.CompletableFuture.completedFuture;
@@ -32,12 +31,6 @@ public class EmptySplitPageSource
     public void deleteRows(Block rowIds)
     {
         throw new UnsupportedOperationException("deleteRows called on EmptySplitPageSource");
-    }
-
-    @Override
-    public void updateRows(Page page, List<Integer> columnValueAndRowIdChannels, List<String> updatedColumns)
-    {
-        throw new UnsupportedOperationException("updateRows called on EmptyPageSource");
     }
 
     @Override

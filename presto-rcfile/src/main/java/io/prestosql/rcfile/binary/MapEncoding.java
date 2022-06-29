@@ -85,14 +85,13 @@ public class MapEncoding
     @Override
     public void decodeValueInto(BlockBuilder builder, Slice slice, int offset, int length)
     {
-        int newOffset = offset;
         // entries in list
-        int entries = toIntExact(readVInt(slice, newOffset));
-        newOffset += decodeVIntSize(slice.getByte(newOffset));
+        int entries = toIntExact(readVInt(slice, offset));
+        offset += decodeVIntSize(slice.getByte(offset));
 
         // null bytes
-        int nullByteCur = newOffset;
-        int nullByteEnd = newOffset + (entries * 2 + 7) / 8;
+        int nullByteCur = offset;
+        int nullByteEnd = offset + (entries * 2 + 7) / 8;
 
         // read elements starting after null bytes
         int elementOffset = nullByteEnd;

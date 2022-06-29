@@ -168,6 +168,15 @@ public final class PagesHash
         return -1;
     }
 
+    public Long getAsInt(long position, int offset)
+    {
+        long pageAddress = addresses.getLong(toIntExact(position));
+        int blockIndex = decodeSliceIndex(pageAddress);
+        int blockPosition = decodePosition(pageAddress);
+
+        return pagesHashStrategy.getAsInt(blockIndex, blockPosition, offset);
+    }
+
     public void appendTo(long position, PageBuilder pageBuilder, int outputChannelOffset)
     {
         long pageAddress = addresses.getLong(toIntExact(position));
@@ -230,13 +239,12 @@ public final class PagesHash
         // values returned by {@link Object#hashCode()}.
         //
 
-        long rawHashNew = rawHash;
-        rawHashNew ^= rawHashNew >>> 33;
-        rawHashNew *= 0xff51afd7ed558ccdL;
-        rawHashNew ^= rawHashNew >>> 33;
-        rawHashNew *= 0xc4ceb9fe1a85ec53L;
-        rawHashNew ^= rawHashNew >>> 33;
+        rawHash ^= rawHash >>> 33;
+        rawHash *= 0xff51afd7ed558ccdL;
+        rawHash ^= rawHash >>> 33;
+        rawHash *= 0xc4ceb9fe1a85ec53L;
+        rawHash ^= rawHash >>> 33;
 
-        return (int) (rawHashNew & mask);
+        return (int) (rawHash & mask);
     }
 }

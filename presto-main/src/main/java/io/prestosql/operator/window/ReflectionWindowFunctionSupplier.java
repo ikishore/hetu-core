@@ -14,7 +14,6 @@
 package io.prestosql.operator.window;
 
 import com.google.common.collect.Lists;
-import io.prestosql.spi.connector.QualifiedObjectName;
 import io.prestosql.spi.function.Description;
 import io.prestosql.spi.function.Signature;
 import io.prestosql.spi.function.WindowFunction;
@@ -24,7 +23,6 @@ import java.lang.reflect.AnnotatedElement;
 import java.lang.reflect.Constructor;
 import java.util.List;
 
-import static io.prestosql.spi.connector.CatalogSchemaName.DEFAULT_NAMESPACE;
 import static io.prestosql.spi.function.FunctionKind.WINDOW;
 import static java.util.Objects.requireNonNull;
 
@@ -35,7 +33,7 @@ public class ReflectionWindowFunctionSupplier<T extends WindowFunction>
 
     public ReflectionWindowFunctionSupplier(String name, Type returnType, List<? extends Type> argumentTypes, Class<T> type)
     {
-        this(new Signature(QualifiedObjectName.valueOf(DEFAULT_NAMESPACE, name), WINDOW, returnType.getTypeSignature(), Lists.transform(argumentTypes, Type::getTypeSignature)), type);
+        this(new Signature(name, WINDOW, returnType.getTypeSignature(), Lists.transform(argumentTypes, Type::getTypeSignature)), type);
     }
 
     public ReflectionWindowFunctionSupplier(Signature signature, Class<T> type)

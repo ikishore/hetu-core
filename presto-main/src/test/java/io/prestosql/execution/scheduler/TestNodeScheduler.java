@@ -40,46 +40,26 @@ import com.google.common.collect.Multimap;
 import com.google.common.collect.Sets;
 import io.prestosql.MockSplit;
 import io.prestosql.client.NodeVersion;
-import io.prestosql.dynamicfilter.DynamicFilterService;
 import io.prestosql.execution.Lifespan;
 import io.prestosql.execution.MockRemoteTaskFactory;
 import io.prestosql.execution.NodeTaskMap;
 import io.prestosql.execution.RemoteTask;
 import io.prestosql.execution.SplitCacheMap;
 import io.prestosql.execution.SplitKey;
-import io.prestosql.execution.SqlStageExecution;
-import io.prestosql.execution.StageId;
-import io.prestosql.execution.TableInfo;
 import io.prestosql.execution.TaskId;
-import io.prestosql.execution.TestSqlTaskManager;
-import io.prestosql.failuredetector.NoOpFailureDetector;
-import io.prestosql.filesystem.FileSystemClientManager;
 import io.prestosql.metadata.InMemoryNodeManager;
 import io.prestosql.metadata.InternalNode;
 import io.prestosql.metadata.Split;
-import io.prestosql.seedstore.SeedStoreManager;
-import io.prestosql.snapshot.QueryRecoveryManager;
-import io.prestosql.snapshot.QuerySnapshotManager;
 import io.prestosql.spi.HetuConstant;
 import io.prestosql.spi.HostAddress;
-import io.prestosql.spi.PrestoException;
-import io.prestosql.spi.QueryId;
 import io.prestosql.spi.connector.CatalogName;
 import io.prestosql.spi.connector.ColumnMetadata;
 import io.prestosql.spi.connector.ConnectorSplit;
-import io.prestosql.spi.connector.QualifiedObjectName;
-import io.prestosql.spi.operator.ReuseExchangeOperator;
 import io.prestosql.spi.plan.PlanNodeId;
 import io.prestosql.spi.predicate.Domain;
 import io.prestosql.spi.predicate.TupleDomain;
 import io.prestosql.spi.service.PropertyService;
-import io.prestosql.split.ConnectorAwareSplitSource;
-import io.prestosql.sql.planner.PlanFragment;
-import io.prestosql.sql.planner.StageExecutionPlan;
 import io.prestosql.sql.tree.QualifiedName;
-import io.prestosql.statestore.LocalStateStoreProvider;
-import io.prestosql.testing.TestingRecoveryUtils;
-import io.prestosql.testing.TestingSplit;
 import io.prestosql.util.FinalizerService;
 import org.testng.annotations.AfterMethod;
 import org.testng.annotations.BeforeMethod;
@@ -97,21 +77,14 @@ import java.util.List;
 import java.util.Map;
 import java.util.Optional;
 import java.util.Set;
-import java.util.UUID;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.ScheduledExecutorService;
 import java.util.concurrent.ThreadLocalRandom;
 
 import static io.airlift.concurrent.Threads.daemonThreadsNamed;
-import static io.prestosql.SessionTestUtils.TEST_SESSION;
-import static io.prestosql.SessionTestUtils.TEST_SESSION_REUSE;
-import static io.prestosql.execution.SqlStageExecution.createSqlStageExecution;
 import static io.prestosql.execution.scheduler.NetworkLocation.ROOT_LOCATION;
-import static io.prestosql.execution.scheduler.TestPhasedExecutionSchedule.createTableScanPlanFragment;
-import static io.prestosql.execution.scheduler.TestSourcePartitionedScheduler.createFixedSplitSource;
 import static io.prestosql.spi.StandardErrorCode.NO_NODES_AVAILABLE;
 import static io.prestosql.spi.type.BigintType.BIGINT;
-import static io.prestosql.testing.TestingRecoveryUtils.NOOP_RECOVERY_UTILS;
 import static io.prestosql.testing.assertions.PrestoExceptionAssert.assertPrestoExceptionThrownBy;
 import static java.lang.String.format;
 import static java.util.Objects.requireNonNull;
@@ -155,7 +128,7 @@ public class TestNodeScheduler
         NodeScheduler nodeScheduler = new NodeScheduler(new LegacyNetworkTopology(), nodeManager, nodeSchedulerConfig, nodeTaskMap);
         // contents of taskMap indicate the node-task map for the current stage
         taskMap = new HashMap<>();
-        nodeSelector = nodeScheduler.createNodeSelector(CONNECTOR_ID, false, null);
+        nodeSelector = nodeScheduler.createNodeSelector(CONNECTOR_ID);
         remoteTaskExecutor = newCachedThreadPool(daemonThreadsNamed("remoteTaskExecutor-%s"));
         remoteTaskScheduledExecutor = newScheduledThreadPool(2, daemonThreadsNamed("remoteTaskScheduledExecutor-%s"));
 
@@ -208,18 +181,18 @@ public class TestNodeScheduler
     public void testTopologyAwareScheduling()
             throws Exception
     {
-        NodeTaskMap nodeMap = new NodeTaskMap(finalizerService);
-        InMemoryNodeManager memoryNodeManager = new InMemoryNodeManager();
+        NodeTaskMap nodeTaskMap = new NodeTaskMap(finalizerService);
+        InMemoryNodeManager nodeManager = new InMemoryNodeManager();
 
         ImmutableList.Builder<InternalNode> nodeBuilder = ImmutableList.builder();
         nodeBuilder.add(new InternalNode("node1", URI.create("http://host1.rack1:11"), NodeVersion.UNKNOWN, false));
         nodeBuilder.add(new InternalNode("node2", URI.create("http://host2.rack1:12"), NodeVersion.UNKNOWN, false));
         nodeBuilder.add(new InternalNode("node3", URI.create("http://host3.rack2:13"), NodeVersion.UNKNOWN, false));
         ImmutableList<InternalNode> nodes = nodeBuilder.build();
-        memoryNodeManager.addNode(CONNECTOR_ID, nodes);
+        nodeManager.addNode(CONNECTOR_ID, nodes);
 
         // contents of taskMap indicate the node-task map for the current stage
-        Map<InternalNode, RemoteTask> nodeRemoteTaskHashMap = new HashMap<>();
+        Map<InternalNode, RemoteTask> taskMap = new HashMap<>();
         NodeSchedulerConfig nodeSchedulerConfig = new NodeSchedulerConfig()
                 .setMaxSplitsPerNode(25)
                 .setIncludeCoordinator(false)
@@ -241,8 +214,8 @@ public class TestNodeScheduler
                 }
             }
         };
-        NodeScheduler nodeScheduler = new NodeScheduler(locationCache, topology, memoryNodeManager, nodeSchedulerConfig, nodeMap);
-        NodeSelector selector = nodeScheduler.createNodeSelector(CONNECTOR_ID, false, null);
+        NodeScheduler nodeScheduler = new NodeScheduler(locationCache, topology, nodeManager, nodeSchedulerConfig, nodeTaskMap);
+        NodeSelector nodeSelector = nodeScheduler.createNodeSelector(CONNECTOR_ID);
 
         // Fill up the nodes with non-local data
         ImmutableSet.Builder<Split> nonRackLocalBuilder = ImmutableSet.builder();
@@ -250,22 +223,22 @@ public class TestNodeScheduler
             nonRackLocalBuilder.add(new Split(CONNECTOR_ID, new TestSplitRemote(HostAddress.fromParts("data.other_rack", 1)), Lifespan.taskWide()));
         }
         Set<Split> nonRackLocalSplits = nonRackLocalBuilder.build();
-        Multimap<InternalNode, Split> assignments = selector.computeAssignments(nonRackLocalSplits, ImmutableList.copyOf(nodeRemoteTaskHashMap.values()), Optional.empty()).getAssignments();
+        Multimap<InternalNode, Split> assignments = nodeSelector.computeAssignments(nonRackLocalSplits, ImmutableList.copyOf(taskMap.values()), Optional.empty()).getAssignments();
         MockRemoteTaskFactory remoteTaskFactory = new MockRemoteTaskFactory(remoteTaskExecutor, remoteTaskScheduledExecutor);
         int task = 0;
         for (InternalNode node : assignments.keySet()) {
             TaskId taskId = new TaskId("test", 1, task);
             task++;
-            MockRemoteTaskFactory.MockRemoteTask remoteTask = remoteTaskFactory.createTableScanTask(taskId, node, ImmutableList.copyOf(assignments.get(node)), nodeMap.createPartitionedSplitCountTracker(node, taskId));
+            MockRemoteTaskFactory.MockRemoteTask remoteTask = remoteTaskFactory.createTableScanTask(taskId, node, ImmutableList.copyOf(assignments.get(node)), nodeTaskMap.createPartitionedSplitCountTracker(node, taskId));
             remoteTask.startSplits(25);
-            nodeMap.addTask(node, remoteTask);
-            nodeRemoteTaskHashMap.put(node, remoteTask);
+            nodeTaskMap.addTask(node, remoteTask);
+            taskMap.put(node, remoteTask);
         }
         // Continue assigning to fill up part of the queue
         nonRackLocalSplits = Sets.difference(nonRackLocalSplits, new HashSet<>(assignments.values()));
-        assignments = selector.computeAssignments(nonRackLocalSplits, ImmutableList.copyOf(nodeRemoteTaskHashMap.values()), Optional.empty()).getAssignments();
+        assignments = nodeSelector.computeAssignments(nonRackLocalSplits, ImmutableList.copyOf(taskMap.values()), Optional.empty()).getAssignments();
         for (InternalNode node : assignments.keySet()) {
-            RemoteTask remoteTask = nodeRemoteTaskHashMap.get(node);
+            RemoteTask remoteTask = taskMap.get(node);
             remoteTask.addSplits(ImmutableMultimap.<PlanNodeId, Split>builder()
                     .putAll(new PlanNodeId("sourceId"), assignments.get(node))
                     .build());
@@ -284,9 +257,9 @@ public class TestNodeScheduler
         for (int i = 0; i < 6; i++) {
             rackLocalSplits.add(new Split(CONNECTOR_ID, new TestSplitRemote(dataHost2), Lifespan.taskWide()));
         }
-        assignments = selector.computeAssignments(rackLocalSplits.build(), ImmutableList.copyOf(nodeRemoteTaskHashMap.values()), Optional.empty()).getAssignments();
+        assignments = nodeSelector.computeAssignments(rackLocalSplits.build(), ImmutableList.copyOf(taskMap.values()), Optional.empty()).getAssignments();
         for (InternalNode node : assignments.keySet()) {
-            RemoteTask remoteTask = nodeRemoteTaskHashMap.get(node);
+            RemoteTask remoteTask = taskMap.get(node);
             remoteTask.addSplits(ImmutableMultimap.<PlanNodeId, Split>builder()
                     .putAll(new PlanNodeId("sourceId"), assignments.get(node))
                     .build());
@@ -305,9 +278,9 @@ public class TestNodeScheduler
             }
             MILLISECONDS.sleep(10);
         }
-        assignments = selector.computeAssignments(unassigned, ImmutableList.copyOf(nodeRemoteTaskHashMap.values()), Optional.empty()).getAssignments();
+        assignments = nodeSelector.computeAssignments(unassigned, ImmutableList.copyOf(taskMap.values()), Optional.empty()).getAssignments();
         for (InternalNode node : assignments.keySet()) {
-            RemoteTask remoteTask = nodeRemoteTaskHashMap.get(node);
+            RemoteTask remoteTask = taskMap.get(node);
             remoteTask.addSplits(ImmutableMultimap.<PlanNodeId, Split>builder()
                     .putAll(new PlanNodeId("sourceId"), assignments.get(node))
                     .build());
@@ -337,7 +310,7 @@ public class TestNodeScheduler
         localSplits.add(new Split(CONNECTOR_ID, new TestSplitRemote(HostAddress.fromParts("host1.rack1", 1)), Lifespan.taskWide()));
         localSplits.add(new Split(CONNECTOR_ID, new TestSplitRemote(HostAddress.fromParts("host2.rack1", 1)), Lifespan.taskWide()));
         localSplits.add(new Split(CONNECTOR_ID, new TestSplitRemote(HostAddress.fromParts("host3.rack2", 1)), Lifespan.taskWide()));
-        assignments = selector.computeAssignments(localSplits.build(), ImmutableList.copyOf(nodeRemoteTaskHashMap.values()), Optional.empty()).getAssignments();
+        assignments = nodeSelector.computeAssignments(localSplits.build(), ImmutableList.copyOf(taskMap.values()), Optional.empty()).getAssignments();
         assertEquals(assignments.size(), 3);
         assertEquals(assignments.keySet().size(), 3);
     }
@@ -393,10 +366,10 @@ public class TestNodeScheduler
                 .setMaxPendingSplitsPerTask(10);
 
         NodeScheduler nodeScheduler = new NodeScheduler(locationCache, topology, nodeManager, nodeSchedulerConfig, nodeTaskMap);
-        NodeSelector selector = nodeScheduler.createNodeSelector(CONNECTOR_ID, false, null);
+        NodeSelector nodeSelector = nodeScheduler.createNodeSelector(CONNECTOR_ID);
 
-        assertTrue(selector instanceof SplitCacheAwareNodeSelector);
-        Multimap<InternalNode, Split> assignment1 = selector.computeAssignments(splits, ImmutableList.copyOf(taskMap.values()), Optional.empty()).getAssignments();
+        assertTrue(nodeSelector instanceof SplitCacheAwareNodeSelector);
+        Multimap<InternalNode, Split> assignment1 = nodeSelector.computeAssignments(splits, ImmutableList.copyOf(taskMap.values()), Optional.empty()).getAssignments();
 
         assertEquals(3, assignment1.size());
         // No cache predicates defined, thus the split to worker mapping will not be saved
@@ -410,7 +383,7 @@ public class TestNodeScheduler
         splitCacheMap.addCache(tableQN, tupleDomainA, "a = 23");
         assertFalse(splitCacheMap.getCachedNodeId(splitKey).isPresent());
 
-        Multimap<InternalNode, Split> assignment2 = selector.computeAssignments(splits, ImmutableList.copyOf(taskMap.values()), Optional.empty()).getAssignments();
+        Multimap<InternalNode, Split> assignment2 = nodeSelector.computeAssignments(splits, ImmutableList.copyOf(taskMap.values()), Optional.empty()).getAssignments();
         // Split will be assigned by default node selector and the mapping cached
         assertTrue(assignment2.containsValue(split));
         assertTrue(assignment2.containsValue(split2));
@@ -424,7 +397,7 @@ public class TestNodeScheduler
         assertTrue(nodeIdToSplits.get(splitCacheMap.getCachedNodeId(split3Key).get()).contains(split3));
 
         // Schedule split again and the same assignments should be returned
-        Multimap<InternalNode, Split> assignment3 = selector.computeAssignments(splits, ImmutableList.copyOf(taskMap.values()), Optional.empty()).getAssignments();
+        Multimap<InternalNode, Split> assignment3 = nodeSelector.computeAssignments(splits, ImmutableList.copyOf(taskMap.values()), Optional.empty()).getAssignments();
         // Split will be assigned by default node selector and the mapping cached
         assertTrue(assignment3.containsValue(split));
         assertTrue(assignment3.containsValue(split2));
@@ -883,157 +856,6 @@ public class TestNodeScheduler
         assertTrue(assignments3.isEmpty());
     }
 
-    @Test
-    public void testRuseExchangeComputeAssignments()
-    {
-        setUpNodes();
-        Split split = new Split(CONNECTOR_ID, new TestSplitLocallyAccessible(), Lifespan.taskWide());
-        Set<Split> splits = ImmutableSet.of(split);
-
-        NodeTaskMap newNodeTaskMap = new NodeTaskMap(new FinalizerService());
-
-        StageId stageId = new StageId(new QueryId("query"), 0);
-
-        UUID uuid = UUID.randomUUID();
-        PlanFragment testFragmentProducer = createTableScanPlanFragment("build", ReuseExchangeOperator.STRATEGY.REUSE_STRATEGY_PRODUCER, uuid, 1);
-        PlanNodeId tableScanNodeId = new PlanNodeId("plan_id");
-
-        StageExecutionPlan producerStageExecutionPlan = new StageExecutionPlan(
-                testFragmentProducer,
-                ImmutableMap.of(tableScanNodeId, new ConnectorAwareSplitSource(CONNECTOR_ID, createFixedSplitSource(0, TestingSplit::createRemoteSplit))),
-                ImmutableList.of(),
-                ImmutableMap.of(tableScanNodeId, new TableInfo(new QualifiedObjectName("test", TEST_SCHEMA, "test"), TupleDomain.all())));
-
-        SqlStageExecution producerStage = createSqlStageExecution(
-                stageId,
-                new TestSqlTaskManager.MockLocationFactory().createStageLocation(stageId),
-                producerStageExecutionPlan.getFragment(),
-                producerStageExecutionPlan.getTables(),
-                new MockRemoteTaskFactory(remoteTaskExecutor, remoteTaskScheduledExecutor),
-                TEST_SESSION_REUSE,
-                true,
-                newNodeTaskMap,
-                remoteTaskExecutor,
-                new NoOpFailureDetector(),
-                new SplitSchedulerStats(),
-                new DynamicFilterService(new LocalStateStoreProvider(
-                        new SeedStoreManager(new FileSystemClientManager()))),
-                new QuerySnapshotManager(stageId.getQueryId(), NOOP_RECOVERY_UTILS, TEST_SESSION),
-                new QueryRecoveryManager(TestingRecoveryUtils.NOOP_RECOVERY_UTILS, TEST_SESSION, stageId.getQueryId()));
-        Map.Entry<InternalNode, Split> producerAssignment = Iterables.getOnlyElement(nodeSelector.computeAssignments(splits, ImmutableList.copyOf(this.taskMap.values()), Optional.of(producerStage)).getAssignments().entries());
-
-        PlanFragment testFragmentConsumer = createTableScanPlanFragment("build", ReuseExchangeOperator.STRATEGY.REUSE_STRATEGY_CONSUMER, uuid, 1);
-
-        StageExecutionPlan consumerStageExecutionPlan = new StageExecutionPlan(
-                testFragmentConsumer,
-                ImmutableMap.of(tableScanNodeId, new ConnectorAwareSplitSource(CONNECTOR_ID, createFixedSplitSource(0, TestingSplit::createRemoteSplit))),
-                ImmutableList.of(),
-                ImmutableMap.of(tableScanNodeId, new TableInfo(new QualifiedObjectName("test", TEST_SCHEMA, "test"), TupleDomain.all())));
-
-        SqlStageExecution stage = createSqlStageExecution(
-                stageId,
-                new TestSqlTaskManager.MockLocationFactory().createStageLocation(stageId),
-                consumerStageExecutionPlan.getFragment(),
-                consumerStageExecutionPlan.getTables(),
-                new MockRemoteTaskFactory(remoteTaskExecutor, remoteTaskScheduledExecutor),
-                TEST_SESSION_REUSE,
-                true,
-                newNodeTaskMap,
-                remoteTaskExecutor,
-                new NoOpFailureDetector(),
-                new SplitSchedulerStats(),
-                new DynamicFilterService(new LocalStateStoreProvider(
-                        new SeedStoreManager(new FileSystemClientManager()))),
-                new QuerySnapshotManager(stageId.getQueryId(), NOOP_RECOVERY_UTILS, TEST_SESSION),
-                new QueryRecoveryManager(TestingRecoveryUtils.NOOP_RECOVERY_UTILS, TEST_SESSION, stageId.getQueryId()));
-
-        Map.Entry<InternalNode, Split> consumerAssignment = Iterables.getOnlyElement(nodeSelector.computeAssignments(splits, ImmutableList.copyOf(this.taskMap.values()), Optional.of(stage)).getAssignments().entries());
-
-        Split producerSplit = producerAssignment.getValue();
-        Split consumerSplit = consumerAssignment.getValue();
-        SplitKey splitKeyProducer = new SplitKey(producerSplit, producerSplit.getCatalogName().getCatalogName(), TEST_SCHEMA, "test");
-        SplitKey splitKeyConsumer = new SplitKey(producerSplit, consumerSplit.getCatalogName().getCatalogName(), TEST_SCHEMA, "test");
-        if (splitKeyProducer.equals(splitKeyConsumer)) {
-            assertEquals(true, true);
-        }
-        else {
-            assertEquals(false, true);
-        }
-    }
-
-    @Test
-    public void testRuseExchangeComputeAssignmentsSplitsNotMatchProdConsumer()
-    {
-        setUpNodes();
-        Split split = new Split(CONNECTOR_ID, new TestSplitLocallyAccessible(), Lifespan.taskWide());
-        Set<Split> splits = ImmutableSet.of(split);
-        NodeTaskMap newNodeTaskMap = new NodeTaskMap(new FinalizerService());
-        StageId stageId = new StageId(new QueryId("query"), 0);
-        UUID uuid = UUID.randomUUID();
-
-        PlanFragment testFragmentProducer = createTableScanPlanFragment("build", ReuseExchangeOperator.STRATEGY.REUSE_STRATEGY_PRODUCER, uuid, 1);
-        PlanNodeId tableScanNodeId = new PlanNodeId("plan_id");
-        StageExecutionPlan producerStageExecutionPlan = new StageExecutionPlan(
-                testFragmentProducer,
-                ImmutableMap.of(tableScanNodeId, new ConnectorAwareSplitSource(CONNECTOR_ID, createFixedSplitSource(0, TestingSplit::createRemoteSplit))),
-                ImmutableList.of(),
-                ImmutableMap.of(tableScanNodeId, new TableInfo(new QualifiedObjectName("test", TEST_SCHEMA, "test"), TupleDomain.all())));
-
-        SqlStageExecution producerStage = createSqlStageExecution(
-                stageId,
-                new TestSqlTaskManager.MockLocationFactory().createStageLocation(stageId),
-                producerStageExecutionPlan.getFragment(),
-                producerStageExecutionPlan.getTables(),
-                new MockRemoteTaskFactory(remoteTaskExecutor, remoteTaskScheduledExecutor),
-                TEST_SESSION_REUSE,
-                true,
-                newNodeTaskMap,
-                remoteTaskExecutor,
-                new NoOpFailureDetector(),
-                new SplitSchedulerStats(),
-                new DynamicFilterService(new LocalStateStoreProvider(
-                        new SeedStoreManager(new FileSystemClientManager()))),
-                new QuerySnapshotManager(stageId.getQueryId(), NOOP_RECOVERY_UTILS, TEST_SESSION),
-                new QueryRecoveryManager(TestingRecoveryUtils.NOOP_RECOVERY_UTILS, TEST_SESSION, stageId.getQueryId()));
-        nodeSelector.computeAssignments(splits, ImmutableList.copyOf(this.taskMap.values()), Optional.of(producerStage)).getAssignments().entries();
-
-        // Consumer
-        Split splitConsumer = new Split(CONNECTOR_ID, new TestSplitLocallyAccessibleDifferentIndex(), Lifespan.taskWide());
-        Set<Split> splitConsumers = ImmutableSet.of(splitConsumer);
-        PlanFragment testFragmentConsumer = createTableScanPlanFragment("build", ReuseExchangeOperator.STRATEGY.REUSE_STRATEGY_CONSUMER, uuid, 1);
-
-        StageExecutionPlan consumerStageExecutionPlan = new StageExecutionPlan(
-                testFragmentConsumer,
-                ImmutableMap.of(tableScanNodeId, new ConnectorAwareSplitSource(CONNECTOR_ID, createFixedSplitSource(0, TestingSplit::createRemoteSplit))),
-                ImmutableList.of(),
-                ImmutableMap.of(tableScanNodeId, new TableInfo(new QualifiedObjectName("test", TEST_SCHEMA, "test"), TupleDomain.all())));
-
-        SqlStageExecution stage = createSqlStageExecution(
-                stageId,
-                new TestSqlTaskManager.MockLocationFactory().createStageLocation(stageId),
-                consumerStageExecutionPlan.getFragment(),
-                consumerStageExecutionPlan.getTables(),
-                new MockRemoteTaskFactory(remoteTaskExecutor, remoteTaskScheduledExecutor),
-                TEST_SESSION_REUSE,
-                true,
-                newNodeTaskMap,
-                remoteTaskExecutor,
-                new NoOpFailureDetector(),
-                new SplitSchedulerStats(),
-                new DynamicFilterService(new LocalStateStoreProvider(
-                        new SeedStoreManager(new FileSystemClientManager()))),
-                new QuerySnapshotManager(stageId.getQueryId(), NOOP_RECOVERY_UTILS, TEST_SESSION),
-                new QueryRecoveryManager(TestingRecoveryUtils.NOOP_RECOVERY_UTILS, TEST_SESSION, stageId.getQueryId()));
-        try {
-            nodeSelector.computeAssignments(splitConsumers, ImmutableList.copyOf(this.taskMap.values()), Optional.of(stage)).getAssignments().entries();
-        }
-        catch (PrestoException e) {
-            assertEquals("Producer & consumer splits are not same", e.getMessage());
-            return;
-        }
-        assertEquals(false, true);
-    }
-
     private static class TestSplitLocal
             implements ConnectorSplit
     {
@@ -1056,7 +878,7 @@ public class TestNodeScheduler
         }
     }
 
-    public static class TestSplitLocallyAccessible
+    private static class TestSplitLocallyAccessible
             implements ConnectorSplit
     {
         @Override
@@ -1075,76 +897,6 @@ public class TestNodeScheduler
         public Object getInfo()
         {
             return ImmutableMap.builder().build();
-        }
-
-        @Override
-        public long getStartIndex()
-        {
-            return 1;
-        }
-
-        @Override
-        public long getEndIndex()
-        {
-            return 100;
-        }
-
-        @Override
-        public long getLastModifiedTime()
-        {
-            return 200;
-        }
-
-        @Override
-        public String getFilePath()
-        {
-            return "";
-        }
-    }
-
-    public static class TestSplitLocallyAccessibleDifferentIndex
-            implements ConnectorSplit
-    {
-        @Override
-        public boolean isRemotelyAccessible()
-        {
-            return false;
-        }
-
-        @Override
-        public List<HostAddress> getAddresses()
-        {
-            return ImmutableList.of(HostAddress.fromString("10.0.0.1:11"));
-        }
-
-        @Override
-        public Object getInfo()
-        {
-            return ImmutableMap.builder().build();
-        }
-
-        @Override
-        public long getStartIndex()
-        {
-            return 100;
-        }
-
-        @Override
-        public long getEndIndex()
-        {
-            return 200;
-        }
-
-        @Override
-        public long getLastModifiedTime()
-        {
-            return 300;
-        }
-
-        @Override
-        public String getFilePath()
-        {
-            return "";
         }
     }
 

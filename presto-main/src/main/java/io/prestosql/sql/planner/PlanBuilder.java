@@ -22,6 +22,7 @@ import io.prestosql.spi.plan.Symbol;
 import io.prestosql.sql.analyzer.Analysis;
 import io.prestosql.sql.tree.Expression;
 
+import java.util.List;
 import java.util.Map;
 
 import static io.prestosql.sql.planner.SymbolUtils.toSymbolReference;
@@ -31,22 +32,25 @@ import static java.util.Objects.requireNonNull;
 class PlanBuilder
 {
     private final TranslationMap translations;
+    private final List<Expression> parameters;
     private final PlanNode root;
 
-    public PlanBuilder(TranslationMap translations, PlanNode root)
+    public PlanBuilder(TranslationMap translations, PlanNode root, List<Expression> parameters)
     {
         requireNonNull(translations, "translations is null");
         requireNonNull(root, "root is null");
+        requireNonNull(parameters, "parameterRewriter is null");
 
         this.translations = translations;
         this.root = root;
+        this.parameters = parameters;
     }
 
     public TranslationMap copyTranslations()
     {
-        TranslationMap translationMap = new TranslationMap(getRelationPlan(), getAnalysis(), getTranslations().getLambdaDeclarationToSymbolMap());
-        translationMap.copyMappingsFrom(getTranslations());
-        return translationMap;
+        TranslationMap translations = new TranslationMap(getRelationPlan(), getAnalysis(), getTranslations().getLambdaDeclarationToSymbolMap());
+        translations.copyMappingsFrom(getTranslations());
+        return translations;
     }
 
     private Analysis getAnalysis()
@@ -56,7 +60,7 @@ class PlanBuilder
 
     public PlanBuilder withNewRoot(PlanNode root)
     {
-        return new PlanBuilder(translations, root);
+        return new PlanBuilder(translations, root, parameters);
     }
 
     public RelationPlan getRelationPlan()
@@ -91,7 +95,7 @@ class PlanBuilder
 
     public PlanBuilder appendProjections(Iterable<Expression> expressions, PlanSymbolAllocator planSymbolAllocator, PlanNodeIdAllocator idAllocator)
     {
-        TranslationMap translationMap = copyTranslations();
+        TranslationMap translations = copyTranslations();
 
         Assignments.Builder projections = Assignments.builder();
 
@@ -103,14 +107,14 @@ class PlanBuilder
         ImmutableMap.Builder<Symbol, Expression> newTranslations = ImmutableMap.builder();
         for (Expression expression : expressions) {
             Symbol symbol = planSymbolAllocator.newSymbol(expression, getAnalysis().getTypeWithCoercions(expression));
-            projections.put(symbol, castToRowExpression(translationMap.rewrite(expression)));
+            projections.put(symbol, castToRowExpression(translations.rewrite(expression)));
             newTranslations.put(symbol, expression);
         }
-        // Now append the new translationMap into the TranslationMap
+        // Now append the new translations into the TranslationMap
         for (Map.Entry<Symbol, Expression> entry : newTranslations.build().entrySet()) {
-            translationMap.put(entry.getValue(), entry.getKey());
+            translations.put(entry.getValue(), entry.getKey());
         }
 
-        return new PlanBuilder(translationMap, new ProjectNode(idAllocator.getNextId(), getRoot(), projections.build()));
+        return new PlanBuilder(translations, new ProjectNode(idAllocator.getNextId(), getRoot(), projections.build()), parameters);
     }
 }

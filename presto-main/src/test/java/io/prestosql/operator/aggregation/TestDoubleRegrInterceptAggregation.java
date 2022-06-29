@@ -73,8 +73,7 @@ public class TestDoubleRegrInterceptAggregation
             regression.addData(x[i], y[i]);
         }
         double expected = regression.getIntercept();
-        final float epsilon = 0.0000001f;
-        checkArgument(Double.isFinite(expected) && Math.abs(expected - 0.) >= epsilon, "Expected result is trivial");
+        checkArgument(Double.isFinite(expected) && expected != 0., "Expected result is trivial");
         testAggregation(expected, createDoublesBlock(y), createDoublesBlock(x));
     }
 }

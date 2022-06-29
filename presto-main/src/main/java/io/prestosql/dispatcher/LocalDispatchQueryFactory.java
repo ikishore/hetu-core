@@ -24,7 +24,6 @@ import io.prestosql.execution.QueryExecution.QueryExecutionFactory;
 import io.prestosql.execution.QueryManager;
 import io.prestosql.execution.QueryPreparer.PreparedQuery;
 import io.prestosql.execution.QueryStateMachine;
-import io.prestosql.execution.resourcegroups.ResourceGroupManager;
 import io.prestosql.execution.warnings.WarningCollector;
 import io.prestosql.execution.warnings.WarningCollectorFactory;
 import io.prestosql.metadata.Metadata;
@@ -92,8 +91,7 @@ public class LocalDispatchQueryFactory
             String query,
             PreparedQuery preparedQuery,
             String slug,
-            ResourceGroupId resourceGroup,
-            ResourceGroupManager resourceGroupManager)
+            ResourceGroupId resourceGroup)
     {
         WarningCollector warningCollector = warningCollectorFactory.create();
         QueryStateMachine stateMachine = QueryStateMachine.begin(
@@ -102,7 +100,6 @@ public class LocalDispatchQueryFactory
                 session,
                 locationFactory.createQueryLocation(session.getQueryId()),
                 resourceGroup,
-                resourceGroupManager,
                 isTransactionControlStatement(preparedQuery.getStatement()),
                 transactionManager,
                 accessControl,
@@ -113,15 +110,12 @@ public class LocalDispatchQueryFactory
         queryMonitor.queryCreatedEvent(stateMachine.getBasicQueryInfo(Optional.empty()));
 
         ListenableFuture<QueryExecution> queryExecutionFuture = executor.submit(() -> {
-            stateMachine.beginSyntaxAnalysis();
             QueryExecutionFactory<?> queryExecutionFactory = executionFactories.get(preparedQuery.getStatement().getClass());
             if (queryExecutionFactory == null) {
                 throw new PrestoException(NOT_SUPPORTED, "Unsupported statement type: " + preparedQuery.getStatement().getClass().getSimpleName());
             }
 
-            QueryExecution queryExecution = queryExecutionFactory.createQueryExecution(preparedQuery, stateMachine, slug, warningCollector);
-            stateMachine.endSyntaxAnalysis();
-            return queryExecution;
+            return queryExecutionFactory.createQueryExecution(preparedQuery, stateMachine, slug, warningCollector);
         });
 
         return new LocalDispatchQuery(

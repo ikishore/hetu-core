@@ -86,20 +86,20 @@ public class SetDigest
         int hllLength = input.readInt();
         Slice serializedHll = Slices.allocate(hllLength);
         input.readBytes(serializedHll, hllLength);
-        HyperLogLog hyperLogLog = HyperLogLog.newInstance(serializedHll);
+        HyperLogLog hll = HyperLogLog.newInstance(serializedHll);
 
-        Long2ShortRBTreeMap long2ShortRBTreeMap = new Long2ShortRBTreeMap();
-        int readInt = input.readInt();
+        Long2ShortRBTreeMap minhash = new Long2ShortRBTreeMap();
+        int maxHashes = input.readInt();
         int minhashLength = input.readInt();
         // The values are stored after the keys
         SliceInput valuesInput = serialized.getInput();
         valuesInput.setPosition(input.position() + minhashLength * SIZE_OF_LONG);
 
         for (int i = 0; i < minhashLength; i++) {
-            long2ShortRBTreeMap.put(input.readLong(), valuesInput.readShort());
+            minhash.put(input.readLong(), valuesInput.readShort());
         }
 
-        return new SetDigest(readInt, hyperLogLog, long2ShortRBTreeMap);
+        return new SetDigest(maxHashes, hll, minhash);
     }
 
     public Slice serialize()

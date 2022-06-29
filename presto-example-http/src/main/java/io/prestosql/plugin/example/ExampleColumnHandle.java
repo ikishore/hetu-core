@@ -41,7 +41,6 @@ public final class ExampleColumnHandle
     }
 
     @JsonProperty
-    @Override
     public String getColumnName()
     {
         return columnName;

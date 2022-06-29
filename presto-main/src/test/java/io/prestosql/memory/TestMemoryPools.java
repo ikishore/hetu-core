@@ -22,6 +22,7 @@ import com.google.common.util.concurrent.ListenableFuture;
 import io.airlift.stats.TestingGcMonitor;
 import io.airlift.units.DataSize;
 import io.prestosql.Session;
+import io.prestosql.execution.buffer.TestingPagesSerdeFactory;
 import io.prestosql.memory.context.LocalMemoryContext;
 import io.prestosql.operator.Driver;
 import io.prestosql.operator.DriverContext;
@@ -35,7 +36,6 @@ import io.prestosql.spi.Page;
 import io.prestosql.spi.QueryId;
 import io.prestosql.spi.memory.MemoryPoolId;
 import io.prestosql.spi.plan.PlanNodeId;
-import io.prestosql.spi.snapshot.RestorableConfig;
 import io.prestosql.spiller.SpillSpaceTracker;
 import io.prestosql.testing.LocalQueryRunner;
 import io.prestosql.testing.PageConsumerOperator.PageConsumerOutputFactory;
@@ -53,7 +53,6 @@ import static io.airlift.units.DataSize.Unit.BYTE;
 import static io.airlift.units.DataSize.Unit.GIGABYTE;
 import static io.airlift.units.DataSize.Unit.MEGABYTE;
 import static io.prestosql.testing.LocalQueryRunner.queryRunnerWithInitialTransaction;
-import static io.prestosql.testing.TestingRecoveryUtils.NOOP_RECOVERY_UTILS;
 import static io.prestosql.testing.TestingSession.testSessionBuilder;
 import static io.prestosql.testing.TestingTaskContext.createTaskContext;
 import static java.lang.String.format;
@@ -102,8 +101,7 @@ public class TestMemoryPools
                 localQueryRunner.getExecutor(),
                 localQueryRunner.getScheduler(),
                 TEN_MEGABYTES,
-                spillSpaceTracker,
-                NOOP_RECOVERY_UTILS);
+                spillSpaceTracker);
         taskContext = createTaskContext(queryContext, localQueryRunner.getExecutor(), session);
         drivers = driversSupplier.get();
     }
@@ -128,7 +126,7 @@ public class TestMemoryPools
                     TableScanOperator.class.getSimpleName());
 
             OutputFactory outputFactory = new PageConsumerOutputFactory(types -> (page -> {}));
-            Operator outputOperator = outputFactory.createOutputOperator(2, new PlanNodeId("output"), ImmutableList.of(), Function.identity(), driverContext.getPipelineContext().getTaskContext()).createOperator(driverContext);
+            Operator outputOperator = outputFactory.createOutputOperator(2, new PlanNodeId("output"), ImmutableList.of(), Function.identity(), new TestingPagesSerdeFactory()).createOperator(driverContext);
             RevocableMemoryOperator revocableMemoryOperator = new RevocableMemoryOperator(revokableOperatorContext, reservedPerPage, numberOfPages);
             createOperator.set(revocableMemoryOperator);
 
@@ -353,7 +351,6 @@ public class TestMemoryPools
         return false;
     }
 
-    @RestorableConfig(unsupported = true)
     private static class RevocableMemoryOperator
             implements Operator
     {
@@ -422,12 +419,6 @@ public class TestMemoryPools
                 finish();
             }
             return new Page(10);
-        }
-
-        @Override
-        public Page pollMarker()
-        {
-            return null;
         }
     }
 }

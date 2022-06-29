@@ -105,7 +105,7 @@ export class ClusterHUD extends React.Component {
             });
             this.resetTimer();
         }.bind(this))
-            .fail(function () {
+            .error(function () {
                 this.resetTimer();
             }.bind(this));
     }

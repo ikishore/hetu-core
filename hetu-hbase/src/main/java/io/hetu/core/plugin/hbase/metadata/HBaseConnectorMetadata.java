@@ -1,5 +1,5 @@
 /*
- * Copyright (C) 2018-2021. Huawei Technologies Co., Ltd. All rights reserved.
+ * Copyright (C) 2018-2020. Huawei Technologies Co., Ltd. All rights reserved.
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
  * You may obtain a copy of the License at
@@ -23,7 +23,6 @@ import io.airlift.slice.Slice;
 import io.hetu.core.plugin.hbase.connector.HBaseColumnHandle;
 import io.hetu.core.plugin.hbase.connector.HBaseConnection;
 import io.hetu.core.plugin.hbase.connector.HBaseTableHandle;
-import io.hetu.core.plugin.hbase.utils.Constants;
 import io.prestosql.spi.connector.ColumnHandle;
 import io.prestosql.spi.connector.ColumnMetadata;
 import io.prestosql.spi.connector.ConnectorInsertTableHandle;
@@ -117,7 +116,7 @@ public class HBaseConnectorMetadata
     @Override
     public void createSchema(ConnectorSession session, String schemaName, Map<String, Object> properties)
     {
-        hbaseConn.createSchema(schemaName);
+        hbaseConn.createSchema(schemaName, properties);
     }
 
     @Override
@@ -441,19 +440,19 @@ public class HBaseConnectorMetadata
     }
 
     @Override
-    public ColumnHandle getDeleteRowIdColumnHandle(ConnectorSession session, ConnectorTableHandle tableHandle)
+    public ColumnHandle getUpdateRowIdColumnHandle(ConnectorSession session, ConnectorTableHandle tableHandle)
     {
         HBaseTableHandle hBaseTableHandle = (HBaseTableHandle) tableHandle;
         HBaseTable table = hbaseConn.getTable(hBaseTableHandle.getFullTableName());
         HBaseColumnHandle handle = table.getColumns().get(table.getRowIdOrdinal());
         return new HBaseColumnHandle(
-                Constants.HBASE_ROWID_NAME,
+                handle.getName(),
                 handle.getFamily(),
                 handle.getQualifier(),
                 handle.getType(),
                 handle.getOrdinal(),
                 handle.getComment(),
-                handle.isIndexed());
+                true);
     }
 
     @Override

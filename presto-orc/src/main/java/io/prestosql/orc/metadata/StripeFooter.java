@@ -17,6 +17,7 @@ import com.google.common.collect.ImmutableList;
 
 import java.time.ZoneId;
 import java.util.List;
+import java.util.Optional;
 
 import static java.util.Objects.requireNonNull;
 
@@ -24,9 +25,9 @@ public class StripeFooter
 {
     private final List<Stream> streams;
     private final ColumnMetadata<ColumnEncoding> columnEncodings;
-    private final ZoneId timeZone;
+    private final Optional<ZoneId> timeZone;
 
-    public StripeFooter(List<Stream> streams, ColumnMetadata<ColumnEncoding> columnEncodings, ZoneId timeZone)
+    public StripeFooter(List<Stream> streams, ColumnMetadata<ColumnEncoding> columnEncodings, Optional<ZoneId> timeZone)
     {
         this.streams = ImmutableList.copyOf(requireNonNull(streams, "streams is null"));
         this.columnEncodings = requireNonNull(columnEncodings, "columnEncodings is null");
@@ -43,7 +44,7 @@ public class StripeFooter
         return streams;
     }
 
-    public ZoneId getTimeZone()
+    public Optional<ZoneId> getTimeZone()
     {
         return timeZone;
     }

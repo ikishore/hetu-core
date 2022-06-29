@@ -15,7 +15,6 @@ package io.prestosql.dispatcher;
 
 import io.prestosql.Session;
 import io.prestosql.execution.QueryPreparer.PreparedQuery;
-import io.prestosql.execution.resourcegroups.ResourceGroupManager;
 import io.prestosql.spi.resourcegroups.ResourceGroupId;
 
 public interface DispatchQueryFactory
@@ -25,6 +24,5 @@ public interface DispatchQueryFactory
             String query,
             PreparedQuery preparedQuery,
             String slug,
-            ResourceGroupId resourceGroup,
-            ResourceGroupManager resourceGroupManager);
+            ResourceGroupId resourceGroup);
 }

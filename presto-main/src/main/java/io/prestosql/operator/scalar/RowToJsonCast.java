@@ -19,12 +19,13 @@ import io.airlift.slice.DynamicSliceOutput;
 import io.airlift.slice.Slice;
 import io.airlift.slice.SliceOutput;
 import io.prestosql.metadata.BoundVariables;
-import io.prestosql.metadata.FunctionAndTypeManager;
+import io.prestosql.metadata.Metadata;
 import io.prestosql.metadata.SqlOperator;
 import io.prestosql.spi.annotation.UsedByGeneratedCode;
 import io.prestosql.spi.block.Block;
-import io.prestosql.spi.function.BuiltInScalarFunctionImplementation;
+import io.prestosql.spi.connector.ConnectorSession;
 import io.prestosql.spi.function.OperatorType;
+import io.prestosql.spi.function.ScalarFunctionImplementation;
 import io.prestosql.spi.type.StandardTypes;
 import io.prestosql.spi.type.Type;
 import io.prestosql.util.JsonUtil.JsonGeneratorWriter;
@@ -38,8 +39,8 @@ import static com.google.common.base.Preconditions.checkArgument;
 import static com.google.common.base.Throwables.throwIfUnchecked;
 import static io.prestosql.operator.scalar.JsonOperators.JSON_FACTORY;
 import static io.prestosql.spi.StandardErrorCode.INVALID_CAST_ARGUMENT;
-import static io.prestosql.spi.function.BuiltInScalarFunctionImplementation.ArgumentProperty.valueTypeArgumentProperty;
-import static io.prestosql.spi.function.BuiltInScalarFunctionImplementation.NullConvention.RETURN_NULL_ON_NULL;
+import static io.prestosql.spi.function.ScalarFunctionImplementation.ArgumentProperty.valueTypeArgumentProperty;
+import static io.prestosql.spi.function.ScalarFunctionImplementation.NullConvention.RETURN_NULL_ON_NULL;
 import static io.prestosql.spi.function.Signature.withVariadicBound;
 import static io.prestosql.spi.type.TypeSignature.parseTypeSignature;
 import static io.prestosql.spi.util.Reflection.methodHandle;
@@ -52,7 +53,7 @@ public class RowToJsonCast
         extends SqlOperator
 {
     public static final RowToJsonCast ROW_TO_JSON = new RowToJsonCast();
-    private static final MethodHandle METHOD_HANDLE = methodHandle(RowToJsonCast.class, "toJson", List.class, Block.class);
+    private static final MethodHandle METHOD_HANDLE = methodHandle(RowToJsonCast.class, "toJson", List.class, ConnectorSession.class, Block.class);
 
     private RowToJsonCast()
     {
@@ -64,7 +65,7 @@ public class RowToJsonCast
     }
 
     @Override
-    public BuiltInScalarFunctionImplementation specialize(BoundVariables boundVariables, int arity, FunctionAndTypeManager functionAndTypeManager)
+    public ScalarFunctionImplementation specialize(BoundVariables boundVariables, int arity, Metadata metadata)
     {
         checkArgument(arity == 1, "Expected arity to be 1");
         Type type = boundVariables.getTypeVariable("T");
@@ -77,21 +78,22 @@ public class RowToJsonCast
         }
         MethodHandle methodHandle = METHOD_HANDLE.bindTo(fieldWriters);
 
-        return new BuiltInScalarFunctionImplementation(
+        return new ScalarFunctionImplementation(
                 false,
                 ImmutableList.of(valueTypeArgumentProperty(RETURN_NULL_ON_NULL)),
-                methodHandle);
+                methodHandle,
+                isDeterministic());
     }
 
     @UsedByGeneratedCode
-    public static Slice toJson(List<JsonGeneratorWriter> fieldWriters, Block block)
+    public static Slice toJson(List<JsonGeneratorWriter> fieldWriters, ConnectorSession session, Block block)
     {
         try {
             SliceOutput output = new DynamicSliceOutput(40);
             try (JsonGenerator jsonGenerator = createJsonGenerator(JSON_FACTORY, output)) {
                 jsonGenerator.writeStartArray();
                 for (int i = 0; i < block.getPositionCount(); i++) {
-                    fieldWriters.get(i).writeJsonValue(jsonGenerator, block, i);
+                    fieldWriters.get(i).writeJsonValue(jsonGenerator, block, i, session);
                 }
                 jsonGenerator.writeEndArray();
             }

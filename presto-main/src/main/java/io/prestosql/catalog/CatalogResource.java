@@ -1,5 +1,5 @@
 /*
- * Copyright (C) 2018-2021. Huawei Technologies Co., Ltd. All rights reserved.
+ * Copyright (C) 2018-2020. Huawei Technologies Co., Ltd. All rights reserved.
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
  * You may obtain a copy of the License at
@@ -20,7 +20,6 @@ import com.google.common.io.Files;
 import com.google.inject.Inject;
 import io.airlift.json.JsonCodec;
 import io.prestosql.server.HttpRequestSessionContext;
-import io.prestosql.spi.security.GroupProvider;
 import org.assertj.core.util.VisibleForTesting;
 import org.glassfish.jersey.media.multipart.BodyPartEntity;
 import org.glassfish.jersey.media.multipart.FormDataBodyPart;
@@ -65,10 +64,9 @@ public class CatalogResource
     private final int catalogMaxFileSizeInBytes;
     private final int catalogMaxFileNumber;
     private final List<String> validFileSuffixes;
-    private final GroupProvider groupProvider;
 
     @Inject
-    public CatalogResource(DynamicCatalogService service, DynamicCatalogConfig config, GroupProvider groupProvider)
+    public CatalogResource(DynamicCatalogService service, DynamicCatalogConfig config)
     {
         requireNonNull(config, "config is null");
         this.service = requireNonNull(service, "service is null");
@@ -76,7 +74,6 @@ public class CatalogResource
         catalogMaxFileNumber = config.getCatalogMaxFileNumber();
         String suffixes = config.getCatalogValidFileSuffixes();
         validFileSuffixes = (suffixes == null ? ImmutableList.of() : Arrays.asList(suffixes.split(",")));
-        this.groupProvider = groupProvider;
     }
 
     @VisibleForTesting
@@ -193,10 +190,11 @@ public class CatalogResource
                                   @Context HttpServletRequest servletRequest)
     {
         CatalogInfo catalogInfo = toCatalogInfo(catalogInfoJson);
+
         try (CatalogFileInputStream configFiles = toCatalogFiles(catalogConfigFileBodyParts, globalConfigFilesBodyParts)) {
             return service.createCatalog(catalogInfo,
                     configFiles,
-                    new HttpRequestSessionContext(servletRequest, groupProvider));
+                    new HttpRequestSessionContext(servletRequest));
         }
         catch (WebApplicationException ex) {
             throw ex;
@@ -223,7 +221,7 @@ public class CatalogResource
         try (CatalogFileInputStream configFiles = toCatalogFiles(catalogConfigFileBodyParts, globalConfigFilesBodyParts)) {
             return service.updateCatalog(catalogInfo,
                     configFiles,
-                    new HttpRequestSessionContext(servletRequest, groupProvider));
+                    new HttpRequestSessionContext(servletRequest));
         }
         catch (WebApplicationException ex) {
             throw ex;
@@ -246,7 +244,7 @@ public class CatalogResource
         checkCatalogName(catalogName);
         Response response;
         try {
-            response = service.dropCatalog(catalogName, new HttpRequestSessionContext(servletRequest, groupProvider));
+            response = service.dropCatalog(catalogName, new HttpRequestSessionContext(servletRequest));
         }
         catch (WebApplicationException ex) {
             throw ex;
@@ -264,7 +262,7 @@ public class CatalogResource
     {
         Response response;
         try {
-            response = service.showCatalogs(new HttpRequestSessionContext(servletRequest, groupProvider));
+            response = service.showCatalogs(new HttpRequestSessionContext(servletRequest));
         }
         catch (WebApplicationException ex) {
             throw ex;

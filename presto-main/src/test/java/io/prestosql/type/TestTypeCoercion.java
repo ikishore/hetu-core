@@ -15,7 +15,6 @@ package io.prestosql.type;
 
 import com.google.common.collect.ImmutableSet;
 import io.prestosql.metadata.Metadata;
-import io.prestosql.spi.function.OperatorType;
 import io.prestosql.spi.type.Type;
 import org.testng.annotations.Test;
 
@@ -23,14 +22,12 @@ import java.util.Optional;
 import java.util.Set;
 
 import static io.prestosql.metadata.MetadataManager.createTestMetadataManager;
-import static io.prestosql.spi.function.Signature.internalOperator;
 import static io.prestosql.spi.type.BigintType.BIGINT;
 import static io.prestosql.spi.type.CharType.createCharType;
 import static io.prestosql.spi.type.DateType.DATE;
 import static io.prestosql.spi.type.DecimalType.createDecimalType;
 import static io.prestosql.spi.type.DoubleType.DOUBLE;
 import static io.prestosql.spi.type.IntegerType.INTEGER;
-import static io.prestosql.spi.type.LikePatternType.LIKE_PATTERN;
 import static io.prestosql.spi.type.RealType.REAL;
 import static io.prestosql.spi.type.SmallintType.SMALLINT;
 import static io.prestosql.spi.type.TimeType.TIME;
@@ -46,6 +43,7 @@ import static io.prestosql.spi.type.VarcharType.createUnboundedVarcharType;
 import static io.prestosql.spi.type.VarcharType.createVarcharType;
 import static io.prestosql.type.JoniRegexpType.JONI_REGEXP;
 import static io.prestosql.type.JsonPathType.JSON_PATH;
+import static io.prestosql.type.LikePatternType.LIKE_PATTERN;
 import static io.prestosql.type.Re2JRegexpType.RE2J_REGEXP;
 import static java.lang.String.format;
 import static java.util.Objects.requireNonNull;
@@ -225,7 +223,7 @@ public class TestTypeCoercion
             for (Type resultType : types) {
                 if (typeCoercion.canCoerce(sourceType, resultType) && sourceType != UNKNOWN && resultType != UNKNOWN) {
                     try {
-                        internalOperator(OperatorType.CAST, sourceType.getTypeSignature(), resultType.getTypeSignature());
+                        metadata.getCoercion(sourceType.getTypeSignature(), resultType.getTypeSignature());
                     }
                     catch (Exception e) {
                         fail(format("'%s' -> '%s' coercion exists but there is no cast operator", sourceType, resultType), e);
@@ -290,7 +288,7 @@ public class TestTypeCoercion
     {
         ImmutableSet.Builder<Type> builder = ImmutableSet.builder();
         // add unparametrized types
-        builder.addAll(metadata.getFunctionAndTypeManager().getTypes());
+        builder.addAll(metadata.getTypes());
         // add corner cases for parametrized types
         builder.add(createDecimalType(1, 0));
         builder.add(createDecimalType(17, 0));

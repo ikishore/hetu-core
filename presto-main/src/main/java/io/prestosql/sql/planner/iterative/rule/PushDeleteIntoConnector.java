@@ -22,13 +22,10 @@ import io.prestosql.sql.planner.iterative.Rule;
 import io.prestosql.sql.planner.plan.TableDeleteNode;
 import io.prestosql.sql.planner.plan.TableFinishNode;
 
-import java.util.Optional;
-
 import static com.google.common.collect.Iterables.getOnlyElement;
 import static io.prestosql.matching.Capture.newCapture;
 import static io.prestosql.sql.planner.plan.Patterns.delete;
 import static io.prestosql.sql.planner.plan.Patterns.exchange;
-import static io.prestosql.sql.planner.plan.Patterns.project;
 import static io.prestosql.sql.planner.plan.Patterns.source;
 import static io.prestosql.sql.planner.plan.Patterns.tableFinish;
 import static io.prestosql.sql.planner.plan.Patterns.tableScan;
@@ -38,18 +35,16 @@ public class PushDeleteIntoConnector
         implements Rule<TableFinishNode>
 {
     private static final Capture<TableScanNode> TABLE_SCAN = newCapture();
-    private static final Pattern<TableFinishNode> PATTERN_WITHOUT_PROJECT =
+    private static final Pattern<TableFinishNode> PATTERN_WITHOUT_EXCAHNGE =
             tableFinish().with(source().matching(
-                    exchange().with(source().matching(
-                            delete().with(source().matching(
-                                    tableScan().capturedAs(TABLE_SCAN)))))));
+                    delete().with(source().matching(
+                            tableScan().capturedAs(TABLE_SCAN)))));
 
     private static final Pattern<TableFinishNode> PATTERN_WITH_EXCAHNGE =
             tableFinish().with(source().matching(
                     exchange().with(source().matching(
                             delete().with(source().matching(
-                                    project().with(source().matching(
-                                            tableScan().capturedAs(TABLE_SCAN)))))))));
+                                    tableScan().capturedAs(TABLE_SCAN)))))));
 
     private final Metadata metadata;
     private final boolean withExchange;
@@ -67,7 +62,7 @@ public class PushDeleteIntoConnector
             return PATTERN_WITH_EXCAHNGE;
         }
 
-        return PATTERN_WITHOUT_PROJECT;
+        return PATTERN_WITHOUT_EXCAHNGE;
     }
 
     @Override
@@ -75,7 +70,7 @@ public class PushDeleteIntoConnector
     {
         TableScanNode tableScan = captures.get(TABLE_SCAN);
 
-        return Optional.of(tableScan.getTable())
+        return metadata.applyDelete(context.getSession(), tableScan.getTable())
                 .map(newHandle -> new TableDeleteNode(
                         context.getIdAllocator().getNextId(),
                         newHandle,

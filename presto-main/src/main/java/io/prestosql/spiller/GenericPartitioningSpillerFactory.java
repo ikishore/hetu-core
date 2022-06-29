@@ -17,11 +17,9 @@ import com.google.inject.Inject;
 import io.prestosql.memory.context.AggregatedMemoryContext;
 import io.prestosql.operator.PartitionFunction;
 import io.prestosql.operator.SpillContext;
-import io.prestosql.spi.Page;
 import io.prestosql.spi.type.Type;
 
 import java.util.List;
-import java.util.function.BiFunction;
 
 import static java.util.Objects.requireNonNull;
 
@@ -43,12 +41,6 @@ public class GenericPartitioningSpillerFactory
             SpillContext spillContext,
             AggregatedMemoryContext memoryContext)
     {
-        return new GenericPartitioningSpiller(types, partitionFunction, spillContext, memoryContext, singleStreamSpillerFactory, null);
-    }
-
-    @Override
-    public PartitioningSpiller create(List<Type> types, PartitionFunction partitionFunction, SpillContext spillContext, AggregatedMemoryContext memoryContext, BiFunction<Integer, Page, Long> getRawHash)
-    {
-        return new GenericPartitioningSpiller(types, partitionFunction, spillContext, memoryContext, singleStreamSpillerFactory, getRawHash);
+        return new GenericPartitioningSpiller(types, partitionFunction, spillContext, memoryContext, singleStreamSpillerFactory);
     }
 }

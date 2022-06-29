@@ -131,9 +131,8 @@ public class BenchmarkPagesIndexPageSorter
                     return DOUBLE;
                 case "BOOLEAN":
                     return BOOLEAN;
-                default:
-                    throw new IllegalArgumentException("Unsupported type: " + sortChannelType);
             }
+            throw new IllegalArgumentException("Unsupported type: " + sortChannelType);
         }
     }
 

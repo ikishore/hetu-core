@@ -105,15 +105,15 @@ public class DynamicLifespanScheduler
     {
         checkState(initialScheduled);
 
-        SettableFuture<?> tmpNewDriverGroupReady;
+        SettableFuture<?> newDriverGroupReady;
         synchronized (this) {
             for (Lifespan newlyCompletedDriverGroup : newlyCompletedDriverGroups) {
                 checkArgument(!newlyCompletedDriverGroup.isTaskWide());
                 recentlyCompletedDriverGroups.add(newlyCompletedDriverGroup);
             }
-            tmpNewDriverGroupReady = this.newDriverGroupReady;
+            newDriverGroupReady = this.newDriverGroupReady;
         }
-        tmpNewDriverGroupReady.set(null);
+        newDriverGroupReady.set(null);
     }
 
     @Override
@@ -124,14 +124,14 @@ public class DynamicLifespanScheduler
 
         checkState(initialScheduled);
 
-        List<Lifespan> tmpRecentlyCompletedDriverGroups;
+        List<Lifespan> recentlyCompletedDriverGroups;
         synchronized (this) {
-            tmpRecentlyCompletedDriverGroups = ImmutableList.copyOf(this.recentlyCompletedDriverGroups);
+            recentlyCompletedDriverGroups = ImmutableList.copyOf(this.recentlyCompletedDriverGroups);
             this.recentlyCompletedDriverGroups.clear();
             newDriverGroupReady = SettableFuture.create();
         }
 
-        for (Lifespan driverGroup : tmpRecentlyCompletedDriverGroups) {
+        for (Lifespan driverGroup : recentlyCompletedDriverGroups) {
             if (!driverGroups.hasNext()) {
                 break;
             }

@@ -18,14 +18,10 @@ import io.airlift.units.DataSize;
 import io.prestosql.memory.context.LocalMemoryContext;
 import io.prestosql.operator.project.MergingPageOutput;
 import io.prestosql.operator.project.PageProcessor;
-import io.prestosql.snapshot.SingleInputSnapshotState;
 import io.prestosql.spi.Page;
 import io.prestosql.spi.plan.PlanNodeId;
-import io.prestosql.spi.snapshot.BlockEncodingSerdeProvider;
-import io.prestosql.spi.snapshot.RestorableConfig;
 import io.prestosql.spi.type.Type;
 
-import java.io.Serializable;
 import java.util.List;
 import java.util.function.Supplier;
 
@@ -33,7 +29,6 @@ import static com.google.common.base.Preconditions.checkState;
 import static io.prestosql.memory.context.AggregatedMemoryContext.newSimpleAggregatedMemoryContext;
 import static java.util.Objects.requireNonNull;
 
-@RestorableConfig(uncapturedFields = {"processor", "snapshotState"})
 public class FilterAndProjectOperator
         implements Operator
 {
@@ -45,8 +40,6 @@ public class FilterAndProjectOperator
     private final MergingPageOutput mergingOutput;
     private boolean finishing;
 
-    private final SingleInputSnapshotState snapshotState;
-
     public FilterAndProjectOperator(
             OperatorContext operatorContext,
             PageProcessor processor,
@@ -57,7 +50,6 @@ public class FilterAndProjectOperator
         this.pageProcessorMemoryContext = newSimpleAggregatedMemoryContext().newLocalMemoryContext(ScanFilterAndProjectOperator.class.getSimpleName());
         this.outputMemoryContext = operatorContext.newLocalSystemMemoryContext(FilterAndProjectOperator.class.getSimpleName());
         this.mergingOutput = requireNonNull(mergingOutput, "mergingOutput is null");
-        this.snapshotState = operatorContext.isSnapshotEnabled() ? SingleInputSnapshotState.forOperator(this, operatorContext) : null;
     }
 
     @Override
@@ -76,11 +68,6 @@ public class FilterAndProjectOperator
     @Override
     public final boolean isFinished()
     {
-        if (snapshotState != null && snapshotState.hasMarker()) {
-            // Snapshot: there are pending markers. Need to send them out before finishing this operator.
-            return false;
-        }
-
         boolean finished = finishing && mergingOutput.isFinished();
         if (finished) {
             outputMemoryContext.setBytes(mergingOutput.getRetainedSizeInBytes());
@@ -97,12 +84,6 @@ public class FilterAndProjectOperator
     @Override
     public final void addInput(Page page)
     {
-        if (snapshotState != null) {
-            if (snapshotState.processPage(page)) {
-                return;
-            }
-        }
-
         checkState(!finishing, "Operator is already finishing");
         requireNonNull(page, "page is null");
         checkState(mergingOutput.needsInput(), "Page buffer is full");
@@ -118,61 +99,7 @@ public class FilterAndProjectOperator
     @Override
     public final Page getOutput()
     {
-        if (snapshotState != null) {
-            Page marker = snapshotState.nextMarker();
-            if (marker != null) {
-                return marker;
-            }
-        }
-
         return mergingOutput.getOutput();
-    }
-
-    @Override
-    public Page pollMarker()
-    {
-        return snapshotState.nextMarker();
-    }
-
-    @Override
-    public void close()
-    {
-        if (snapshotState != null) {
-            snapshotState.close();
-        }
-    }
-
-    @Override
-    public Object capture(BlockEncodingSerdeProvider serdeProvider)
-    {
-        FilterAndProjectOperatorState myState = new FilterAndProjectOperatorState();
-        myState.operatorContext = operatorContext.capture(serdeProvider);
-        myState.pageProcessorMemoryContext = pageProcessorMemoryContext.getBytes();
-        myState.outputMemoryContext = outputMemoryContext.getBytes();
-        myState.mergingOutput = mergingOutput.capture(serdeProvider);
-        myState.finishing = finishing;
-        return myState;
-    }
-
-    @Override
-    public void restore(Object state, BlockEncodingSerdeProvider serdeProvider)
-    {
-        FilterAndProjectOperatorState myState = (FilterAndProjectOperatorState) state;
-        this.operatorContext.restore(myState.operatorContext, serdeProvider);
-        this.pageProcessorMemoryContext.setBytes(myState.pageProcessorMemoryContext);
-        this.outputMemoryContext.setBytes(myState.outputMemoryContext);
-        this.mergingOutput.restore(myState.mergingOutput, serdeProvider);
-        this.finishing = myState.finishing;
-    }
-
-    private static class FilterAndProjectOperatorState
-            implements Serializable
-    {
-        private Object operatorContext;
-        private long pageProcessorMemoryContext;
-        private long outputMemoryContext;
-        private Object mergingOutput;
-        private boolean finishing;
     }
 
     public static class FilterAndProjectOperatorFactory
@@ -206,9 +133,9 @@ public class FilterAndProjectOperator
         public Operator createOperator(DriverContext driverContext)
         {
             checkState(!closed, "Factory is already closed");
-            OperatorContext addOperatorContext = driverContext.addOperatorContext(operatorId, planNodeId, FilterAndProjectOperator.class.getSimpleName());
+            OperatorContext operatorContext = driverContext.addOperatorContext(operatorId, planNodeId, FilterAndProjectOperator.class.getSimpleName());
             return new FilterAndProjectOperator(
-                    addOperatorContext,
+                    operatorContext,
                     processor.get(),
                     new MergingPageOutput(types, minOutputPageSize.toBytes(), minOutputPageRowCount));
         }

@@ -14,20 +14,15 @@
 package io.prestosql.operator;
 
 import com.google.common.collect.ImmutableList;
-import io.prestosql.snapshot.SingleInputSnapshotState;
 import io.prestosql.spi.Page;
 import io.prestosql.spi.PageBuilder;
 import io.prestosql.spi.block.Block;
 import io.prestosql.spi.block.BlockBuilder;
 import io.prestosql.spi.plan.PlanNodeId;
-import io.prestosql.spi.snapshot.BlockEncodingSerdeProvider;
-import io.prestosql.spi.snapshot.RestorableConfig;
 import io.prestosql.spi.statistics.ComputedStatistics;
 import io.prestosql.spi.type.Type;
 import io.prestosql.sql.planner.plan.StatisticAggregationsDescriptor;
 
-import java.io.Serializable;
-import java.util.ArrayList;
 import java.util.Collection;
 import java.util.List;
 import java.util.Objects;
@@ -37,7 +32,6 @@ import static io.prestosql.spi.statistics.TableStatisticType.ROW_COUNT;
 import static io.prestosql.spi.type.BigintType.BIGINT;
 import static java.util.Objects.requireNonNull;
 
-@RestorableConfig(uncapturedFields = {"statisticsWriter", "descriptor", "state", "snapshotState"})
 public class StatisticsWriterOperator
         implements Operator
 {
@@ -94,9 +88,7 @@ public class StatisticsWriterOperator
     private final boolean rowCountEnabled;
 
     private State state = State.RUNNING;
-    private ImmutableList.Builder<ComputedStatistics> computedStatisticsBuilder = ImmutableList.builder();
-
-    private final SingleInputSnapshotState snapshotState;
+    private final ImmutableList.Builder<ComputedStatistics> computedStatisticsBuilder = ImmutableList.builder();
 
     public StatisticsWriterOperator(OperatorContext operatorContext, StatisticsWriter statisticsWriter, StatisticAggregationsDescriptor<Integer> descriptor, boolean rowCountEnabled)
     {
@@ -104,7 +96,6 @@ public class StatisticsWriterOperator
         this.statisticsWriter = requireNonNull(statisticsWriter, "statisticsWriter is null");
         this.descriptor = requireNonNull(descriptor, "descriptor is null");
         this.rowCountEnabled = rowCountEnabled;
-        this.snapshotState = operatorContext.isSnapshotEnabled() ? SingleInputSnapshotState.forOperator(this, operatorContext) : null;
     }
 
     @Override
@@ -125,12 +116,6 @@ public class StatisticsWriterOperator
         requireNonNull(page, "page is null");
         checkState(state == State.RUNNING, "Operator is %s", state);
 
-        if (snapshotState != null) {
-            if (snapshotState.processPage(page)) {
-                return;
-            }
-        }
-
         for (int position = 0; position < page.getPositionCount(); position++) {
             computedStatisticsBuilder.add(getComputedStatistics(page, position));
         }
@@ -139,13 +124,6 @@ public class StatisticsWriterOperator
     @Override
     public Page getOutput()
     {
-        if (snapshotState != null) {
-            Page marker = snapshotState.nextMarker();
-            if (marker != null) {
-                return marker;
-            }
-        }
-
         if (state != State.FINISHING) {
             return null;
         }
@@ -170,12 +148,6 @@ public class StatisticsWriterOperator
     }
 
     @Override
-    public Page pollMarker()
-    {
-        return snapshotState.nextMarker();
-    }
-
-    @Override
     public void finish()
     {
         if (state == State.RUNNING) {
@@ -186,11 +158,6 @@ public class StatisticsWriterOperator
     @Override
     public boolean isFinished()
     {
-        if (snapshotState != null && snapshotState.hasMarker()) {
-            // Snapshot: there are pending markers. Need to send them out before finishing this operator.
-            return false;
-        }
-
         return state == State.FINISHED;
     }
 
@@ -226,46 +193,5 @@ public class StatisticsWriterOperator
     public interface StatisticsWriter
     {
         void writeStatistics(Collection<ComputedStatistics> computedStatistics);
-    }
-
-    @Override
-    public void close()
-    {
-        if (snapshotState != null) {
-            snapshotState.close();
-        }
-    }
-
-    @Override
-    public Object capture(BlockEncodingSerdeProvider serdeProvider)
-    {
-        StatisticsWriterOperatorState myState = new StatisticsWriterOperatorState();
-        myState.operatorContext = operatorContext.capture(serdeProvider);
-        List<ComputedStatistics> computedStatistics = computedStatisticsBuilder.build();
-        myState.computedStatisticsBuilder = new Object[computedStatistics.size()];
-        for (int i = 0; i < computedStatistics.size(); i++) {
-            myState.computedStatisticsBuilder[i] = computedStatistics.get(i).capture(serdeProvider);
-        }
-        return myState;
-    }
-
-    @Override
-    public void restore(Object state, BlockEncodingSerdeProvider serdeProvider)
-    {
-        StatisticsWriterOperatorState myState = (StatisticsWriterOperatorState) state;
-        this.operatorContext.restore(myState.operatorContext, serdeProvider);
-        List<ComputedStatistics> computedStatistics = new ArrayList<>();
-        for (int i = 0; i < myState.computedStatisticsBuilder.length; i++) {
-            computedStatistics.add(ComputedStatistics.restoreComputedStatistics(myState.computedStatisticsBuilder[i], serdeProvider));
-        }
-        this.computedStatisticsBuilder = ImmutableList.builder();
-        this.computedStatisticsBuilder.addAll(computedStatistics);
-    }
-
-    private static class StatisticsWriterOperatorState
-            implements Serializable
-    {
-        private Object operatorContext;
-        private Object[] computedStatisticsBuilder;
     }
 }

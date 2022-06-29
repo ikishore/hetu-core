@@ -15,7 +15,10 @@ package io.prestosql.execution;
 
 import com.google.common.cache.Cache;
 import com.google.common.cache.CacheBuilder;
+import com.google.common.collect.ArrayListMultimap;
+import com.google.common.collect.ImmutableList;
 import com.google.common.collect.ImmutableSet;
+import com.google.common.collect.ListMultimap;
 import com.google.common.util.concurrent.ListenableFuture;
 import io.airlift.concurrent.SetThreadName;
 import io.airlift.log.Logger;
@@ -23,8 +26,7 @@ import io.airlift.units.DataSize;
 import io.airlift.units.Duration;
 import io.prestosql.Session;
 import io.prestosql.SystemSessionProperties;
-import io.prestosql.cost.CostCalculator;
-import io.prestosql.cost.StatsCalculator;
+import io.prestosql.cost.*;
 import io.prestosql.cube.CubeManager;
 import io.prestosql.dynamicfilter.DynamicFilterService;
 import io.prestosql.execution.QueryPreparer.PreparedQuery;
@@ -45,31 +47,27 @@ import io.prestosql.query.CachedSqlQueryExecution;
 import io.prestosql.query.CachedSqlQueryExecutionPlan;
 import io.prestosql.security.AccessControl;
 import io.prestosql.server.BasicQueryInfo;
-import io.prestosql.snapshot.MarkerAnnouncer;
-import io.prestosql.snapshot.QueryRecoveryManager;
-import io.prestosql.snapshot.QuerySnapshotManager;
-import io.prestosql.snapshot.RecoveryUtils;
 import io.prestosql.spi.HetuConstant;
 import io.prestosql.spi.PrestoException;
-import io.prestosql.spi.PrestoWarning;
 import io.prestosql.spi.QueryId;
 import io.prestosql.spi.connector.CatalogName;
-import io.prestosql.spi.connector.StandardWarningCode;
+import io.prestosql.spi.function.Signature;
 import io.prestosql.spi.metadata.TableHandle;
-import io.prestosql.spi.plan.PlanNode;
-import io.prestosql.spi.plan.PlanNodeIdAllocator;
-import io.prestosql.spi.plan.ProjectNode;
-import io.prestosql.spi.plan.Symbol;
+import io.prestosql.spi.plan.*;
+import io.prestosql.spi.relation.InputReferenceExpression;
 import io.prestosql.spi.relation.RowExpression;
 import io.prestosql.spi.relation.VariableReferenceExpression;
 import io.prestosql.spi.service.PropertyService;
 import io.prestosql.spi.statestore.StateCollection;
 import io.prestosql.spi.statestore.StateMap;
 import io.prestosql.spi.statestore.StateStore;
+import io.prestosql.spi.type.Type;
 import io.prestosql.split.SplitManager;
 import io.prestosql.split.SplitSource;
+import io.prestosql.sql.TreePrinter;
 import io.prestosql.sql.analyzer.Analysis;
 import io.prestosql.sql.analyzer.Analyzer;
+import io.prestosql.sql.analyzer.FeaturesConfig;
 import io.prestosql.sql.analyzer.QueryExplainer;
 import io.prestosql.sql.parser.SqlParser;
 import io.prestosql.sql.planner.DistributedExecutionPlanner;
@@ -81,39 +79,55 @@ import io.prestosql.sql.planner.Plan;
 import io.prestosql.sql.planner.PlanFragment;
 import io.prestosql.sql.planner.PlanFragmenter;
 import io.prestosql.sql.planner.PlanOptimizers;
-import io.prestosql.sql.planner.SimplePlanVisitor;
 import io.prestosql.sql.planner.StageExecutionPlan;
 import io.prestosql.sql.planner.SubPlan;
 import io.prestosql.sql.planner.TypeAnalyzer;
+import io.prestosql.sql.planner.caching.CacheWorkloadProfiler;
+import io.prestosql.sql.planner.optimizations.*;
+import io.prestosql.sql.planner.*;
+import io.prestosql.sql.planner.datapath.globalplanner.GlobalPlanPrinter;
+import io.prestosql.sql.planner.datapath.globalplanner.GlobalPlaner;
+import io.prestosql.sql.planner.datapath.globalplanner.JoinCostCalculator;
 import io.prestosql.sql.planner.optimizations.PlanOptimizer;
-import io.prestosql.sql.planner.plan.OutputNode;
-import io.prestosql.sql.planner.plan.TableFinishNode;
-import io.prestosql.sql.planner.plan.TableWriterNode;
-import io.prestosql.sql.tree.CreateTableAsSelect;
+import io.prestosql.spi.plan.PlanNode;
+import io.prestosql.sql.planner.datapath.globalplanner.JoinInformationExtractor;
+import java.io.*;
+import java.nio.file.Files;
+import java.nio.file.Paths;
+import java.util.*;
+
+import static io.prestosql.spi.function.FunctionKind.AGGREGATE;
+import static io.prestosql.spi.type.BigintType.BIGINT;
+import static io.prestosql.sql.planner.SystemPartitioningHandle.SINGLE_DISTRIBUTION;
+import static io.prestosql.sql.planner.planprinter.PlanPrinter.textDistributedPlan;
+
+
+import io.prestosql.sql.planner.plan.*;
+import io.prestosql.sql.planner.planprinter.PlanPrinter;
+import io.prestosql.sql.relational.Expressions;
+import io.prestosql.sql.tree.Except;
 import io.prestosql.sql.tree.Explain;
-import io.prestosql.sql.tree.Insert;
-import io.prestosql.sql.tree.InsertCube;
-import io.prestosql.sql.tree.Statement;
 import io.prestosql.statestore.StateStoreProvider;
 import io.prestosql.utils.HetuConfig;
 import org.joda.time.DateTime;
 
+import javax.annotation.concurrent.Immutable;
 import javax.annotation.concurrent.ThreadSafe;
 import javax.inject.Inject;
 
-import java.util.ArrayList;
+
 import java.util.HashMap;
 import java.util.HashSet;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
-import java.util.OptionalLong;
 import java.util.Set;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.ScheduledExecutorService;
-import java.util.concurrent.atomic.AtomicBoolean;
+import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.atomic.AtomicReference;
 import java.util.function.Consumer;
+import java.util.stream.Collectors;
 
 import static com.google.common.base.Preconditions.checkArgument;
 import static com.google.common.base.Throwables.throwIfInstanceOf;
@@ -125,18 +139,48 @@ import static io.prestosql.execution.buffer.OutputBuffers.BROADCAST_PARTITION_ID
 import static io.prestosql.execution.buffer.OutputBuffers.createInitialEmptyOutputBuffers;
 import static io.prestosql.execution.scheduler.SqlQueryScheduler.createSqlQueryScheduler;
 import static io.prestosql.spi.StandardErrorCode.NOT_SUPPORTED;
-import static io.prestosql.sql.planner.DistributedExecutionPlanner.Mode.NORMAL;
-import static io.prestosql.sql.planner.DistributedExecutionPlanner.Mode.RESUME;
-import static io.prestosql.sql.planner.DistributedExecutionPlanner.Mode.SNAPSHOT;
 import static io.prestosql.statestore.StateStoreConstants.CROSS_REGION_DYNAMIC_FILTERS;
 import static io.prestosql.statestore.StateStoreConstants.QUERY_COLUMN_NAME_TO_SYMBOL_MAPPING;
 import static java.util.Objects.requireNonNull;
 import static java.util.concurrent.TimeUnit.SECONDS;
+import static jdk.nashorn.internal.objects.NativeFunction.call;
 
 @ThreadSafe
 public class SqlQueryExecution
         implements QueryExecution
 {
+    static public AtomicInteger currentlyOptimized = new AtomicInteger(0);
+    static public AtomicInteger allQueryCount = new AtomicInteger(0);
+
+    static public Plan lowCostQuery;
+    static public AtomicInteger overlapOrderCount = new AtomicInteger(0);
+    static public AtomicInteger currentBatchSize = new AtomicInteger(0);
+    static Map<Integer, Plan> topologicalOrderPlanList = new HashMap<>();
+    static boolean planAggregationPhase = true;
+
+
+
+    //static long cummulativePlanningTime = 0;
+    //static  int cumulativeOperatorCount  =0;
+    //static ArrayList<Long> cumulativePlanTimeList = new ArrayList<Long>();
+    //static long DPPlanningTime = 0;
+    //static double localPlansCummulativeCost = 0;
+    static Map<Integer, List<Long>> numberOfJoinsToRunningTimeMapping = new HashMap<Integer, List<Long>>();
+    static Map<Integer, JoinInformationExtractor.JoinInformation> JoinGraphMap = new HashMap<Integer, JoinInformationExtractor.JoinInformation>();
+    static List<PlanNode> logicalPlanList = new ArrayList<>();
+    static List<QueryId> queryIdList = new ArrayList<>();
+    static PlanNodeIdAllocator idAllocator = new PlanNodeIdAllocator();
+    static Map<Symbol, Type> typesCollector = new HashMap<>();
+    static Map<PlanNodeId, PlanNodeStatsEstimate> statsCollector = new HashMap<>();
+    static Map<PlanNodeId, PlanCostEstimate> costsCollector = new HashMap<>();
+    static PlanSymbolAllocator planSymbolAllocator = new PlanSymbolAllocator();
+
+    static GlobalPlaner globalPlaner = new GlobalPlaner();
+
+    static CacheWorkloadProfiler cacheWorkloadProfiler = new CacheWorkloadProfiler(2000000.0);
+
+    public static boolean forceJoinOrder = false;
+
     private static final Logger log = Logger.get(SqlQueryExecution.class);
 
     private static final OutputBufferId OUTPUT_BUFFER_ID = new OutputBufferId(0);
@@ -169,10 +213,6 @@ public class SqlQueryExecution
     private final DynamicFilterService dynamicFilterService;
     private final HeuristicIndexerManager heuristicIndexerManager;
     private final StateStoreProvider stateStoreProvider;
-    private final QuerySnapshotManager snapshotManager;
-    private final QueryRecoveryManager queryRecoveryManager;
-    private final WarningCollector warningCollector;
-    private final AtomicBoolean suspendedWithRecoveryManager = new AtomicBoolean();
 
     public SqlQueryExecution(
             PreparedQuery preparedQuery,
@@ -202,8 +242,7 @@ public class SqlQueryExecution
             WarningCollector warningCollector,
             DynamicFilterService dynamicFilterService,
             HeuristicIndexerManager heuristicIndexerManager,
-            StateStoreProvider stateStoreProvider,
-            RecoveryUtils recoveryUtils)
+            StateStoreProvider stateStoreProvider)
     {
         try (SetThreadName ignored = new SetThreadName("Query-%s", stateMachine.getQueryId())) {
             this.slug = requireNonNull(slug, "slug is null");
@@ -226,9 +265,6 @@ public class SqlQueryExecution
             this.costCalculator = requireNonNull(costCalculator, "costCalculator is null");
             this.dynamicFilterService = requireNonNull(dynamicFilterService, "dynamicFilterService is null");
             this.heuristicIndexerManager = requireNonNull(heuristicIndexerManager, "heuristicIndexerManager is null");
-            this.warningCollector = requireNonNull(warningCollector);
-            this.queryRecoveryManager = recoveryUtils.getOrCreateRecoveryManager(stateMachine.getQueryId(), stateMachine.getSession());
-            this.snapshotManager = recoveryUtils.getOrCreateQuerySnapshotManager(stateMachine.getQueryId(), stateMachine.getSession());
 
             checkArgument(scheduleSplitBatchSize > 0, "scheduleSplitBatchSize must be greater than 0");
             this.scheduleSplitBatchSize = scheduleSplitBatchSize;
@@ -260,7 +296,7 @@ public class SqlQueryExecution
             stateMachine.setUpdateType(analysis.getUpdateType());
 
             // when the query finishes cache the final query info, and clear the reference to the output stage
-            AtomicReference<SqlQueryScheduler> localQueryScheduler = this.queryScheduler;
+            AtomicReference<SqlQueryScheduler> queryScheduler = this.queryScheduler;
             stateMachine.addStateChangeListener(state -> {
                 //Set the AsyncRunning flag if query is capable of running async
                 if (analysis.isAsyncQuery() && state == QueryState.RUNNING) {
@@ -271,11 +307,8 @@ public class SqlQueryExecution
                     return;
                 }
 
-                // Recovery: query is now done, so clear its entries in the recovery manager
-                if (SystemSessionProperties.isRecoveryEnabled(stateMachine.getSession())) {
-                    queryRecoveryManager.doneQuery(state);
-                }
-                SqlQueryScheduler scheduler = localQueryScheduler.get();
+                // query is now done, so abort any work that is still running
+                SqlQueryScheduler scheduler = queryScheduler.get();
                 if (scheduler != null) {
                     scheduler.abort();
                 }
@@ -301,12 +334,6 @@ public class SqlQueryExecution
     public void setMemoryPool(VersionedMemoryPoolId poolId)
     {
         stateMachine.setMemoryPool(poolId);
-    }
-
-    @Override
-    public QuerySnapshotManager getQuerySnapshotManager()
-    {
-        return snapshotManager;
     }
 
     @Override
@@ -495,18 +522,19 @@ public class SqlQueryExecution
                     log.warn("something unexpected happened.. cause: %s", e.getMessage());
                 }
 
+                //System.out.println("before distribution");
                 // plan distribution of query
                 planDistribution(plan);
+                //System.out.println("after distribution");
 
                 // transition to starting
                 if (!stateMachine.transitionToStarting()) {
                     // query already started or finished
                     return;
                 }
-                queryRecoveryManager.setRescheduler(snapshotId -> {
-                    log.debug("Rescheduler is called");
-                    resumeQuery(snapshotId, plan);
-                }, warningCollector);
+
+                //System.out.println("DEPLOY");
+
                 // if query is not finished, start the scheduler, otherwise cancel it
                 SqlQueryScheduler scheduler = queryScheduler.get();
 
@@ -517,99 +545,8 @@ public class SqlQueryExecution
             catch (Throwable e) {
                 fail(e);
                 throwIfInstanceOf(e, Error.class);
-                log.warn(e, "Encountered error while scheduling query");
             }
         }
-    }
-
-    private void resumeQuery(OptionalLong snapshotId, PlanRoot plan)
-    {
-        SqlQueryScheduler oldScheduler = queryScheduler.get();
-        try {
-            // Wait for previous scheduler to finish.
-            // This is important, otherwise the old schedule may close split sources after the new scheduler has started.
-            oldScheduler.doneScheduling().get();
-        }
-        catch (Exception e) {
-            throw new RuntimeException(e);
-        }
-
-        PartitioningHandle partitioningHandle = plan.getRoot().getFragment().getPartitioningScheme().getPartitioning().getHandle();
-        OutputBuffers rootOutputBuffers = createInitialEmptyOutputBuffers(partitioningHandle)
-                .withBuffer(OUTPUT_BUFFER_ID, BROADCAST_PARTITION_ID)
-                .withNoMoreBufferIds();
-
-        // build the stage execution objects (this doesn't schedule execution)
-        SqlQueryScheduler scheduler = createResumeScheduler(snapshotId, plan, rootOutputBuffers);
-        queryScheduler.set(scheduler);
-        log.debug("Resuming query %s from a resumable task failure.", getQueryId());
-        scheduler.start();
-        stateMachine.transitionToStarting();
-    }
-
-    private SqlQueryScheduler createResumeScheduler(OptionalLong snapshotId, PlanRoot plan, OutputBuffers rootOutputBuffers)
-    {
-        log.debug("createResumeScheduler snapshot Id: %d", snapshotId.orElse(0));
-        MarkerAnnouncer announcer = splitManager.getMarkerAnnouncer(stateMachine.getSession());
-        announcer.resumeSnapshot(snapshotId.orElse(0));
-        // Clear any temporary content that's not part of the snapshot
-        resetOutputData(plan, snapshotId);
-        // Create a new scheduler, to schedule new stages and tasks
-        DistributedExecutionPlanner distributedExecutionPlanner = new DistributedExecutionPlanner(splitManager, metadata);
-        StageExecutionPlan executionPlan = distributedExecutionPlanner.plan(plan.getRoot(), stateMachine.getSession(),
-                RESUME, snapshotId.isPresent() ? snapshotId.getAsLong() : null, announcer.currentSnapshotId());
-
-        // build the stage execution objects (this doesn't schedule execution)
-        SqlQueryScheduler scheduler = createSqlQueryScheduler(
-                stateMachine,
-                locationFactory,
-                executionPlan,
-                nodePartitioningManager,
-                nodeScheduler,
-                remoteTaskFactory,
-                stateMachine.getSession(),
-                plan.isSummarizeTaskInfos(),
-                scheduleSplitBatchSize,
-                queryExecutor,
-                schedulerExecutor,
-                failureDetector,
-                rootOutputBuffers,
-                nodeTaskMap,
-                executionPolicy,
-                schedulerStats,
-                dynamicFilterService,
-                heuristicIndexerManager,
-                snapshotManager,
-                queryRecoveryManager,
-                // Require same number of tasks to be scheduled, but do not require it if starting from beginning
-                snapshotId.isPresent() ? queryScheduler.get().getStageTaskCounts() : null,
-                true);
-        if (snapshotId.isPresent() && snapshotId.getAsLong() != 0) {
-            // Restore going to happen first, mark the restore state for all stages
-            scheduler.setResuming(snapshotId.getAsLong());
-        }
-        return scheduler;
-    }
-
-    private void resetOutputData(PlanRoot plan, OptionalLong snapshotId)
-    {
-        plan.getRoot().getFragment().getRoot().accept(new SimplePlanVisitor<Void>()
-        {
-            @Override
-            public Void visitTableFinish(TableFinishNode node, Void context)
-            {
-                super.visitTableFinish(node, context);
-
-                // Find table-finish-node, which contains handle to the table
-                if (analysis.getStatement() instanceof CreateTableAsSelect) {
-                    metadata.resetCreateForRerun(getSession(), ((TableWriterNode.CreateTarget) node.getTarget()).getHandle(), OptionalLong.of(snapshotManager.computeSnapshotIndex(snapshotId)));
-                }
-                else {
-                    metadata.resetInsertForRerun(getSession(), ((TableWriterNode.InsertTarget) node.getTarget()).getHandle(), OptionalLong.of(snapshotManager.computeSnapshotIndex(snapshotId)));
-                }
-                return null;
-            }
-        }, null);
     }
 
     @Override
@@ -632,6 +569,39 @@ public class SqlQueryExecution
         stateMachine.addQueryInfoStateChangeListener(stateChangeListener);
     }
 
+    public static boolean readFilterInfoValue(){
+
+    try {
+        //FileInputStream fstream = new FileInputStream("/scratch/venkates/openLookEng-working/joinForcing.txt");
+        //System.out.println("Working Directory = " + System.getProperty("user.dir"));
+        FileInputStream fstream = new FileInputStream("./filterInfo.txt");
+        BufferedReader br = new BufferedReader(new InputStreamReader(fstream));
+        String strLine;
+        int value = 0;
+        while ((strLine = br.readLine()) != null) {
+            value = Integer.parseInt(strLine);
+        }
+        // Close the input stream
+        br.close();
+        fstream.close();
+
+        if(value == 1){
+            //System.out.println("VSK: Filter Info is true ");
+            return  true;
+        }
+        else {
+            //System.out.println("VSK: Filter Info is false");
+            return false;
+        }
+
+    } catch (Exception e) {// Catch exception if any
+        System.err.println("Error: " + e.getMessage());
+    }
+    //System.out.println("VSK: It should not come here");
+    return false;
+}
+
+
     private PlanRoot analyzeQuery()
     {
         try {
@@ -642,16 +612,485 @@ public class SqlQueryExecution
         }
     }
 
+    private void resetVariables(){
+//        queryCount = 0;   //This needs to be taken care //TODO
+//        allQueryCount = 0;
+        logicalPlanList = new ArrayList<PlanNode>();
+
+//        cummulativePlanningTime = 0;
+//        cumulativeOperatorCount  =0;
+//        cumulativePlanTimeList = new ArrayList<Long>();
+//        DPPlanningTime = 0;
+//        localPlansCummulativeCost = 0;
+        numberOfJoinsToRunningTimeMapping = new HashMap<Integer, List<Long>>();
+        JoinGraphMap = new HashMap<Integer, JoinInformationExtractor.JoinInformation>();
+        logicalPlanList = new ArrayList<>();
+        queryIdList = new ArrayList<>();
+        idAllocator = new PlanNodeIdAllocator();
+        typesCollector = new HashMap<>();
+        statsCollector = new HashMap<>();
+        costsCollector = new HashMap<>();
+        planSymbolAllocator = new PlanSymbolAllocator();
+    }
+
+    private PlanNode preparePlanForBatching (Plan plan, Integer allQueryCountLocal)
+    {
+        for (Map.Entry<Symbol, Type> entry : plan.getTypes().allTypes().entrySet()) {
+            typesCollector.put(entry.getKey(), entry.getValue());
+        }
+
+        for (Map.Entry<PlanNodeId, PlanNodeStatsEstimate> entry : plan.getStatsAndCosts().getStats().entrySet()) {
+            statsCollector.put(entry.getKey(), entry.getValue());
+        }
+
+        for (Map.Entry<PlanNodeId, PlanCostEstimate> entry : plan.getStatsAndCosts().getCosts().entrySet()) {
+            costsCollector.put(entry.getKey(), entry.getValue());
+        }
+
+        //String plantxt_local = PlanPrinter.textLogicalPlan(plan.getRoot(), new TypeProvider(typesCollector), metadata, new StatsAndCosts(statsCollector, costsCollector), stateMachine.getSession(), 0, true);
+        //System.out.println(plantxt_local);
+
+        Integer queryId = new Integer(allQueryCountLocal);
+        PlanNode strippedPlan = plan.getRoot().getSources().get(0);
+        strippedPlan = new StoreForwardNode(idAllocator.getNextId(), strippedPlan, "/home/root1/openLookEng/EPFL-BQO/bqo-to-huawei/output/out-" + queryId.toString() + "-", strippedPlan.getOutputSymbols());
+        Symbol firstSymbol = strippedPlan.getOutputSymbols().get(0);
+
+        Map<Symbol, AggregationNode.Aggregation> aggCalls = new HashMap<>();
+        List<RowExpression> exprList = ImmutableList.of(new VariableReferenceExpression(firstSymbol.getName(), typesCollector.get(firstSymbol)));
+        Optional<Symbol> x = Optional.empty();
+        Optional<OrderingScheme> y = Optional.empty();
+        Optional<Symbol> z = Optional.empty();
+
+        AggregationNode.Aggregation aggr = new AggregationNode.Aggregation(
+                new Signature("count", AGGREGATE, BIGINT.getTypeSignature(), typesCollector.get(firstSymbol).getTypeSignature()),
+                exprList,
+                false,
+                x,
+                y,
+                z);
+
+        Symbol aggrSymbol = planSymbolAllocator.newSymbol("count_sym", BIGINT);
+        typesCollector.put(aggrSymbol, BIGINT);
+        aggCalls.put(aggrSymbol, aggr);
+
+        AggregationNode.GroupingSetDescriptor gsd = AggregationNode.singleGroupingSet(ImmutableList.of());
+
+        PlanNode metaNode = new AggregationNode(idAllocator.getNextId(), strippedPlan, aggCalls, gsd, new ArrayList<>(), AggregationNode.Step.SINGLE, Optional.empty(), Optional.empty());
+
+        PlanNode gather = new ExchangeNode(
+                idAllocator.getNextId(),
+                ExchangeNode.Type.GATHER,
+                ExchangeNode.Scope.REMOTE,
+                new PartitioningScheme(Partitioning.create(SINGLE_DISTRIBUTION, ImmutableList.of()), metaNode.getOutputSymbols()),
+                ImmutableList.of(metaNode),
+                ImmutableList.of(metaNode.getOutputSymbols()),
+                Optional.empty());
+
+        PlanNode gather2 = new ExchangeNode(
+                idAllocator.getNextId(),
+                ExchangeNode.Type.GATHER,
+                ExchangeNode.Scope.LOCAL,
+                new PartitioningScheme(Partitioning.create(SINGLE_DISTRIBUTION, ImmutableList.of()), gather.getOutputSymbols()),
+                ImmutableList.of(gather),
+                ImmutableList.of(gather.getOutputSymbols()),
+                Optional.empty());
+
+        Symbol firstSymbol2 = gather2.getOutputSymbols().get(0);
+
+        Map<Symbol, AggregationNode.Aggregation> aggCalls2 = new HashMap<>();
+        List<RowExpression> exprList2 = ImmutableList.of(new VariableReferenceExpression(firstSymbol2.getName(), BIGINT));
+        Optional<Symbol> x2 = Optional.empty();
+        Optional<OrderingScheme> y2 = Optional.empty();
+        Optional<Symbol> z2 = Optional.empty();
+
+        AggregationNode.Aggregation aggr2 = new AggregationNode.Aggregation(
+                new Signature("sum", AGGREGATE, BIGINT.getTypeSignature(), BIGINT.getTypeSignature()),
+                exprList2,
+                false,
+                x2,
+                y2,
+                z2);
+        aggCalls2.put(firstSymbol2, aggr2);
+
+        PlanNode metaNode2 = new AggregationNode(idAllocator.getNextId(), gather2, aggCalls2, gsd, new ArrayList<>(), AggregationNode.Step.SINGLE, Optional.empty(), Optional.empty());
+
+        return metaNode2;
+    }
+
     private PlanRoot doAnalyzeQuery()
     {
         // time analysis phase
         stateMachine.beginAnalysis();
-        stateMachine.beginLogicalPlan();
+
+        int allQueryCountLocal = allQueryCount.incrementAndGet();
 
         // plan query
-        PlanNodeIdAllocator idAllocator = new PlanNodeIdAllocator();
-        Plan plan = createPlan(analysis, stateMachine.getSession(), planOptimizers, idAllocator, metadata, new TypeAnalyzer(sqlParser, metadata), statsCalculator, costCalculator, stateMachine.getWarningCollector());
+        //this is to communicate with ReorderJoin that it should not consider a forced join order
+//        try {
+//            Files.write(Paths.get("./joinForcing.txt"), new String("0").getBytes());
+//        } catch (IOException ex) {
+//            ex.printStackTrace();
+//        }
+
+        double cpu_const = 1;
+        double memory_const = 1;
+
+        //forceJoinOrder = false; //TODO
+//        if(readFilterInfoValue()){
+//            aggregateFilterInfo.clear();
+//        }
+
+        //System.out.println("before 1st Create plan call");
+
+        Plan plan = null;
+
+        try {
+            //PlanNodeIdAllocator idAllocator = new PlanNodeIdAllocator();
+            plan = createPlan(analysis, stateMachine.getSession(), planOptimizers, idAllocator, metadata, new TypeAnalyzer(sqlParser, metadata), statsCalculator, costCalculator, stateMachine.getWarningCollector());
+            String plantxt2 = PlanPrinter.textLogicalPlan(plan.getRoot(), plan.getTypes(), metadata, plan.getStatsAndCosts(), stateMachine.getSession(), 0, true);
+            System.out.println(plantxt2);
+        } catch (Exception e) {
+            e.printStackTrace();
+        }
+
+        //System.out.println("after 1st Create plan call");
+        FeaturesConfig config = new FeaturesConfig();
+
+        PlanCostEstimate old_cost = plan.getStatsAndCosts().getCosts().get(plan.getRoot().getId());
+        double full_old_cost = old_cost.getCpuCost() * config.getCpuCostWeight() + old_cost.getMaxMemory()*config.getMemoryCostWeight() + old_cost.getNetworkCost()*config.getNetworkCostWeight();
+
+        //System.out.println("Post-plan");
+
+        Map<Symbol, Type> types = plan.getTypes().allTypes();
+
+        CaptureLineage captureLineage = new CaptureLineage(plan.getStatsAndCosts(), plan.getTypes());
+        CaptureLineage.Lineage captureLineageResult;
+        try {
+            captureLineageResult = captureLineage.visitPlan(plan.getRoot(), null);
+        } catch (Exception e) {
+            e.printStackTrace();
+            throw e;
+        }
+
+        //System.out.println("Lineage Mapping String");
+        //Map<PlanNodeId, CaptureLineage.Lineage> LineageMapping = captureLineage.getLineageMapping();
+        //for (PlanNodeId Key: LineageMapping.keySet()){
+            //System.out.println("Key = "+Key.toString()+" value = "+LineageMapping.get(Key).toString());
+            //if (LineageMapping.get(Key).getPlanNodeStatsEstimate() != null) System.out.println(LineageMapping.get(Key).getPlanNodeStatsEstimate());
+            //System.out.println();
+        //}
+
+        //System.out.println(captureLineageResult.toString());
+
+        //System.out.println("PLAN PRODUCED");
+
+        //start of global Plan
+        // plan query
+        long startTime =0, stopTime=0;
+        long newQueryPlanningTime =0;
+
+        newQueryPlanningTime += 0;
+        //System.out.println("\n" + "HERE YOU CAN ACCESS THE LOGICAL PLAN");
+        //System.out.println("\n" + io.prestosql.sql.planner.planprinter.PlanPrinter.textLogicalPlan(plan.getRoot(), plan.getTypes(), metadata, plan.getStatsAndCosts(), stateMachine.getSession(), 0, true));
+        //System.out.println("\n CPU CCOST" + plan.getStatsAndCosts().getStats());
+
+
+        //running time calculations
+
+        //queryCount++;
+
+        //actualQueryCount = queryCount-3;
+        //System.out.println("QUERY COUNT: " + queryCount + " ActualQuery Count: " + actualQueryCount);
+
+        if (allQueryCountLocal == 1) {
+            lowCostQuery = plan;
+        }
+
+        /*if (allQueryCountLocal > 1 && plan.getRoot().getSources().size() == 1 && plan.getRoot().getSources().get(0) instanceof ValuesNode) {
+            //System.out.println(plan.getRoot().getSources().get(0).toString());
+            synchronized (this.getClass()){
+                planAggregationPhase = false;
+                System.out.println("Current batch size "+currentBatchSize.intValue());
+
+                //reset topological variables
+                topologicalOrderPlanList = new HashMap<>();;
+                overlapOrderCount.getAndSet(0);
+                JoinGraphMap = new HashMap<>();;
+            }
+        }*/
+
+        if (SystemSessionProperties.isBatchEnabled(getSession()) && allQueryCountLocal > 1/*  &&  !planAggregationPhase*/) {
+            cacheWorkloadProfiler.updateRunningViews(getSession(), metadata);
+            cacheWorkloadProfiler.updateEvictions(getSession(), metadata);
+
+            System.out.println("With cache: ");
+
+            List<CaptureLineage.Lineage> subexpressionCache;
+
+            if (SystemSessionProperties.isCachingPartioningEnabled(getSession()))
+                subexpressionCache = cacheWorkloadProfiler.getAvailableViews();
+            else
+                subexpressionCache = new ArrayList<>();
+//            subexpressionCache = cacheWorkloadProfiler.getAvailableViews();
+
+            //change to line below to disable caching
+            //List<CaptureLineage.Lineage> subexpressionCache = new ArrayList<>();
+
+            for (CaptureLineage.Lineage lineage : subexpressionCache) {
+                System.out.println(lineage.toString());
+            }
+
+            //System.out.println("ACTUAL QUERY COUNT: " + queryCount);
+
+            CaptureLineage captureLineageCarrier = new CaptureLineage(plan.getStatsAndCosts(), plan.getTypes());
+
+            if (globalPlaner.useDP || globalPlaner.useBacktracking) {
+                //System.out.println("GOT QUERY INSIDE DATAPATH GLOBAL PLANNER");
+                startTime = System.currentTimeMillis();
+                globalPlaner.nonInclusiveTime = 0;
+                globalPlaner.dpTime = 0;
+                globalPlaner.operatorCount = 0;
+                //List<JoinNode> globalPlanOutputJoinNodes = GlobalPlaner.acceptNewQuery(plan.getRoot(), plan.getStatsAndCosts(), logicalPlanList.size()+1); //TODO replace by below
+                CaptureLineage captureLineageCurrent = new CaptureLineage(plan.getStatsAndCosts(), plan.getTypes());
+                captureLineageCurrent.visitPlan(plan.getRoot(), null);
+                List<JoinNode> globalPlanOutputJoinNodes = null;
+
+                try {
+                    globalPlanOutputJoinNodes = globalPlaner.acceptNewQuery(plan.getRoot(), plan.getStatsAndCosts(), allQueryCountLocal, getSession(), subexpressionCache, captureLineageCurrent.getLastValid());
+                } catch (Exception e) {
+                    e.printStackTrace();
+                }
+
+                stopTime = System.currentTimeMillis();
+                newQueryPlanningTime += (stopTime - startTime);// - GlobalPlaner.nonInclusiveTime;
+                int numberOfJoins = GlobalPlaner.getNumberOfJoins(plan.getRoot());
+
+//                if (numberOfJoinsToRunningTimeMapping.containsKey(numberOfJoins)) {
+//                    numberOfJoinsToRunningTimeMapping.get(numberOfJoins).add(newQueryPlanningTime);
+//                } else {
+//                    numberOfJoinsToRunningTimeMapping.put(numberOfJoins, new ArrayList<>());
+//                    numberOfJoinsToRunningTimeMapping.get(numberOfJoins).add(newQueryPlanningTime);
+//                }
+                //cummulativePlanningTime += newQueryPlanningTime;
+                //cumulativeOperatorCount += GlobalPlaner.operatorCount;
+                //cumulativePlanTimeList.add(cummulativePlanningTime);
+                //DPPlanningTime += GlobalPlaner.dpTime;
+
+                //System.out.println("\nGLOBAL PLAN"); TODO
+                System.out.println("\n" + GlobalPlanPrinter.globalPlanToText(globalPlanOutputJoinNodes, allQueryCountLocal));
+                //System.out.println("\nEND OF GLOBAL PLAN");
+                System.out.println("force join string for this plan  is "+GlobalPlanPrinter.joinString.toString());
+
+                captureLineageCarrier.setJoinHintString(GlobalPlanPrinter.joinString.toString());
+                captureLineageCarrier.setSelectedViews(globalPlaner.selectedViews);
+
+
+
+                //System.out.println("QUERY COUNT: " + queryCount + ", New query planning time(ms): " + (newQueryPlanningTime) + ", Cumulative planning time(ms): " + (cummulativePlanningTime) + " total DP time is " + DPPlanningTime);
+                // TODO System.out.println("QUERY COUNT: " + queryCount + ", new operator count : " + GlobalPlaner.operatorCount + ", Cumulative operator count: " + cumulativeOperatorCount);
+
+                //cost calculations
+                double newQueryPlanCost = JoinCostCalculator.calculateJoinCost(plan.getRoot(), plan.getStatsAndCosts());
+                //localPlansCummulativeCost += newQueryPlanCost;
+                double globalPlanCost = globalPlaner.getGlobalPlanCost();
+                //System.out.println("QUERY COUNT: " + queryCount + "New query cost: " + newQueryPlanCost + ", Cumulative local plans cost: " + localPlansCummulativeCost + ", Cumulative global plan cost: " + globalPlanCost);
+            }
+
+
+            List<CaptureLineage.Lineage> toMaterialize;
+            if (SystemSessionProperties.isCachingPartioningEnabled(getSession()))
+                toMaterialize = globalPlaner.selectedViews.stream().filter(view -> cacheWorkloadProfiler.getPendingViews().contains(view)).collect(Collectors.toList());
+		    else
+	            toMaterialize = new ArrayList<CaptureLineage.Lineage>();
+
+//            toMaterialize = globalPlaner.selectedViews.stream().filter(view -> cacheWorkloadProfiler.getPendingViews().contains(view)).collect(Collectors.toList());
+
+            System.out.println("To Materialize ");
+            int i =1;
+            for (CaptureLineage.Lineage newView : toMaterialize) {
+                System.out.println("View "+i+"\n"+newView.toString());
+            }
+
+            for (CaptureLineage.Lineage newView : toMaterialize) {
+                Optional<CacheWorkloadProfiler.PlanWithCacheMetadata> planMaterialize = cacheWorkloadProfiler.getPlan(newView);
+                if (planMaterialize.isPresent()) {
+                    try {
+                        CacheWorkloadProfiler.PlanWithCacheMetadata planWithCacheMetadata = planMaterialize.get();
+
+                        PlanNode planNodeWriter = cacheWorkloadProfiler.getCreateTablePlan(planWithCacheMetadata, newView, metadata, getSession(), planSymbolAllocator, idAllocator, typesCollector, stateMachine.getWarningCollector(), statsCalculator, costCalculator);
+                        BeginTableWrite beginTableWrite = new BeginTableWrite(metadata);
+                        planNodeWriter = beginTableWrite.optimize(planNodeWriter, getSession(), new TypeProvider(typesCollector), planSymbolAllocator, idAllocator, stateMachine.getWarningCollector());
+                        Plan planWriter = new Plan(planNodeWriter, new TypeProvider(typesCollector), new StatsAndCosts(statsCollector, costsCollector));
+
+                        CaptureLineage captureLineageNew = new CaptureLineage(planWriter.getStatsAndCosts(), planWriter.getTypes());
+                        CaptureLineage.Lineage lineageNew = captureLineageNew.visitPlan(planWriter.getRoot(), null);
+
+                        if (lineageNew.getTarget() == null) throw new UnsupportedOperationException("target not found");
+
+                        newView.setTarget(lineageNew.getTarget());
+                        cacheWorkloadProfiler.setToPlanned(newView);
+
+                        int creationQueryCount =  allQueryCount.incrementAndGet();
+                        PlanNode metaNode = preparePlanForBatching(planWriter, creationQueryCount);
+                        synchronized (this.getClass()) {
+                            logicalPlanList.add(metaNode);
+                            queryIdList.add(stateMachine.getSession().getQueryId());
+                        }
+
+                    } catch (Exception e) {
+                        e.printStackTrace();
+                        throw e;
+                    }
+                }
+            }
+
+            if (!captureLineageResult.isFinalized()) {
+                Plan plan_new;
+
+                try {
+                    plan_new = createPlan(analysis, stateMachine.getSession(), planOptimizers, idAllocator, metadata, new TypeAnalyzer(sqlParser, metadata), statsCalculator, costCalculator, stateMachine.getWarningCollector(), captureLineageCarrier);
+
+                    CaptureLineage captureLineageNew = new CaptureLineage(plan_new.getStatsAndCosts(), plan_new.getTypes());
+                    CaptureLineage.Lineage lineageNew = captureLineageNew.visitPlan(plan_new.getRoot(), null);
+                    cacheWorkloadProfiler.appendToBatch(plan_new, captureLineageNew.getLastValid(), captureLineageNew.getLineageMapping());
+                } catch (Exception e) {
+                    e.printStackTrace();
+                    throw e;
+                }
+                //System.out.println("new plan");
+
+                List<CaptureLineage.Lineage> usedViews = globalPlaner.selectedViews.stream().filter(view -> cacheWorkloadProfiler.getMaterializedViews().contains(view)).collect(Collectors.toList());
+                System.out.println("Used Views are ");
+                int view_cnt = 1;
+                for (CaptureLineage.Lineage l : usedViews){
+                    System.out.println("view number "+view_cnt+" "+l.toString());
+                }
+
+                CaptureLineage captureLineageNew = new CaptureLineage(plan_new.getStatsAndCosts(), plan_new.getTypes());
+                captureLineageNew.visitPlan(plan_new.getRoot(), null);
+                SubexpressionReplacement sr = new SubexpressionReplacement(metadata, getSession(), idAllocator, planSymbolAllocator, typesCollector, captureLineageNew.getLineageMapping(), usedViews);
+                PlanNode newRoot = sr.visitPlan(plan_new.getRoot(), null);
+                plan_new = new Plan(newRoot, plan_new.getTypes(), plan_new.getStatsAndCosts());
+
+
+                PlanCostEstimate new_cost = plan_new.getStatsAndCosts().getCosts().get(plan_new.getRoot().getId());
+                double full_new_cost = new_cost.getCpuCost() * config.getCpuCostWeight() + new_cost.getMaxMemory() * config.getMemoryCostWeight() + new_cost.getNetworkCost() * config.getNetworkCostWeight();
+                //System.out.println("old: cpu cost " + old_cost.getCpuCost() + " memory cost " + old_cost.getMaxMemory() + " full cost " + full_old_cost);
+                //System.out.println("new: cpu cost " + new_cost.getCpuCost() + " memory cost " + new_cost.getMaxMemory() + " full cost " + full_new_cost);
+
+                String plantxt_new = PlanPrinter.textLogicalPlan(plan_new.getRoot(), plan_new.getTypes(), metadata, plan_new.getStatsAndCosts(), stateMachine.getSession(), 0, true);
+                //System.out.println(plantxt_new);
+
+                double one_query_cost_threshold = SystemSessionProperties.getSingleQueryCostThreshold(getSession());
+                System.out.println("Datapath finished");
+                if (full_new_cost < one_query_cost_threshold * full_old_cost) {
+                    //System.out.println("updated the new join order");
+                    plan = plan_new;
+                }
+            }
+
+            PlanNode metaNode = preparePlanForBatching(plan, allQueryCountLocal);
+
+            int cur = currentlyOptimized.getAndAdd(1);
+
+            //System.out.println("Currently optimized " + cur);
+
+            synchronized (this.getClass()) {
+                overlapOrderCount.getAndAdd(1);
+                if (overlapOrderCount.intValue() >= currentBatchSize.intValue()) {
+                    overlapOrderCount.getAndSet(0);
+                    currentBatchSize.getAndSet(0);
+                    planAggregationPhase = true;
+                }
+
+                logicalPlanList.add(metaNode);
+                queryIdList.add(stateMachine.getSession().getQueryId());
+
+                if (logicalPlanList.size() >= SystemSessionProperties.getBatchSize(getSession())) {
+                    List<Symbol> outputSymbols = new ArrayList<>();
+                    outputSymbols.add(planSymbolAllocator.newSymbol("out", BIGINT));
+                    ListMultimap<Symbol, Symbol> symbolMap = ArrayListMultimap.create();
+
+                    typesCollector.put(outputSymbols.get(0), BIGINT);
+
+                    List<List<Symbol>> symbolsAll = new ArrayList<>();
+
+                    for (PlanNode node : logicalPlanList) {
+                        List<Symbol> inputSymbols = new ArrayList<>();
+                        inputSymbols.addAll(node.getOutputSymbols());
+                        symbolsAll.add(inputSymbols);
+                    }
+
+                    ExchangeNode unionNode = new ExchangeNode(idAllocator.getNextId(), ExchangeNode.Type.GATHER, ExchangeNode.Scope.REMOTE, new PartitioningScheme(Partitioning.create(SINGLE_DISTRIBUTION, ImmutableList.of()), outputSymbols), logicalPlanList, symbolsAll, Optional.empty());
+                    PlanNode rootNode = new OutputNode(idAllocator.getNextId(), unionNode, ImmutableList.of("agg"), ImmutableList.of(unionNode.getOutputSymbols().get(0)));
+
+                    try {
+                        PlanExpressionCollector.PlanExpressionCollectorContext ctx = new PlanExpressionCollector.PlanExpressionCollectorContext();
+                        PlanExpressionCollector collector = new PlanExpressionCollector();
+                        collector.visitPlan(rootNode, ctx);
+                        AddRouters addRouters = new AddRouters(ctx, typesCollector);
+                        ctx.printAllExpressions();
+                        rootNode = addRouters.optimize(rootNode, stateMachine.getSession(), new TypeProvider(typesCollector), planSymbolAllocator, idAllocator, stateMachine.getWarningCollector());
+
+                        plan = new Plan(rootNode, new TypeProvider(typesCollector), new StatsAndCosts(statsCollector, costsCollector));
+                        String plantxt = PlanPrinter.textLogicalPlan(rootNode, new TypeProvider(typesCollector), metadata, new StatsAndCosts(statsCollector, costsCollector), stateMachine.getSession(), 0, true);
+                        System.out.println(plantxt);
+
+                        AddExchangesAboveRouters addExchangesAboveRouters = new AddExchangesAboveRouters(ctx, typesCollector);
+                        rootNode = addExchangesAboveRouters.optimize(rootNode, stateMachine.getSession(), new TypeProvider(typesCollector), planSymbolAllocator, idAllocator, stateMachine.getWarningCollector());
+
+                        Harmonizer harmonizer = new Harmonizer(ctx, typesCollector);
+                        rootNode = harmonizer.optimize(rootNode, stateMachine.getSession(), new TypeProvider(typesCollector), planSymbolAllocator, idAllocator, stateMachine.getWarningCollector());
+                    }
+                    catch (Exception e) {
+                        e.printStackTrace();
+                    }
+                    plan = new Plan(rootNode, new TypeProvider(typesCollector), new StatsAndCosts(statsCollector, costsCollector));
+                    String plantxt = PlanPrinter.textLogicalPlan(rootNode, new TypeProvider(typesCollector), metadata, new StatsAndCosts(statsCollector, costsCollector), stateMachine.getSession(), 0, true);
+                    System.out.println(plantxt);
+
+                    try {
+                        cacheWorkloadProfiler.setToMaterialized();
+                        cacheWorkloadProfiler.fireBatch(stateMachine.getSession());
+                    } catch (Exception e) {
+                        e.printStackTrace();
+                        throw e;
+                    }
+
+                    stateMachine.getSession().setBatchQueries(queryIdList);
+                    logicalPlanList = new ArrayList<>();
+                    queryIdList = new ArrayList<>();
+                    globalPlaner.resetStaticVariables();
+                } else {
+                    plan = lowCostQuery;
+                }
+
+                currentlyOptimized.getAndAdd(-1);
+            }
+        }
+        /*else if (SystemSessionProperties.isBatchEnabled(getSession()) && planAggregationPhase){
+            synchronized (this.getClass()) {
+                overlapOrderCount.getAndAdd(1);
+                currentBatchSize.getAndAdd(1);
+                topologicalOrderPlanList.put(overlapOrderCount.intValue(), plan);
+
+                //get only the datapath
+                JoinInformationExtractor.JoinInformation joinInformation = globalPlaner.getJoinInfoQueryOrder(plan.getRoot(), plan.getStatsAndCosts());
+                JoinGraphMap.put(overlapOrderCount.intValue(), joinInformation);
+                globalPlaner.GraphConstruction(JoinGraphMap, getSession() );
+
+                //System.out.println("ACTUAL QUERY COUNT: " + allQueryCount);
+                plan = lowCostQuery;
+            }
+        }*/
+        else if (allQueryCountLocal > 1) {
+
+        }
+
+
+        //plan = createPlan(analysis, stateMachine.getSession(), planOptimizers, idAllocator, metadata, new TypeAnalyzer(sqlParser, metadata), statsCalculator, costCalculator, stateMachine.getWarningCollector());
         queryPlan.set(plan);
+
 
         // extract inputs
         List<Input> inputs = new InputExtractor(metadata, stateMachine.getSession()).extractInputs(plan.getRoot());
@@ -659,115 +1098,63 @@ public class SqlQueryExecution
 
         // extract output
         stateMachine.setOutput(analysis.getTarget());
-        stateMachine.endLogicalPlan();
 
-        // fragment the plan
-        SubPlan fragmentedPlan = planFragmenter.createSubPlans(stateMachine.getSession(), plan, false, stateMachine.getWarningCollector());
+        //System.out.println("before fragmenter");
+
+        SubPlan fragmentedPlan;
+
+        try {
+            // fragment the plan
+            fragmentedPlan = planFragmenter.createSubPlans(stateMachine.getSession(), plan, false, stateMachine.getWarningCollector());
+        }
+        catch (Exception e) {
+            e.printStackTrace();
+            throw new NullPointerException("propagated");
+        }
+
+        //System.out.println("Fragmenter");
+
+        //System.out.println("after fragmenter");
 
         // record analysis time
         stateMachine.endAnalysis();
 
+        //System.out.println("PLAN PRODUCED2");
+
         boolean explainAnalyze = analysis.getStatement() instanceof Explain && ((Explain) analysis.getStatement()).isAnalyze();
-
-        if (SystemSessionProperties.isRecoveryEnabled(getSession())) {
-            checkRecoverySupport(getSession());
-        }
-
         return new PlanRoot(fragmentedPlan, !explainAnalyze, extractConnectors(analysis));
     }
 
     // This method was introduced separate logical planning from query analyzing stage
     // and allow plans to be overwritten by CachedSqlQueryExecution
     protected Plan createPlan(Analysis analysis,
-            Session session,
-            List<PlanOptimizer> planOptimizers,
-            PlanNodeIdAllocator idAllocator,
-            Metadata metadata,
-            TypeAnalyzer typeAnalyzer,
-            StatsCalculator statsCalculator,
-            CostCalculator costCalculator,
-            WarningCollector warningCollector)
+                              Session session,
+                              List<PlanOptimizer> planOptimizers,
+                              PlanNodeIdAllocator idAllocator,
+                              Metadata metadata,
+                              TypeAnalyzer typeAnalyzer,
+                              StatsCalculator statsCalculator,
+                              CostCalculator costCalculator,
+                              WarningCollector warningCollector)
     {
         LogicalPlanner logicalPlanner = new LogicalPlanner(session, planOptimizers, idAllocator, metadata, typeAnalyzer, statsCalculator, costCalculator, warningCollector);
-        return logicalPlanner.plan(analysis, true);
+        return logicalPlanner.plan(analysis);
     }
 
-    // Check if snapshot feature conflict with other aspects of the query.
-    // If any requirement is not met, then proceed as if snapshot was not enabled
-    private void checkRecoverySupport(Session session)
+    // This method was introduced separate logical planning from query analyzing stage
+    // and allow plans to be overwritten by CachedSqlQueryExecution
+    protected Plan createPlan(Analysis analysis,
+                              Session session,
+                              List<PlanOptimizer> planOptimizers,
+                              PlanNodeIdAllocator idAllocator,
+                              Metadata metadata,
+                              TypeAnalyzer typeAnalyzer,
+                              StatsCalculator statsCalculator,
+                              CostCalculator costCalculator,
+                              WarningCollector warningCollector, CaptureLineage captureLineage)
     {
-        List<String> reasons = new ArrayList<>();
-        // Only support create-table-as-select and insert statements
-        Statement statement = analysis.getStatement();
-        if (statement instanceof CreateTableAsSelect) {
-            if (analysis.isCreateTableAsSelectNoOp()) {
-                // Table already exists. Ask catalog if target table supports snapshot
-                if (!metadata.isSnapshotSupportedAsOutput(session, analysis.getCreateTableAsSelectNoOpTarget())) {
-                    reasons.add("Only support inserting into tables in Hive with ORC format");
-                }
-            }
-            else {
-                // Ask catalog if new table supports snapshot
-                Map<String, Object> tableProperties = analysis.getCreateTableMetadata().getProperties();
-                if (!metadata.isSnapshotSupportedAsNewTable(session, analysis.getTarget().get().getCatalogName(), tableProperties)) {
-                    reasons.add("Only support creating tables in Hive with ORC format");
-                }
-            }
-        }
-        else if (statement instanceof Insert) {
-            // Ask catalog if target table supports snapshot
-            if (!metadata.isSnapshotSupportedAsOutput(session, analysis.getInsert().get().getTarget())) {
-                reasons.add("Only support inserting into tables in Hive with ORC format");
-            }
-        }
-        else if (statement instanceof InsertCube) {
-            reasons.add("INSERT INTO CUBE is not supported, only support CTAS (create table as select) and INSERT INTO (tables) statements");
-        }
-        else {
-            reasons.add("Only support CTAS (create table as select) and INSERT INTO (tables) statements");
-        }
-
-        // Doesn't work with the following features
-        if (SystemSessionProperties.isReuseTableScanEnabled(session)
-                || SystemSessionProperties.isCTEReuseEnabled(session)) {
-            reasons.add("No support along with reuse_table_scan or cte_reuse_enabled features");
-        }
-
-        // All input tables must support snapshotting
-        for (TableHandle tableHandle : analysis.getTables()) {
-            if (!metadata.isSnapshotSupportedAsInput(session, tableHandle)) {
-                reasons.add("Only support reading from Hive, TPCDS, and TPCH source tables");
-                break;
-            }
-        }
-
-        // Must have more than 1 worker
-        if (nodeScheduler.createNodeSelector(null, false, null).selectableNodeCount() == 1) {
-            reasons.add("Requires more than 1 worker nodes");
-        }
-
-        if (!snapshotManager.getRecoveryUtils().hasStoreClient()) {
-            String snapshotProfile = snapshotManager.getRecoveryUtils().getSnapshotProfile();
-            if (snapshotProfile == null) {
-                reasons.add("Property hetu.experimental.snapshot.profile is not specified");
-            }
-            else {
-                reasons.add("Specified value '" + snapshotProfile + "' for property hetu.experimental.snapshot.profile is not valid");
-            }
-        }
-
-        if (!reasons.isEmpty()) {
-            // Disable snapshot support in the session. If this value has been used before this point,
-            // then we may need to remedy those places to disable snapshot as well. Fortunately,
-            // most accesses occur before this point, except for classes like ExecutingStatementResource,
-            // where the "snapshot enabled" info is retrieved and set in ExchangeClient. This is harmless.
-            // The ExchangeClient may still have recoveryEnabled=true while it's disabled in the session.
-            // This does not alter ExchangeClient's behavior, because this instance (in coordinator)
-            // will never receive any marker.
-            session.disableSnapshot();
-            String reasonsMessage = "Recovery feature is disabled: \n" + String.join(". \n", reasons);
-            warningCollector.add(new PrestoWarning(StandardWarningCode.SNAPSHOT_NOT_SUPPORTED, reasonsMessage));
-        }
+        LogicalPlanner logicalPlanner = new LogicalPlanner(session, planOptimizers, idAllocator, metadata, typeAnalyzer, statsCalculator, costCalculator, warningCollector);
+        return logicalPlanner.plan(analysis, captureLineage);
     }
 
     private static Set<CatalogName> extractConnectors(Analysis analysis)
@@ -791,21 +1178,13 @@ public class SqlQueryExecution
         // time distribution planning
         stateMachine.beginDistributedPlanning();
 
+        //System.out.println("before distribution");
         // plan the execution on the active nodes
         DistributedExecutionPlanner distributedPlanner = new DistributedExecutionPlanner(splitManager, metadata);
-        StageExecutionPlan outputStageExecutionPlan;
-        Session session = stateMachine.getSession();
-        if (SystemSessionProperties.isRecoveryEnabled(session)) {
-            // Recovery: need to plan different when recovery is enabled.
-            // See the "plan" method for difference between the different modes.
-            MarkerAnnouncer announcer = splitManager.getMarkerAnnouncer(session);
-            announcer.setSnapshotManager(snapshotManager);
-            outputStageExecutionPlan = distributedPlanner.plan(plan.getRoot(), session, SNAPSHOT, null, announcer.currentSnapshotId());
-        }
-        else {
-            outputStageExecutionPlan = distributedPlanner.plan(plan.getRoot(), session, NORMAL, null, 0);
-        }
+        StageExecutionPlan outputStageExecutionPlan = distributedPlanner.plan(plan.getRoot(), stateMachine.getSession());
         stateMachine.endDistributedPlanning();
+
+        //System.out.println("after distribution");
 
         // ensure split sources are closed
         stateMachine.addStateChangeListener(state -> {
@@ -846,11 +1225,7 @@ public class SqlQueryExecution
                 executionPolicy,
                 schedulerStats,
                 dynamicFilterService,
-                heuristicIndexerManager,
-                snapshotManager,
-                queryRecoveryManager,
-                null,
-                false);
+                heuristicIndexerManager);
 
         queryScheduler.set(scheduler);
 
@@ -882,43 +1257,6 @@ public class SqlQueryExecution
     public void cancelQuery()
     {
         stateMachine.transitionToCanceled();
-    }
-
-    @Override
-    public void suspendQuery()
-    {
-        try (SetThreadName ignored = new SetThreadName("Query-%s", stateMachine.getQueryId())) {
-            SqlQueryScheduler scheduler = queryScheduler.get();
-            stateMachine.transitionToSuspend();
-            if (scheduler != null) {
-                boolean useSnapshot = SystemSessionProperties.isSnapshotEnabled(stateMachine.getSession()) && snapshotManager.isSuccessfulSnapshotExist();
-                if (useSnapshot) {
-                    suspendedWithRecoveryManager.set(true);
-                    queryRecoveryManager.suspendQuery();
-                }
-                else {
-                    scheduler.suspend();
-                }
-            }
-        }
-    }
-
-    @Override
-    public void resumeQuery()
-    {
-        try (SetThreadName ignored = new SetThreadName("Query-%s", stateMachine.getQueryId())) {
-            SqlQueryScheduler scheduler = queryScheduler.get();
-            if (SystemSessionProperties.isSnapshotEnabled(stateMachine.getSession()) && suspendedWithRecoveryManager.get()) {
-                queryRecoveryManager.resumeQuery();
-                suspendedWithRecoveryManager.set(false);
-            }
-            else {
-                if (scheduler != null) {
-                    scheduler.resume();
-                }
-                stateMachine.transitionToResumeRunning();
-            }
-        }
     }
 
     @Override
@@ -1016,7 +1354,7 @@ public class SqlQueryExecution
             stageInfo = Optional.ofNullable(scheduler.getStageInfo());
         }
 
-        QueryInfo queryInfo = stateMachine.updateQueryInfo(stageInfo, queryRecoveryManager);
+        QueryInfo queryInfo = stateMachine.updateQueryInfo(stageInfo);
         if (queryInfo.isFinalQueryInfo()) {
             // capture the final query state and drop reference to the scheduler
             queryScheduler.set(null);
@@ -1082,7 +1420,6 @@ public class SqlQueryExecution
         private final Optional<Cache<Integer, CachedSqlQueryExecutionPlan>> cache;
         private final HeuristicIndexerManager heuristicIndexerManager;
         private final StateStoreProvider stateStoreProvider;
-        private final RecoveryUtils recoveryUtils;
 
         @Inject
         SqlQueryExecutionFactory(QueryManagerConfig config,
@@ -1109,8 +1446,7 @@ public class SqlQueryExecution
                 CostCalculator costCalculator,
                 DynamicFilterService dynamicFilterService,
                 HeuristicIndexerManager heuristicIndexerManager,
-                StateStoreProvider stateStoreProvider,
-                RecoveryUtils recoveryUtils)
+                StateStoreProvider stateStoreProvider)
         {
             requireNonNull(config, "config is null");
             this.schedulerStats = requireNonNull(schedulerStats, "schedulerStats is null");
@@ -1137,7 +1473,6 @@ public class SqlQueryExecution
             this.dynamicFilterService = requireNonNull(dynamicFilterService, "dynamicFilterService is null");
             this.heuristicIndexerManager = requireNonNull(heuristicIndexerManager, "heuristicIndexerManager is null");
             this.stateStoreProvider = requireNonNull(stateStoreProvider, "stateStoreProvider is null");
-            this.recoveryUtils = requireNonNull(recoveryUtils, "recoveryUtils is null");
             this.loadConfigToService(hetuConfig);
             if (hetuConfig.isExecutionPlanCacheEnabled()) {
                 this.cache = Optional.of(CacheBuilder.newBuilder()
@@ -1165,8 +1500,8 @@ public class SqlQueryExecution
                 WarningCollector warningCollector)
         {
             String executionPolicyName = SystemSessionProperties.getExecutionPolicy(stateMachine.getSession());
-            ExecutionPolicy localExecutionPolicy = executionPolicies.get(executionPolicyName);
-            checkArgument(localExecutionPolicy != null, "No execution policy %s", localExecutionPolicy);
+            ExecutionPolicy executionPolicy = executionPolicies.get(executionPolicyName);
+            checkArgument(executionPolicy != null, "No execution policy %s", executionPolicy);
 
             return new CachedSqlQueryExecution(
                     preparedQuery,
@@ -1189,7 +1524,7 @@ public class SqlQueryExecution
                     failureDetector,
                     nodeTaskMap,
                     queryExplainer,
-                    localExecutionPolicy,
+                    executionPolicy,
                     schedulerStats,
                     statsCalculator,
                     costCalculator,
@@ -1197,8 +1532,7 @@ public class SqlQueryExecution
                     dynamicFilterService,
                     this.cache,
                     heuristicIndexerManager,
-                    stateStoreProvider,
-                    recoveryUtils);
+                    stateStoreProvider);
         }
     }
 }

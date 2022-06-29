@@ -13,15 +13,11 @@
  */
 package io.prestosql.orc.writer;
 
-import io.airlift.slice.Slice;
-import io.airlift.slice.Slices;
 import io.prestosql.array.IntBigArray;
 import io.prestosql.spi.block.Block;
 import io.prestosql.spi.block.BlockBuilder;
 import io.prestosql.spi.block.VariableWidthBlockBuilder;
 import org.openjdk.jol.info.ClassLayout;
-
-import java.nio.charset.StandardCharsets;
 
 import static com.google.common.base.Preconditions.checkArgument;
 import static com.google.common.base.Verify.verify;
@@ -29,7 +25,6 @@ import static io.prestosql.spi.block.PageBuilderStatus.DEFAULT_MAX_PAGE_SIZE_IN_
 import static it.unimi.dsi.fastutil.HashCommon.arraySize;
 import static java.lang.Math.min;
 import static java.util.Objects.requireNonNull;
-import static org.apache.commons.text.StringEscapeUtils.unescapeJava;
 
 // TODO this class is not memory efficient.  We can bypass all of the Presto type and block code
 // since we are only interested in a hash of byte arrays.  The only place an actual block is needed
@@ -165,18 +160,7 @@ public class DictionaryBuilder
     private int addNewElement(long hashPosition, Block block, int position)
     {
         checkArgument(!block.isNull(position), "position is null");
-        int length = block.getSliceLength(position);
-        Slice s = block.getSlice(position, 0, length);
-        byte[] b = s.getBytes();
-        int escapedLength = unescapeText(b);
-
-        if (escapedLength < length) {
-            Slice escapedSlice = Slices.wrappedBuffer(b);
-            elementBlock.writeBytes(escapedSlice, 0, escapedLength);
-        }
-        else {
-            block.writeBytesTo(position, 0, block.getSliceLength(position), elementBlock);
-        }
+        block.writeBytesTo(position, 0, block.getSliceLength(position), elementBlock);
         elementBlock.closeEntry();
 
         int newElementPositionInBlock = elementBlock.getPositionCount() - 1;
@@ -188,19 +172,6 @@ public class DictionaryBuilder
         }
 
         return newElementPositionInBlock;
-    }
-
-    private int unescapeText(byte[] text)
-    {
-        byte[] escapedBytes;
-        try {
-            escapedBytes = unescapeJava(new String(text, StandardCharsets.UTF_8)).getBytes(StandardCharsets.UTF_8);
-        }
-        catch (IllegalArgumentException e) {
-            return text.length;
-        }
-        System.arraycopy(escapedBytes, 0, text, 0, escapedBytes.length);
-        return escapedBytes.length;
     }
 
     private void rehash(int size)
@@ -219,11 +190,11 @@ public class DictionaryBuilder
 
     private static int calculateMaxFill(int hashSize)
     {
-        int ceil = (int) Math.ceil(hashSize * FILL_RATIO);
-        if (ceil == hashSize) {
-            ceil--;
+        int maxFill = (int) Math.ceil(hashSize * FILL_RATIO);
+        if (maxFill == hashSize) {
+            maxFill--;
         }
-        return ceil;
+        return maxFill;
     }
 
     private long getMaskedHash(long rawHash)

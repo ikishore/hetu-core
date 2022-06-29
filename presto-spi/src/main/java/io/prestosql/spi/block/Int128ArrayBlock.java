@@ -38,11 +38,11 @@ public class Int128ArrayBlock
     private static final int INSTANCE_SIZE = ClassLayout.parseClass(Int128ArrayBlock.class).instanceSize();
     public static final int INT128_BYTES = Long.BYTES + Long.BYTES;
 
-    protected final int positionOffset;
+    private final int positionOffset;
     private final int positionCount;
     @Nullable
-    protected final boolean[] valueIsNull;
-    protected final long[] values;
+    private final boolean[] valueIsNull;
+    private final long[] values;
 
     private final long sizeInBytes;
     private final long retainedSizeInBytes;
@@ -121,24 +121,6 @@ public class Int128ArrayBlock
     public int getPositionCount()
     {
         return positionCount;
-    }
-
-    @Override
-    public long[] getValues()
-    {
-        return values;
-    }
-
-    @Override
-    public int getBlockOffset()
-    {
-        return positionOffset;
-    }
-
-    @Override
-    public boolean[] getValueNulls()
-    {
-        return valueIsNull;
     }
 
     @Override
@@ -224,9 +206,9 @@ public class Int128ArrayBlock
     {
         checkValidRegion(getPositionCount(), positionOffset, length);
 
-        int finalPositionOffset = positionOffset + this.positionOffset;
-        boolean[] newValueIsNull = valueIsNull == null ? null : compactArray(valueIsNull, finalPositionOffset, length);
-        long[] newValues = compactArray(values, finalPositionOffset * 2, length * 2);
+        positionOffset += this.positionOffset;
+        boolean[] newValueIsNull = valueIsNull == null ? null : compactArray(valueIsNull, positionOffset, length);
+        long[] newValues = compactArray(values, positionOffset * 2, length * 2);
 
         if (newValueIsNull == valueIsNull && newValues == values) {
             return this;
@@ -259,15 +241,9 @@ public class Int128ArrayBlock
     @Override
     public boolean[] filter(BloomFilter filter, boolean[] validPositions)
     {
-        for (int i = 0; i < positionCount; i++) {
-            int pos = i + positionOffset;
-            if (valueIsNull != null && valueIsNull[pos]) {
-                validPositions[i] = validPositions[i] && filter.test((Slice) null);
-            }
-            else {
-                Slice value = Slices.wrappedLongArray(values[(pos) * 2], values[((pos) * 2) + 1]);
-                validPositions[i] = validPositions[i] && filter.test(value);
-            }
+        for (int i = 0; i < values.length / 2; i++) {
+            Slice value = Slices.wrappedLongArray(values[i * 2], values[i * 2 + 1]);
+            validPositions[i] = validPositions[i] && filter.test(value);
         }
         return validPositions;
     }

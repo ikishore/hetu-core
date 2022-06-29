@@ -14,11 +14,9 @@
 package io.prestosql.operator.aggregation.state;
 
 import io.prestosql.spi.function.GroupedAccumulatorState;
-import io.prestosql.spi.snapshot.BlockEncodingSerdeProvider;
-import io.prestosql.spi.snapshot.Restorable;
 
 public abstract class AbstractGroupedAccumulatorState
-        implements GroupedAccumulatorState, Restorable
+        implements GroupedAccumulatorState
 {
     private long groupId;
 
@@ -31,17 +29,5 @@ public abstract class AbstractGroupedAccumulatorState
     protected final long getGroupId()
     {
         return groupId;
-    }
-
-    @Override
-    public Object capture(BlockEncodingSerdeProvider serdeProvider)
-    {
-        return groupId;
-    }
-
-    @Override
-    public void restore(Object state, BlockEncodingSerdeProvider serdeProvider)
-    {
-        this.groupId = (long) state;
     }
 }

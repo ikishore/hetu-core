@@ -21,7 +21,6 @@ import javax.annotation.Nullable;
 import javax.annotation.concurrent.GuardedBy;
 import javax.annotation.concurrent.ThreadSafe;
 
-import java.util.Optional;
 import java.util.function.Supplier;
 
 import static com.google.common.base.Preconditions.checkState;
@@ -36,7 +35,7 @@ final class SpilledLookupSourceHandle
         SPILLED,
         UNSPILLING,
         PRODUCED,
-        DISPOSE_REQUESTED
+        DISPOSED
     }
 
     @GuardedBy("this")
@@ -49,25 +48,12 @@ final class SpilledLookupSourceHandle
     private SettableFuture<Supplier<LookupSource>> unspilledLookupSource;
 
     private final SettableFuture<?> disposeRequested = SettableFuture.create();
-    private final SettableFuture<?> disposeCompleted = SettableFuture.create();
 
     private final ListenableFuture<?> unspillingOrDisposeRequested = whenAnyComplete(ImmutableList.of(unspillingRequested, disposeRequested));
-
-    private final Optional<HashBuilderOperator.SpilledBlooms> spillBloom;
-
-    public SpilledLookupSourceHandle(HashBuilderOperator.SpilledBlooms bloom)
-    {
-        spillBloom = Optional.ofNullable(bloom);
-    }
 
     public SettableFuture<?> getUnspillingRequested()
     {
         return unspillingRequested;
-    }
-
-    public Optional<HashBuilderOperator.SpilledBlooms> getSpillBloom()
-    {
-        return spillBloom;
     }
 
     public synchronized ListenableFuture<Supplier<LookupSource>> getLookupSource()
@@ -84,7 +70,7 @@ final class SpilledLookupSourceHandle
     {
         requireNonNull(lookupSource, "lookupSource is null");
 
-        if (state == State.DISPOSE_REQUESTED) {
+        if (state == State.DISPOSED) {
             return;
         }
 
@@ -99,23 +85,12 @@ final class SpilledLookupSourceHandle
     {
         disposeRequested.set(null);
         unspilledLookupSource = null; // let the memory go
-        setState(State.DISPOSE_REQUESTED);
+        setState(State.DISPOSED);
     }
 
     public SettableFuture<?> getDisposeRequested()
     {
         return disposeRequested;
-    }
-
-    public synchronized void setDisposeCompleted()
-    {
-        assertState(State.DISPOSE_REQUESTED);
-        disposeCompleted.set(null);
-    }
-
-    public SettableFuture<?> getDisposeCompleted()
-    {
-        return disposeCompleted;
     }
 
     public ListenableFuture<?> getUnspillingOrDisposeRequested()

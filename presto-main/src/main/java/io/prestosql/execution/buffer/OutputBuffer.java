@@ -18,33 +18,11 @@ import io.airlift.units.DataSize;
 import io.hetu.core.transport.execution.buffer.SerializedPage;
 import io.prestosql.execution.StateMachine.StateChangeListener;
 import io.prestosql.execution.buffer.OutputBuffers.OutputBufferId;
-import io.prestosql.operator.TaskContext;
-
-import javax.validation.constraints.NotNull;
 
 import java.util.List;
 
 public interface OutputBuffer
 {
-    /**
-     * Set task context
-     *
-     * @param taskContext task context
-     */
-    void setTaskContext(@NotNull TaskContext taskContext);
-
-    /**
-     * Indicate no more input channels will be added to this output buffer
-     */
-    void setNoMoreInputChannels();
-
-    /**
-     * Add an input channel identifier
-     *
-     * @param inputId input channel identifier
-     */
-    void addInputChannel(@NotNull String inputId);
-
     /**
      * Gets the current state of this buffer.  This method is guaranteed to not block or acquire
      * contended locks, but the stats in the info object may be internally inconsistent.
@@ -108,13 +86,13 @@ public interface OutputBuffer
      * Adds a split-up page to an unpartitioned buffer. If no-more-pages has been set, the enqueue
      * page call is ignored.  This can happen with limit queries.
      */
-    void enqueue(List<SerializedPage> pages, String origin);
+    void enqueue(List<SerializedPage> pages);
 
     /**
      * Adds a split-up page to a specific partition.  If no-more-pages has been set, the enqueue
      * page call is ignored.  This can happen with limit queries.
      */
-    void enqueue(int partition, List<SerializedPage> pages, String origin);
+    void enqueue(int partition, List<SerializedPage> pages);
 
     /**
      * Notify buffer that no more pages will be added. Any future calls to enqueue a

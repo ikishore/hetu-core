@@ -33,7 +33,6 @@ import io.prestosql.plugin.jdbc.JdbcTableHandle;
 import io.prestosql.plugin.jdbc.JdbcTypeHandle;
 import io.prestosql.plugin.jdbc.StatsCollecting;
 import io.prestosql.plugin.jdbc.WriteMapping;
-import io.prestosql.plugin.jdbc.optimization.JdbcConverterContext;
 import io.prestosql.plugin.jdbc.optimization.JdbcPushDownModule;
 import io.prestosql.plugin.jdbc.optimization.JdbcPushDownParameter;
 import io.prestosql.plugin.jdbc.optimization.JdbcQueryGeneratorResult;
@@ -43,10 +42,6 @@ import io.prestosql.spi.connector.ColumnHandle;
 import io.prestosql.spi.connector.ConnectorSession;
 import io.prestosql.spi.connector.ConnectorTableMetadata;
 import io.prestosql.spi.connector.SchemaTableName;
-import io.prestosql.spi.function.ExternalFunctionHub;
-import io.prestosql.spi.function.FunctionMetadataManager;
-import io.prestosql.spi.function.StandardFunctionResolution;
-import io.prestosql.spi.relation.DeterminismEvaluator;
 import io.prestosql.spi.relation.RowExpressionService;
 import io.prestosql.spi.sql.QueryGenerator;
 import io.prestosql.spi.type.AbstractType;
@@ -88,7 +83,6 @@ import static io.prestosql.plugin.jdbc.JdbcErrorCode.JDBC_ERROR;
 import static io.prestosql.plugin.jdbc.JdbcErrorCode.JDBC_QUERY_GENERATOR_FAILURE;
 import static io.prestosql.plugin.jdbc.JdbcErrorCode.JDBC_UNSUPPORTED_EXPRESSION;
 import static io.prestosql.plugin.jdbc.StandardColumnMappings.realWriteFunction;
-import static io.prestosql.plugin.jdbc.StandardColumnMappings.timeWriteFunction;
 import static io.prestosql.plugin.jdbc.StandardColumnMappings.timestampWriteFunctionUsingSqlTimestamp;
 import static io.prestosql.plugin.jdbc.StandardColumnMappings.varbinaryWriteFunction;
 import static io.prestosql.plugin.jdbc.StandardColumnMappings.varcharWriteFunction;
@@ -99,7 +93,6 @@ import static io.prestosql.spi.StandardErrorCode.INVALID_FUNCTION_ARGUMENT;
 import static io.prestosql.spi.StandardErrorCode.NOT_SUPPORTED;
 import static io.prestosql.spi.type.Decimals.MAX_PRECISION;
 import static io.prestosql.spi.type.RealType.REAL;
-import static io.prestosql.spi.type.TimeType.TIME;
 import static io.prestosql.spi.type.TimeWithTimeZoneType.TIME_WITH_TIME_ZONE;
 import static io.prestosql.spi.type.TimestampType.TIMESTAMP;
 import static io.prestosql.spi.type.TimestampWithTimeZoneType.TIMESTAMP_WITH_TIME_ZONE;
@@ -114,15 +107,13 @@ public class MySqlClient
 {
     private final Type jsonType;
     private final JdbcPushDownModule pushDownModule;
-    private final BaseJdbcConfig config;
 
     @Inject
-    public MySqlClient(BaseJdbcConfig config, @StatsCollecting ConnectionFactory connectionFactory, TypeManager typeManager, ExternalFunctionHub externalFunctionHub)
+    public MySqlClient(BaseJdbcConfig config, @StatsCollecting ConnectionFactory connectionFactory, TypeManager typeManager)
     {
-        super(config, "`", connectionFactory, externalFunctionHub);
+        super(config, "`", connectionFactory);
         this.pushDownModule = config.getPushDownModule();
         this.jsonType = typeManager.getType(new TypeSignature(StandardTypes.JSON));
-        this.config = config;
     }
 
     @Override
@@ -205,15 +196,12 @@ public class MySqlClient
         if (REAL.equals(type)) {
             return WriteMapping.longMapping("float", realWriteFunction());
         }
-        if (TIME.equals(type)) {
-            return WriteMapping.longMapping("time", timeWriteFunction());
-        }
         if (TIME_WITH_TIME_ZONE.equals(type) || TIMESTAMP_WITH_TIME_ZONE.equals(type)) {
             throw new PrestoException(NOT_SUPPORTED, "Unsupported column type: " + type.getDisplayName());
         }
         if (TIMESTAMP.equals(type)) {
             // TODO use `timestampWriteFunction`
-            return WriteMapping.longMapping("datetime", timestampWriteFunctionUsingSqlTimestamp());
+            return WriteMapping.longMapping("datetime", timestampWriteFunctionUsingSqlTimestamp(session));
         }
         if (VARBINARY.equals(type)) {
             return WriteMapping.sliceMapping("mediumblob", varbinaryWriteFunction());
@@ -258,9 +246,8 @@ public class MySqlClient
     }
 
     @Override
-    public void renameColumn(JdbcIdentity identity, JdbcTableHandle handle, JdbcColumnHandle jdbcColumn, String inputNewColumnName)
+    public void renameColumn(JdbcIdentity identity, JdbcTableHandle handle, JdbcColumnHandle jdbcColumn, String newColumnName)
     {
-        String newColumnName = inputNewColumnName;
         try (Connection connection = connectionFactory.openConnection(identity)) {
             DatabaseMetaData metadata = connection.getMetaData();
             if (metadata.storesUpperCaseIdentifiers()) {
@@ -304,12 +291,12 @@ public class MySqlClient
     }
 
     @Override
-    public Optional<QueryGenerator<JdbcQueryGeneratorResult, JdbcConverterContext>> getQueryGenerator(DeterminismEvaluator determinismEvaluator, RowExpressionService rowExpressionService, FunctionMetadataManager functionManager, StandardFunctionResolution functionResolution)
+    public Optional<QueryGenerator<JdbcQueryGeneratorResult>> getQueryGenerator(RowExpressionService rowExpressionService)
     {
         // In most cases, the running efficiency of MySql is not satisfactory, so just base push down by default.
         JdbcPushDownModule mysqlPushDownModule = pushDownModule == DEFAULT ? BASE_PUSHDOWN : pushDownModule;
-        JdbcPushDownParameter pushDownParameter = new JdbcPushDownParameter(getIdentifierQuote(), this.caseInsensitiveNameMatching, mysqlPushDownModule, functionResolution);
-        return Optional.of(new MySqlQueryGenerator(determinismEvaluator, rowExpressionService, functionManager, functionResolution, pushDownParameter, config));
+        JdbcPushDownParameter pushDownParameter = new JdbcPushDownParameter(getIdentifierQuote(), this.caseInsensitiveNameMatching, mysqlPushDownModule);
+        return Optional.of(new MySqlQueryGenerator(rowExpressionService, pushDownParameter));
     }
 
     @SuppressWarnings("SQL_PREPARED_STATEMENT_GENERATED_FROM_NONCONSTANT_STRING")
@@ -393,7 +380,7 @@ public class MySqlClient
             byte[] in = slice.getBytes();
             SliceOutput dynamicSliceOutput = new DynamicSliceOutput(in.length);
             SORTED_MAPPER.writeValue((OutputStream) dynamicSliceOutput, SORTED_MAPPER.readValue(parser, Object.class));
-            // the function nextToken() returns null if the input is parsed correctly,
+            // nextToken() returns null if the input is parsed correctly,
             // but will throw an exception if there are trailing characters.
             parser.nextToken();
             return dynamicSliceOutput.slice();

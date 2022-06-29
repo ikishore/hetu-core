@@ -1,5 +1,5 @@
 /*
- * Copyright (C) 2018-2021. Huawei Technologies Co., Ltd. All rights reserved.
+ * Copyright (C) 2018-2020. Huawei Technologies Co., Ltd. All rights reserved.
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
  * You may obtain a copy of the License at
@@ -17,7 +17,6 @@ package io.hetu.core.heuristicindex;
 import com.google.common.collect.ImmutableList;
 import com.google.common.collect.ImmutableMap;
 import io.airlift.log.Logger;
-import io.hetu.core.common.util.SecurePathWhiteList;
 import io.hetu.core.heuristicindex.util.IndexConstants;
 import io.hetu.core.plugin.heuristicindex.index.btree.BTreeIndex;
 import io.prestosql.spi.connector.CreateIndexMetadata;
@@ -40,16 +39,13 @@ import java.nio.file.FileSystemException;
 import java.nio.file.Path;
 import java.nio.file.Paths;
 import java.util.ArrayList;
-import java.util.Collections;
 import java.util.LinkedList;
 import java.util.List;
 import java.util.Map;
-import java.util.concurrent.atomic.AtomicLong;
 import java.util.concurrent.locks.Lock;
 import java.util.stream.Collectors;
 import java.util.stream.Stream;
 
-import static com.google.common.base.Preconditions.checkArgument;
 import static java.util.Objects.requireNonNull;
 
 /**
@@ -82,12 +78,9 @@ public class HeuristicIndexClient
         List<IndexMetadata> indexes = new LinkedList<>();
 
         Path indexKeyPath = Paths.get(path);
-
-        IndexRecord curIndex = null;
         try {
-            curIndex = indexRecordManager.lookUpIndexRecord(indexKeyPath.subpath(0, 1).toString(),
-                    new String[] {indexKeyPath.subpath(1, 2).toString()}, indexKeyPath.subpath(2, 3).toString());
-            if (curIndex == null) {
+            if (indexRecordManager.lookUpIndexRecord(indexKeyPath.subpath(0, 1).toString(),
+                    new String[] {indexKeyPath.subpath(1, 2).toString()}, indexKeyPath.subpath(2, 3).toString()) == null) {
                 // Use index record file to pre-screen. If record does not contain the index, skip loading
                 return null;
             }
@@ -96,8 +89,7 @@ public class HeuristicIndexClient
             // On exception, log and continue reading from disk
             LOG.debug("Error reading index records: " + path);
         }
-
-        for (Map.Entry<String, Index> entry : readIndexMap(path, curIndex).entrySet()) {
+        for (Map.Entry<String, Index> entry : readIndexMap(path).entrySet()) {
             String absolutePath = entry.getKey();
             Path remainder = Paths.get(absolutePath.replaceFirst(root.toString(), ""));
             Path table = remainder.subpath(0, 1);
@@ -122,7 +114,7 @@ public class HeuristicIndexClient
             String filename = filenamePath.toString();
             long splitStart = Long.parseLong(filename.substring(0, filename.lastIndexOf('.')));
             String timeDir = Paths.get(table.toString(), column.toString(), indexType.toString(), remainder.toString()).toString();
-            long lastUpdated = getLastModifiedTime(timeDir);
+            long lastUpdated = getLastModified(timeDir);
 
             IndexMetadata index = new IndexMetadata(
                     entry.getValue(),
@@ -140,17 +132,11 @@ public class HeuristicIndexClient
     }
 
     @Override
-    public long getLastModifiedTime(String path)
+    public long getLastModified(String path)
             throws IOException
     {
         // get the absolute path to the file being read
         Path absolutePath = Paths.get(root.toString(), path);
-
-        // check required for security scan since we are constructing a path using input
-        checkArgument(!absolutePath.toString().contains("../"),
-                absolutePath + " must be absolute and under one of the following whitelisted directories:  " + SecurePathWhiteList.getSecurePathWhiteList().toString());
-        checkArgument(SecurePathWhiteList.isSecurePath(absolutePath),
-                absolutePath + " must be under one of the following whitelisted directories: " + SecurePathWhiteList.getSecurePathWhiteList().toString());
 
         try (Stream<Path> children = fs.list(absolutePath)) {
             for (Path child : (Iterable<Path>) children::iterator) {
@@ -240,7 +226,6 @@ public class HeuristicIndexClient
                 createIndexMetadata.getTableName(),
                 createIndexMetadata.getIndexColumns().stream().map(Pair::getFirst).toArray(String[]::new),
                 createIndexMetadata.getIndexType(),
-                createIndexMetadata.getIndexSize(),
                 properties,
                 createIndexMetadata.getPartitions());
     }
@@ -293,11 +278,6 @@ public class HeuristicIndexClient
                 for (Path path : toDeletePartitions) {
                     fs.deleteRecursively(path);
                 }
-
-                // if all partitions have been deleted, remove index path
-                if (fs.walk(indexLevelPath).allMatch(fs::isDirectory)) {
-                    fs.deleteRecursively(indexLevelPath);
-                }
             }
 
             try {
@@ -332,19 +312,13 @@ public class HeuristicIndexClient
      * @return an immutable mapping from all index files read to the corresponding index that was loaded
      * @throws IOException
      */
-    private Map<String, Index> readIndexMap(String path, IndexRecord indexRecord)
+    private Map<String, Index> readIndexMap(String path)
             throws IOException
     {
         ImmutableMap.Builder<String, Index> result = ImmutableMap.builder();
 
         // get the absolute path to the file being read
         Path absolutePath = Paths.get(root.toString(), path);
-
-        // check required for security scan since we are constructing a path using input
-        checkArgument(!absolutePath.toString().contains("../"),
-                absolutePath + " must be absolute and under one of the following whitelisted directories:  " + SecurePathWhiteList.getSecurePathWhiteList().toString());
-        checkArgument(SecurePathWhiteList.isSecurePath(absolutePath),
-                absolutePath + " must be under one of the following whitelisted directories: " + SecurePathWhiteList.getSecurePathWhiteList().toString());
 
         if (!fs.exists(absolutePath)) {
             return ImmutableMap.of();
@@ -368,10 +342,6 @@ public class HeuristicIndexClient
                         String indexType = filename.substring(filename.lastIndexOf('.') + 1);
                         Index index = HeuristicIndexFactory.createIndex(indexType);
 
-                        // set property for index
-                        index.setProperties(indexRecord.getProperties());
-
-                        // deserialize from file
                         index.deserialize(new CloseShieldInputStream(i));
                         LOG.debug("Loaded %s index from %s.", index.getId(), tarFile.toAbsolutePath());
                         result.put(tarFile.getParent().resolve(filename).toString(), index);
@@ -381,6 +351,7 @@ public class HeuristicIndexClient
         }
 
         Map<String, Index> resultMap = result.build();
+
         return resultMap;
     }
 
@@ -416,76 +387,5 @@ public class HeuristicIndexClient
             LOG.debug("File path doesn't exists" + absolutePath);
             return ImmutableList.of();
         }
-    }
-
-    @Override
-    public Map<String, String> getLastModifiedTimes(String indexName)
-            throws IOException
-    {
-        IndexRecord indexRecord = lookUpIndexRecord(indexName);
-        CreateIndexMetadata.Level createLevel = indexRecord.getLevel();
-
-        Path pathToIndex = Paths.get(root.toString(), indexRecord.qualifiedTable, indexRecord.columns[0], indexRecord.indexType);
-
-        // check required for security scan since we are constructing a path using input
-        checkArgument(!pathToIndex.toString().contains("../"),
-                pathToIndex + " must be absolute and under one of the following whitelisted directories:  " + SecurePathWhiteList.getSecurePathWhiteList().toString());
-        checkArgument(SecurePathWhiteList.isSecurePath(pathToIndex),
-                pathToIndex + " must be under one of the following whitelisted directories: " + SecurePathWhiteList.getSecurePathWhiteList().toString());
-
-        List<Path> paths = fs.walk(pathToIndex).filter(p -> !fs.isDirectory(p)).collect(Collectors.toList());
-        switch (createLevel) {
-            case STRIPE:
-                return paths.stream().collect(Collectors.toMap(path -> "/" + path.subpath(pathToIndex.getNameCount(), path.getNameCount() - 1), path -> {
-                    String filename = path.getFileName().toString();
-                    return filename.replaceAll("\\D", "");
-                }));
-            case PARTITION:
-                return paths.stream().collect(Collectors.toMap(path -> path.subpath(pathToIndex.getNameCount(), path.getNameCount() - 1).toString(), path -> {
-                    String filename = path.getFileName().toString();
-                    return filename.replaceAll("\\D", "");
-                }));
-            case TABLE:
-                return paths.stream().filter(path -> path.getNameCount() - 1 == pathToIndex.getNameCount()).collect(Collectors.toMap(path -> indexRecord.qualifiedTable, path -> {
-                    String filename = path.getFileName().toString();
-                    return filename.replaceAll("\\D", "");
-                }));
-            default:
-                return Collections.emptyMap();
-        }
-    }
-
-    @Override
-    public long getIndexSize(String name)
-            throws IOException
-    {
-        IndexRecord referenceRecord = indexRecordManager.lookUpIndexRecord(name);
-        Path pathToIndex = Paths.get(root.toString(), referenceRecord.qualifiedTable, referenceRecord.columns[0], referenceRecord.indexType);
-
-        // check required for security scan since we are constructing a path using input
-        checkArgument(!pathToIndex.toString().contains("../"),
-                pathToIndex + " must be absolute and under one of the following whitelisted directories:  " + SecurePathWhiteList.getSecurePathWhiteList().toString());
-        checkArgument(SecurePathWhiteList.isSecurePath(pathToIndex),
-                pathToIndex + " must be under one of the following whitelisted directories: " + SecurePathWhiteList.getSecurePathWhiteList().toString());
-
-        return getDirectorySize(pathToIndex);
-    }
-
-    private long getDirectorySize(Path rootPath)
-            throws IOException
-    {
-        // use fs to get size
-        AtomicLong indexSize = new AtomicLong(0L);
-        fs.walk(rootPath).forEach(file -> {
-            try {
-                if (!fs.isDirectory(file)) {
-                    indexSize.addAndGet((Long) fs.getAttribute(file, "size"));
-                }
-            }
-            catch (IOException e) {
-                LOG.debug("Failed to calculate index size", e);
-            }
-        });
-        return indexSize.longValue();
     }
 }

@@ -32,11 +32,6 @@ public interface HiveFileWriter
 
     void rollback();
 
-    default void cancel()
-    {
-        rollback();
-    }
-
     long getValidationCpuNanos();
 
     default Optional<Runnable> getVerificationTask()

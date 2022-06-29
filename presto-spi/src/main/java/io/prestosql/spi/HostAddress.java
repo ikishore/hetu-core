@@ -161,7 +161,7 @@ public class HostAddress
     public static HostAddress fromString(String hostPortString)
     {
         requireNonNull(hostPortString, "hostPortString is null");
-        String uriHost;
+        String host;
         String portString = null;
 
         if (hostPortString.startsWith("[")) {
@@ -170,23 +170,23 @@ public class HostAddress
             if (!matcher.matches()) {
                 throw new IllegalArgumentException("Invalid bracketed host/port: " + hostPortString);
             }
-            uriHost = matcher.group(1);
+            host = matcher.group(1);
             portString = matcher.group(2);  // could be null
         }
         else {
             int colonPos = hostPortString.indexOf(':');
             if (colonPos >= 0 && hostPortString.indexOf(':', colonPos + 1) == -1) {
                 // Exactly 1 colon.  Split into host:port.
-                uriHost = hostPortString.substring(0, colonPos);
+                host = hostPortString.substring(0, colonPos);
                 portString = hostPortString.substring(colonPos + 1);
             }
             else {
                 // 0 or 2+ colons.  Bare hostname or IPv6 literal.
-                uriHost = hostPortString;
+                host = hostPortString;
             }
         }
 
-        int uriPort = NO_PORT;
+        int port = NO_PORT;
         if (portString != null && portString.length() != 0) {
             // Try to parse the whole port string as a number.
             // JDK7 accepts leading plus signs. We don't want to.
@@ -194,28 +194,28 @@ public class HostAddress
                 throw new IllegalArgumentException("Unparseable port number: " + hostPortString);
             }
             try {
-                uriPort = Integer.parseInt(portString);
+                port = Integer.parseInt(portString);
             }
             catch (NumberFormatException e) {
                 throw new IllegalArgumentException("Unparseable port number: " + hostPortString);
             }
-            if (!isValidPort(uriPort)) {
+            if (!isValidPort(port)) {
                 throw new IllegalArgumentException("Port number out of range: " + hostPortString);
             }
         }
 
-        return new HostAddress(uriHost, uriPort);
+        return new HostAddress(host, port);
     }
 
     public static HostAddress fromUri(URI httpUri)
     {
-        String uriHost = httpUri.getHost();
-        int uriPort = httpUri.getPort();
-        if (uriPort < 0) {
-            return fromString(uriHost);
+        String host = httpUri.getHost();
+        int port = httpUri.getPort();
+        if (port < 0) {
+            return fromString(host);
         }
         else {
-            return fromParts(uriHost, uriPort);
+            return fromParts(host, port);
         }
     }
 

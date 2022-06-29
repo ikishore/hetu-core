@@ -21,7 +21,6 @@ import io.airlift.log.Logger;
 import io.airlift.units.DataSize;
 import io.airlift.units.Duration;
 import io.prestosql.Session;
-import io.prestosql.SystemSessionProperties;
 import io.prestosql.client.QueryResults;
 import io.prestosql.client.QueryStatusInfo;
 import io.prestosql.execution.QueryManager;
@@ -29,7 +28,6 @@ import io.prestosql.memory.context.SimpleLocalMemoryContext;
 import io.prestosql.operator.ExchangeClient;
 import io.prestosql.operator.ExchangeClientSupplier;
 import io.prestosql.server.ForStatementResource;
-import io.prestosql.snapshot.RecoveryUtils;
 import io.prestosql.spi.QueryId;
 import io.prestosql.spi.block.BlockEncodingSerde;
 
@@ -99,7 +97,6 @@ public class ExecutingStatementResource
     private final BlockEncodingSerde blockEncodingSerde;
     private final BoundedExecutor responseExecutor;
     private final ScheduledExecutorService timeoutExecutor;
-    private final RecoveryUtils recoveryUtils;
 
     private final ConcurrentMap<QueryId, Query> queries = new ConcurrentHashMap<>();
     private final ScheduledExecutorService queryPurger = newSingleThreadScheduledExecutor(threadsNamed("execution-query-purger"));
@@ -109,7 +106,6 @@ public class ExecutingStatementResource
             QueryManager queryManager,
             ExchangeClientSupplier exchangeClientSupplier,
             BlockEncodingSerde blockEncodingSerde,
-            RecoveryUtils recoveryUtils,
             @ForStatementResource BoundedExecutor responseExecutor,
             @ForStatementResource ScheduledExecutorService timeoutExecutor)
     {
@@ -118,7 +114,6 @@ public class ExecutingStatementResource
         this.blockEncodingSerde = requireNonNull(blockEncodingSerde, "blockEncodingSerde is null");
         this.responseExecutor = requireNonNull(responseExecutor, "responseExecutor is null");
         this.timeoutExecutor = requireNonNull(timeoutExecutor, "timeoutExecutor is null");
-        this.recoveryUtils = recoveryUtils;
 
         queryPurger.scheduleWithFixedDelay(
                 () -> {
@@ -163,12 +158,11 @@ public class ExecutingStatementResource
             @Suspended AsyncResponse asyncResponse)
     {
         Query query = getQuery(queryId, slug);
-        String tmpProto = proto;
-        if (isNullOrEmpty(tmpProto)) {
-            tmpProto = uriInfo.getRequestUri().getScheme();
+        if (isNullOrEmpty(proto)) {
+            proto = uriInfo.getRequestUri().getScheme();
         }
 
-        asyncQueryResults(query, token, maxWait, targetResultSize, uriInfo, tmpProto, asyncResponse);
+        asyncQueryResults(query, token, maxWait, targetResultSize, uriInfo, proto, asyncResponse);
     }
 
     protected Query getQuery(QueryId queryId, String slug)
@@ -195,9 +189,6 @@ public class ExecutingStatementResource
 
         query = queries.computeIfAbsent(queryId, id -> {
             ExchangeClient exchangeClient = exchangeClientSupplier.get(new SimpleLocalMemoryContext(newSimpleAggregatedMemoryContext(), ExecutingStatementResource.class.getSimpleName()));
-            if (SystemSessionProperties.isRecoveryEnabled(session)) {
-                exchangeClient.setRecoveryEnabled(recoveryUtils.getOrCreateRecoveryManager(queryId, session));
-            }
             return Query.create(
                     session,
                     slug,
@@ -220,8 +211,13 @@ public class ExecutingStatementResource
             AsyncResponse asyncResponse)
     {
         Duration wait = WAIT_ORDERING.min(MAX_WAIT_TIME, maxWait);
-        DataSize tmpTargetResultSize = targetResultSize == null ? DEFAULT_TARGET_RESULT_SIZE : Ordering.natural().min(targetResultSize, MAX_TARGET_RESULT_SIZE);
-        ListenableFuture<QueryResults> queryResultsFuture = query.waitForResults(token, uriInfo, scheme, wait, tmpTargetResultSize);
+        if (targetResultSize == null) {
+            targetResultSize = DEFAULT_TARGET_RESULT_SIZE;
+        }
+        else {
+            targetResultSize = Ordering.natural().min(targetResultSize, MAX_TARGET_RESULT_SIZE);
+        }
+        ListenableFuture<QueryResults> queryResultsFuture = query.waitForResults(token, uriInfo, scheme, wait, targetResultSize);
 
         ListenableFuture<Response> response = Futures.transform(queryResultsFuture, queryResults -> toResponse(query, queryResults), directExecutor());
 

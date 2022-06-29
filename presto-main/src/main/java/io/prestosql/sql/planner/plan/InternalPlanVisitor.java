@@ -15,6 +15,7 @@ package io.prestosql.sql.planner.plan;
 
 import io.prestosql.spi.plan.CTEScanNode;
 import io.prestosql.spi.plan.PlanVisitor;
+import io.prestosql.spi.plan.RouterNode;
 
 public abstract class InternalPlanVisitor<R, C>
         extends PlanVisitor<R, C>
@@ -29,17 +30,17 @@ public abstract class InternalPlanVisitor<R, C>
         return visitPlan(node, context);
     }
 
+    public R visitStoreForward(StoreForwardNode node, C context)
+    {
+        return visitPlan(node, context);
+    }
+
     public R visitOffset(OffsetNode node, C context)
     {
         return visitPlan(node, context);
     }
 
     public R visitCreateIndex(CreateIndexNode node, C context)
-    {
-        return visitPlan(node, context);
-    }
-
-    public R visitUpdateIndex(UpdateIndexNode node, C context)
     {
         return visitPlan(node, context);
     }
@@ -95,11 +96,6 @@ public abstract class InternalPlanVisitor<R, C>
     }
 
     public R visitUpdate(UpdateNode node, C context)
-    {
-        return visitPlan(node, context);
-    }
-
-    public R visitTableUpdate(TableUpdateNode node, C context)
     {
         return visitPlan(node, context);
     }
@@ -169,8 +165,12 @@ public abstract class InternalPlanVisitor<R, C>
         return visitPlan(node, context);
     }
 
-    @Override
     public R visitCTEScan(CTEScanNode node, C context)
+    {
+        return visitPlan(node, context);
+    }
+
+    public R visitRouter(RouterNode node, C context)
     {
         return visitPlan(node, context);
     }

@@ -46,7 +46,8 @@ import static io.prestosql.PrestoMediaTypes.PRESTO_PAGES;
 import static io.prestosql.client.PrestoHeaders.PRESTO_BUFFER_COMPLETE;
 import static io.prestosql.client.PrestoHeaders.PRESTO_PAGE_NEXT_TOKEN;
 import static io.prestosql.client.PrestoHeaders.PRESTO_PAGE_TOKEN;
-import static io.prestosql.testing.TestingPagesSerdeFactory.testingPagesSerde;
+import static io.prestosql.client.PrestoHeaders.PRESTO_TASK_INSTANCE_ID;
+import static io.prestosql.execution.buffer.TestingPagesSerdeFactory.testingPagesSerde;
 import static org.testng.Assert.assertEquals;
 import static org.testng.Assert.assertTrue;
 
@@ -108,6 +109,7 @@ public class MockExchangeRequestProcessor
                 status,
                 ImmutableListMultimap.of(
                         CONTENT_TYPE, PRESTO_PAGES,
+                        PRESTO_TASK_INSTANCE_ID, String.valueOf(result.getTaskInstanceId()),
                         PRESTO_PAGE_TOKEN, String.valueOf(result.getToken()),
                         PRESTO_PAGE_NEXT_TOKEN, String.valueOf(result.getNextToken()),
                         PRESTO_BUFFER_COMPLETE, String.valueOf(result.isBufferComplete())),
@@ -165,7 +167,7 @@ public class MockExchangeRequestProcessor
         {
             // if location is complete return GONE
             if (completed.get() && serializedPages.isEmpty()) {
-                return BufferResult.emptyResults(token.get(), true);
+                return BufferResult.emptyResults(TASK_INSTANCE_ID, token.get(), true);
             }
 
             assertEquals(sequenceId, token.get(), "token");
@@ -181,7 +183,7 @@ public class MockExchangeRequestProcessor
 
             // if no page, return NO CONTENT
             if (serializedPage == null) {
-                return BufferResult.emptyResults(token.get(), false);
+                return BufferResult.emptyResults(TASK_INSTANCE_ID, token.get(), false);
             }
 
             // add serializedPages up to the size limit
@@ -200,7 +202,7 @@ public class MockExchangeRequestProcessor
             // update sequence id
             long nextToken = token.get() + responsePages.size();
 
-            BufferResult bufferResult = new BufferResult(token.get(), nextToken, false, responsePages);
+            BufferResult bufferResult = new BufferResult(TASK_INSTANCE_ID, token.get(), nextToken, false, responsePages);
             token.set(nextToken);
 
             return bufferResult;

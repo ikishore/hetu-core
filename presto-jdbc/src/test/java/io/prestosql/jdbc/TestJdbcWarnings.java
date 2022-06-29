@@ -286,18 +286,16 @@ public class TestJdbcWarnings
 
     private static void assertStartsWithExpectedWarnings(SQLWarning warning, SQLWarning expected)
     {
-        SQLWarning newWarning = warning;
-        SQLWarning sqlWarning = expected;
-        assertNotNull(sqlWarning);
-        assertNotNull(newWarning);
+        assertNotNull(expected);
+        assertNotNull(warning);
         while (true) {
-            assertWarningsEqual(newWarning, sqlWarning);
-            newWarning = newWarning.getNextWarning();
-            sqlWarning = sqlWarning.getNextWarning();
-            if (sqlWarning == null) {
+            assertWarningsEqual(warning, expected);
+            warning = warning.getNextWarning();
+            expected = expected.getNextWarning();
+            if (expected == null) {
                 return;
             }
-            assertNotNull(newWarning);
+            assertNotNull(warning);
         }
     }
 

@@ -1,5 +1,5 @@
 /*
- * Copyright (C) 2018-2021. Huawei Technologies Co., Ltd. All rights reserved.
+ * Copyright (C) 2018-2020. Huawei Technologies Co., Ltd. All rights reserved.
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
  * You may obtain a copy of the License at
@@ -15,15 +15,12 @@
 package io.prestosql.metastore;
 
 import com.google.common.collect.ImmutableMap;
-import com.google.inject.Inject;
 import io.airlift.log.Logger;
 import io.prestosql.filesystem.FileSystemClientManager;
 import io.prestosql.spi.classloader.ThreadContextClassLoader;
 import io.prestosql.spi.filesystem.HetuFileSystemClient;
 import io.prestosql.spi.metastore.HetuMetaStoreFactory;
 import io.prestosql.spi.metastore.HetuMetastore;
-import io.prestosql.spi.statestore.StateStore;
-import io.prestosql.statestore.StateStoreProvider;
 
 import java.io.File;
 import java.io.IOException;
@@ -50,8 +47,6 @@ public class HetuMetaStoreManager
     private static final String HETU_METASTORE_TYPE_PROPERTY_NAME = "hetu.metastore.type";
     private static final String HETU_METASTORE_TYPE_HETU_FILE_SYSTEM = "hetufilesystem";
     private static final String HETU_METASTORE_HETU_FILE_SYSTEM_PROFILE_NAME = "hetu.metastore.hetufilesystem.profile-name";
-    private static final String HETU_METASTORE_CACHE_TYPE = "hetu.metastore.cache.type";
-    private static final String HETU_METASTORE_CACHE_TYPE_DEFAULT = "local";
 
     // properties default type value
     private static final String HETU_METASTORE_TYPE_DEFAULT_VALUE = "jdbc";
@@ -59,21 +54,11 @@ public class HetuMetaStoreManager
     private final Map<String, HetuMetaStoreFactory> hetuMetastoreFactories = new ConcurrentHashMap<>();
     private HetuMetastore hetuMetastore;
     private String hetuMetastoreType;
-    private String metaCacheType;
-    private StateStoreProvider stateStoreProvider;
-    private StateStore stateStore;
-
-    public HetuMetaStoreManager() {}
-
-    @Inject
-    public HetuMetaStoreManager(StateStoreProvider stateStoreProvider)
-    {
-        this.stateStoreProvider = stateStoreProvider;
-    }
 
     public void addHetuMetaStoreFactory(HetuMetaStoreFactory hetuMetaStoreFactory)
     {
         requireNonNull(hetuMetaStoreFactory, "hetuMetaStoreFactory is null");
+
         if (hetuMetastoreFactories.putIfAbsent(hetuMetaStoreFactory.getName(), hetuMetaStoreFactory) != null) {
             throw new IllegalArgumentException(format("HetuMetastore '%s' is already registered", hetuMetaStoreFactory.getName()));
         }
@@ -84,9 +69,7 @@ public class HetuMetaStoreManager
     {
         // create hetu metastore
         hetuMetastoreType = config.getOrDefault(HETU_METASTORE_TYPE_PROPERTY_NAME, HETU_METASTORE_TYPE_DEFAULT_VALUE);
-        metaCacheType = config.getOrDefault(HETU_METASTORE_CACHE_TYPE, HETU_METASTORE_CACHE_TYPE_DEFAULT);
         config.remove(HETU_METASTORE_TYPE_PROPERTY_NAME);
-        config.remove(HETU_METASTORE_CACHE_TYPE);
         HetuMetaStoreFactory hetuMetaStoreFactory = hetuMetastoreFactories.get(hetuMetastoreType);
         checkState(hetuMetaStoreFactory != null, "hetuMetaStoreFactory %s is not registered", hetuMetaStoreFactory);
         try (ThreadContextClassLoader ignored = new ThreadContextClassLoader(HetuMetaStoreFactory.class.getClassLoader())) {
@@ -95,14 +78,7 @@ public class HetuMetaStoreManager
                 String profileName = config.get(HETU_METASTORE_HETU_FILE_SYSTEM_PROFILE_NAME);
                 client = fileSystemClientManager.getFileSystemClient(profileName, Paths.get("/"));
             }
-            if (stateStoreProvider == null) {
-                stateStore = null;
-                LOG.info("-- stateStore is null --");
-            }
-            else {
-                stateStore = stateStoreProvider.getStateStore();
-            }
-            hetuMetastore = hetuMetaStoreFactory.create(hetuMetastoreType, ImmutableMap.copyOf(config), client, stateStore, metaCacheType);
+            hetuMetastore = hetuMetaStoreFactory.create(hetuMetastoreType, ImmutableMap.copyOf(config), client);
         }
 
         LOG.info("-- Loaded Hetu Metastore %s --", hetuMetastoreType);
@@ -122,10 +98,5 @@ public class HetuMetaStoreManager
     public HetuMetastore getHetuMetastore()
     {
         return hetuMetastore;
-    }
-
-    public String getHetuMetastoreType()
-    {
-        return hetuMetastoreType;
     }
 }

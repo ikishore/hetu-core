@@ -21,7 +21,6 @@ import io.prestosql.spi.HostAddress;
 import org.apache.hadoop.fs.Path;
 import org.testng.annotations.Test;
 
-import java.util.Map;
 import java.util.Optional;
 import java.util.OptionalInt;
 import java.util.Properties;
@@ -51,8 +50,6 @@ public class TestHiveSplit
         deleteDeltaLocationsBuilder.addDeleteDelta(new Path("file:///data/fullacid/delete_delta_0000007_0000007_0000"), 7L, 7L, 0);
         DeleteDeltaLocations deleteDeltaLocations = deleteDeltaLocationsBuilder.build().get();
 
-        Map<String, String> customSplitInfo = ImmutableMap.of("key", "value");
-
         HiveSplit expected = new HiveSplit(
                 "db",
                 "table",
@@ -75,9 +72,7 @@ public class TestHiveSplit
                         ImmutableList.of(new HiveColumnHandle("col", HIVE_LONG, BIGINT.getTypeSignature(), 5, ColumnType.REGULAR, Optional.of("comment"))))),
                 false,
                 Optional.of(deleteDeltaLocations),
-                Optional.empty(),
-                false,
-                customSplitInfo);
+                Optional.empty(), false);
 
         String json = codec.toJson(expected);
         HiveSplit actual = codec.fromJson(json);
@@ -97,6 +92,5 @@ public class TestHiveSplit
         assertEquals(actual.isForceLocalScheduling(), expected.isForceLocalScheduling());
         assertEquals(actual.isS3SelectPushdownEnabled(), expected.isS3SelectPushdownEnabled());
         assertEquals(actual.getDeleteDeltaLocations().get(), expected.getDeleteDeltaLocations().get());
-        assertEquals(actual.getCustomSplitInfo(), expected.getCustomSplitInfo());
     }
 }

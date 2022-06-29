@@ -16,13 +16,11 @@ package io.prestosql.sql.planner.iterative.rule;
 import com.google.common.collect.ImmutableList;
 import io.prestosql.matching.Captures;
 import io.prestosql.matching.Pattern;
-import io.prestosql.metadata.FunctionAndTypeManager;
-import io.prestosql.spi.function.StandardFunctionResolution;
+import io.prestosql.spi.function.Signature;
 import io.prestosql.spi.plan.AggregationNode;
 import io.prestosql.spi.plan.Symbol;
 import io.prestosql.spi.plan.ValuesNode;
 import io.prestosql.sql.planner.iterative.Rule;
-import io.prestosql.sql.relational.FunctionResolution;
 import io.prestosql.sql.tree.LongLiteral;
 
 import java.util.Map;
@@ -40,13 +38,6 @@ public class PruneCountAggregationOverScalar
         implements Rule<AggregationNode>
 {
     private static final Pattern<AggregationNode> PATTERN = aggregation();
-    private final StandardFunctionResolution functionResolution;
-
-    public PruneCountAggregationOverScalar(FunctionAndTypeManager functionAndTypeManager)
-    {
-        requireNonNull(functionAndTypeManager, "functionManager is null");
-        this.functionResolution = new FunctionResolution(functionAndTypeManager);
-    }
 
     @Override
     public Pattern<AggregationNode> getPattern()
@@ -64,7 +55,8 @@ public class PruneCountAggregationOverScalar
         for (Map.Entry<Symbol, AggregationNode.Aggregation> entry : assignments.entrySet()) {
             AggregationNode.Aggregation aggregation = entry.getValue();
             requireNonNull(aggregation, "aggregation is null");
-            if (!functionResolution.isCountFunction(aggregation.getFunctionHandle()) || !aggregation.getArguments().isEmpty()) {
+            Signature signature = aggregation.getSignature();
+            if (!"count".equals(signature.getName()) || !aggregation.getArguments().isEmpty()) {
                 return Result.empty();
             }
         }

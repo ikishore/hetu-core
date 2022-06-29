@@ -43,7 +43,6 @@ import java.util.function.Consumer;
 import static io.airlift.http.client.HttpUriBuilder.uriBuilderFrom;
 import static io.airlift.http.client.Request.Builder.prepareGet;
 import static io.airlift.units.Duration.nanosSince;
-import static io.prestosql.client.PrestoHeaders.PRESTO_TASK_INSTANCE_ID;
 import static io.prestosql.protocol.AdaptingJsonResponseHandler.createAdaptingJsonResponseHandler;
 import static io.prestosql.protocol.FullSmileResponseHandler.createFullSmileResponseHandler;
 import static io.prestosql.protocol.JsonCodecWrapper.unwrapJsonCodec;
@@ -55,7 +54,6 @@ public class TaskInfoFetcher
         implements SimpleHttpResponseCallback<TaskInfo>
 {
     private final TaskId taskId;
-    private final String instanceId;
     private final Consumer<Throwable> onFail;
     private final StateMachine<TaskInfo> taskInfo;
     private final StateMachine<Optional<TaskInfo>> finalTaskInfo;
@@ -89,7 +87,6 @@ public class TaskInfoFetcher
     public TaskInfoFetcher(
             Consumer<Throwable> onFail,
             TaskInfo initialTask,
-            String instanceId,
             HttpClient httpClient,
             Duration updateInterval,
             Codec<TaskInfo> taskInfoCodec,
@@ -105,7 +102,6 @@ public class TaskInfoFetcher
         requireNonNull(errorScheduledExecutor, "errorScheduledExecutor is null");
 
         this.taskId = initialTask.getTaskStatus().getTaskId();
-        this.instanceId = requireNonNull(instanceId, "instanceId is null");
         this.onFail = requireNonNull(onFail, "onFail is null");
         this.taskInfo = new StateMachine<>("task " + taskId, executor, initialTask);
         this.finalTaskInfo = new StateMachine<>("task-" + taskId, executor, Optional.empty());
@@ -138,7 +134,7 @@ public class TaskInfoFetcher
         scheduleUpdate();
     }
 
-    public synchronized void stop()
+    private synchronized void stop()
     {
         running = false;
         if (future != null) {
@@ -211,7 +207,7 @@ public class TaskInfoFetcher
 
         HttpUriBuilder httpUriBuilder = uriBuilderFrom(taskStatus.getSelf());
         URI uri = summarizeTaskInfo ? httpUriBuilder.addParameter("summarize").build() : httpUriBuilder.build();
-        Request request = addInstanceIdHeader(setContentTypeHeaders(isBinaryEncoding, prepareGet()))
+        Request request = setContentTypeHeaders(isBinaryEncoding, prepareGet())
                 .setUri(uri)
                 .build();
 
@@ -227,13 +223,6 @@ public class TaskInfoFetcher
         future = httpClient.executeAsync(request, responseHandler);
         currentRequestStartNanos.set(System.nanoTime());
         Futures.addCallback(future, new SimpleHttpResponseHandler<>(this, request.getUri(), stats), executor);
-    }
-
-    private Request.Builder addInstanceIdHeader(Request.Builder builder)
-    {
-        // Snapshot: Add task instance id to all task related requests,
-        // so receiver can verify if the instance id matches
-        return builder.setHeader(PRESTO_TASK_INSTANCE_ID, instanceId);
     }
 
     synchronized void updateTaskInfo(TaskInfo newValue)

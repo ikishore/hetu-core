@@ -19,7 +19,9 @@ import io.prestosql.spi.connector.ConnectorSession;
 import static io.prestosql.spi.type.TypeSignature.parseTypeSignature;
 
 /**
- * A timestamp is encoded as milliseconds from 1970-01-01T00:00:00 UTC and is to be interpreted as local date time without regards to any time zone.
+ * A timestamp is stored as milliseconds from 1970-01-01T00:00:00 UTC and is to be interpreted as date-time in UTC.
+ * In legacy timestamp semantics, timestamp is stored as milliseconds from 1970-01-01T00:00:00 UTC and is to be
+ * interpreted in session time zone.
  */
 public final class TimestampType
         extends AbstractLongType
@@ -37,7 +39,13 @@ public final class TimestampType
         if (block.isNull(position)) {
             return null;
         }
-        return new SqlTimestamp(block.getLong(position, 0));
+
+        if (session.isLegacyTimestamp()) {
+            return new SqlTimestamp(block.getLong(position, 0), session.getTimeZoneKey());
+        }
+        else {
+            return new SqlTimestamp(block.getLong(position, 0));
+        }
     }
 
     @Override

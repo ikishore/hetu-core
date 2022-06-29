@@ -28,9 +28,7 @@ import io.prestosql.spi.type.SqlDecimal;
 import io.prestosql.spi.type.SqlTimestamp;
 import io.prestosql.spi.type.SqlVarbinary;
 import io.prestosql.spi.type.Type;
-import org.apache.hadoop.hive.common.type.Date;
 import org.apache.hadoop.hive.common.type.HiveDecimal;
-import org.apache.hadoop.hive.common.type.Timestamp;
 import org.apache.hadoop.hive.serde2.objectinspector.ObjectInspector;
 import org.apache.hadoop.hive.serde2.objectinspector.primitive.JavaHiveDecimalObjectInspector;
 import org.apache.hadoop.hive.serde2.typeinfo.DecimalTypeInfo;
@@ -41,6 +39,9 @@ import org.testng.annotations.Test;
 
 import java.math.BigDecimal;
 import java.math.BigInteger;
+import java.sql.Date;
+import java.sql.Timestamp;
+import java.time.LocalDate;
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.Collections;
@@ -63,6 +64,7 @@ import static com.google.common.collect.Iterables.concat;
 import static com.google.common.collect.Iterables.cycle;
 import static com.google.common.collect.Iterables.limit;
 import static com.google.common.collect.Iterables.transform;
+import static io.prestosql.plugin.hive.parquet.ParquetTester.HIVE_STORAGE_TIME_ZONE;
 import static io.prestosql.plugin.hive.parquet.ParquetTester.insertNullEvery;
 import static io.prestosql.spi.type.BigintType.BIGINT;
 import static io.prestosql.spi.type.BooleanType.BOOLEAN;
@@ -78,6 +80,7 @@ import static io.prestosql.spi.type.VarbinaryType.VARBINARY;
 import static io.prestosql.spi.type.VarcharType.VARCHAR;
 import static io.prestosql.spi.type.VarcharType.createUnboundedVarcharType;
 import static io.prestosql.testing.DateTimeTestingUtils.sqlTimestampOf;
+import static io.prestosql.testing.TestingConnectorSession.SESSION;
 import static io.prestosql.tests.StructuralTestUtil.mapType;
 import static java.lang.Math.toIntExact;
 import static java.lang.String.format;
@@ -119,7 +122,7 @@ public abstract class AbstractTestParquetReader
     @BeforeClass
     public void setUp()
     {
-        assertEquals(DateTimeZone.getDefault(), DateTimeZone.forID("America/Bahia_Banderas"));
+        assertEquals(DateTimeZone.getDefault(), HIVE_STORAGE_TIME_ZONE);
 
         // Parquet has excessive logging at INFO level
         parquetLogger = Logger.getLogger("org.apache.parquet.hadoop");
@@ -1771,7 +1774,7 @@ public abstract class AbstractTestParquetReader
         if (input == null) {
             return null;
         }
-
+        Timestamp timestamp = new Timestamp(0);
         long seconds = (input / 1000);
         int nanos = ((input % 1000) * 1_000_000);
 
@@ -1786,7 +1789,9 @@ public abstract class AbstractTestParquetReader
             nanos -= 1_000_000_000;
             seconds += 1;
         }
-        return Timestamp.ofEpochSecond(seconds, nanos);
+        timestamp.setTime(seconds * 1000);
+        timestamp.setNanos(nanos);
+        return timestamp;
     }
 
     private static SqlTimestamp intToSqlTimestamp(Integer input)
@@ -1794,7 +1799,7 @@ public abstract class AbstractTestParquetReader
         if (input == null) {
             return null;
         }
-        return sqlTimestampOf((long) input);
+        return sqlTimestampOf(input, SESSION);
     }
 
     private static Date intToDate(Integer input)
@@ -1802,7 +1807,7 @@ public abstract class AbstractTestParquetReader
         if (input == null) {
             return null;
         }
-        return Date.ofEpochDay(input);
+        return Date.valueOf(LocalDate.ofEpochDay(input));
     }
 
     private static SqlDate intToSqlDate(Integer input)

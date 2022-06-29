@@ -21,7 +21,6 @@ import io.prestosql.spi.eventlistener.EventListenerFactory;
 public class HetuEventListenerPlugin
         implements Plugin
 {
-    @Override
     public Iterable<EventListenerFactory> getEventListenerFactories()
     {
         return ImmutableList.of(new HetuEventListenerFactory());

@@ -1,5 +1,5 @@
 /*
- * Copyright (C) 2018-2021. Huawei Technologies Co., Ltd. All rights reserved.
+ * Copyright (C) 2018-2020. Huawei Technologies Co., Ltd. All rights reserved.
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
  * You may obtain a copy of the License at
@@ -41,10 +41,12 @@ import io.prestosql.spi.plan.WindowNode;
 import io.prestosql.spi.predicate.TupleDomain;
 import io.prestosql.spi.relation.RowExpression;
 import io.prestosql.spi.sql.QueryGenerator;
+import io.prestosql.spi.sql.RowExpressionConverter;
 import io.prestosql.spi.sql.SqlStatementWriter;
 import io.prestosql.spi.sql.expression.OrderBy;
 import io.prestosql.spi.sql.expression.Selection;
 import io.prestosql.spi.sql.expression.Types;
+import io.prestosql.spi.type.Type;
 import io.prestosql.spi.type.TypeManager;
 
 import java.util.LinkedHashMap;
@@ -75,19 +77,19 @@ import static java.util.Objects.requireNonNull;
 import static java.util.stream.Collectors.toList;
 
 public class BaseJdbcQueryGenerator
-        implements QueryGenerator<JdbcQueryGeneratorResult, JdbcConverterContext>
+        implements QueryGenerator<JdbcQueryGeneratorResult>
 {
     protected static final Logger log = Logger.get(BaseJdbcQueryGenerator.class);
     protected static final String GENERATE_FAILED_LOG = "JDBC query generator failed for [%s]";
 
     protected final String quote;
     protected final JdbcPushDownModule pushDownModule;
-    protected final BaseJdbcRowExpressionConverter converter;
+    protected final RowExpressionConverter converter;
     protected final SqlStatementWriter statementWriter;
 
     public BaseJdbcQueryGenerator(
             JdbcPushDownParameter pushDownParameter,
-            BaseJdbcRowExpressionConverter converter,
+            RowExpressionConverter converter,
             SqlStatementWriter statementWriter)
     {
         this.quote = pushDownParameter.getIdentifierQuote();
@@ -97,7 +99,7 @@ public class BaseJdbcQueryGenerator
     }
 
     @Override
-    public BaseJdbcRowExpressionConverter getConverter()
+    public RowExpressionConverter getConverter()
     {
         return converter;
     }
@@ -183,8 +185,7 @@ public class BaseJdbcQueryGenerator
             }
             JdbcQueryGeneratorContext context = sourceContext.get();
 
-            JdbcConverterContext jdbcConverterContext = new JdbcConverterContext();
-            String filter = node.getPredicate().accept(converter, jdbcConverterContext);
+            String filter = node.getPredicate().accept(converter, null);
 
             return Optional.of(buildAsNewTable(context)
                     .setSelections(getProjectSelections(context.getSelections()))
@@ -229,10 +230,7 @@ public class BaseJdbcQueryGenerator
                     buildSql(leftContext).getSql(),
                     buildSql(rightContext).getSql(),
                     node.getCriteria().stream().map(JoinNode.EquiJoinClause::toString).collect(toList()),
-                    node.getFilter().map(filter -> {
-                        JdbcConverterContext jdbcConverterContext = new JdbcConverterContext();
-                        return filter.accept(converter, jdbcConverterContext);
-                    }),
+                    node.getFilter().map(filter -> filter.accept(converter, null)),
                     derivedTableIdentifier++);
 
             JdbcQueryGeneratorContext.Builder contextBuilder = buildAsNewTable(leftContext)
@@ -299,8 +297,7 @@ public class BaseJdbcQueryGenerator
             LinkedHashMap<String, Selection> newSelections = new LinkedHashMap<>(getProjectSelections(context.getSelections()));
 
             for (Map.Entry<Symbol, RowExpression> entry : assignments.entrySet()) {
-                JdbcConverterContext jdbcConverterContext = new JdbcConverterContext();
-                newSelections.put(entry.getKey().getName(), new Selection(entry.getValue().accept(converter, jdbcConverterContext), entry.getKey().getName()));
+                newSelections.put(entry.getKey().getName(), new Selection(entry.getValue().accept(converter, null), entry.getKey().getName()));
             }
 
             return Optional.of(buildAsNewTable(context)
@@ -332,16 +329,14 @@ public class BaseJdbcQueryGenerator
                         log.debug(GENERATE_FAILED_LOG, "Not support aggregation node " + node);
                         return Optional.empty();
                     }
+                    Type returnType = typeManager.getType(aggregation.getSignature().getReturnType());
                     String aggExpression = statementWriter.aggregation(
-                            aggregation.getFunctionCall().getDisplayName(),
+                            aggregation.getSignature().getName(),
                             aggregation.getArguments().stream()
-                                    .map(rowExpression -> {
-                                        JdbcConverterContext jdbcConverterContext = new JdbcConverterContext();
-                                        return rowExpression.accept(converter, jdbcConverterContext);
-                                    })
+                                    .map(rowExpression -> rowExpression.accept(converter, null))
                                     .collect(toList()),
                             isAggregationDistinct(aggregation));
-                    String castAggExpression = statementWriter.castAggregationType(aggExpression, converter, aggregation.getFunctionCall().getType());
+                    String castAggExpression = statementWriter.castAggregationType(aggExpression, converter, returnType);
                     newSelections.put(outputColumn.getName(), new Selection(castAggExpression, outputColumn.getName()));
                 }
                 else {
@@ -419,20 +414,6 @@ public class BaseJdbcQueryGenerator
                     .setSchemaTableName(Optional.of(jdbcTableHandle.getSchemaTableName()))
                     .setSelections(selections)
                     .setFrom(Optional.of(table.toString()));
-
-            String catalogName = jdbcTableHandle.getCatalogName();
-            if (catalogName != null) {
-                contextBuilder.setRemoteCatalogName(catalogName);
-            }
-            String schemaName = jdbcTableHandle.getSchemaName();
-            if (schemaName != null) {
-                contextBuilder.setRemoteSchemaName(schemaName);
-            }
-            String tableName = jdbcTableHandle.getTableName();
-            if (tableName != null) {
-                contextBuilder.setRemoteTablename(tableName);
-            }
-
             // If LIMIT has been push down, add it to context
             if (jdbcTableHandle.getLimit().isPresent()) {
                 contextBuilder.setLimit(jdbcTableHandle.getLimit());
@@ -511,12 +492,9 @@ public class BaseJdbcQueryGenerator
                 Optional<String> frameStr = startBound.map(s -> statementWriter.windowFrame(windowFrameType, s, endBound));
 
                 List<RowExpression> expArgs = windowFunction.getArguments();
-                List<String> functionArgs = expArgs.stream().map(expression -> {
-                    JdbcConverterContext jdbcConverterContext = new JdbcConverterContext();
-                    return expression.accept(converter, jdbcConverterContext);
-                }).collect(toList());
+                List<String> functionArgs = expArgs.stream().map(expression -> expression.accept(converter, null)).collect(toList());
 
-                String columnStr = statementWriter.window(windowFunction.getFunctionCall().getDisplayName(), functionArgs, partitionBy, orderBy, frameStr);
+                String columnStr = statementWriter.window(windowFunction.getSignature().getName(), functionArgs, partitionBy, orderBy, frameStr);
                 newSelections.put(windowFunctionColumnName.toString(), new Selection(columnStr, windowFunctionColumnName.toString()));
             }
 

@@ -1,4 +1,4 @@
-# Release 1.0.1 (30 Sep 2020)
+# Release 1.0.1
 
 ## Key Features
 

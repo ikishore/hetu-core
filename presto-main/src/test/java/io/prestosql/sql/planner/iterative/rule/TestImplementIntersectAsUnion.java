@@ -34,7 +34,7 @@ public class TestImplementIntersectAsUnion
     @Test
     public void test()
     {
-        tester().assertThat(new ImplementIntersectAsUnion(tester().getMetadata()))
+        tester().assertThat(new ImplementIntersectAsUnion())
                 .on(p -> {
                     Symbol a = p.symbol("a");
                     Symbol b = p.symbol("b");

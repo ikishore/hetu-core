@@ -1,5 +1,4 @@
 /*
- * Copyright (C) 2018-2020. Huawei Technologies Co., Ltd. All rights reserved.
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
  * You may obtain a copy of the License at
@@ -29,7 +28,6 @@ import io.prestosql.execution.QueryTracker;
 import io.prestosql.execution.resourcegroups.ResourceGroupManager;
 import io.prestosql.metadata.SessionPropertyManager;
 import io.prestosql.queryeditorui.QueryEditorUIModule;
-import io.prestosql.queryhistory.QueryHistoryService;
 import io.prestosql.security.AccessControl;
 import io.prestosql.server.BasicQueryInfo;
 import io.prestosql.server.SessionContext;
@@ -56,18 +54,21 @@ import javax.annotation.PostConstruct;
 import javax.annotation.PreDestroy;
 import javax.inject.Inject;
 
+import java.io.IOException;
 import java.text.SimpleDateFormat;
 import java.util.Date;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
 import java.util.concurrent.Executor;
+import java.util.concurrent.TimeUnit;
+import java.util.concurrent.locks.Lock;
 import java.util.stream.Collectors;
-import java.util.stream.Stream;
 
 import static com.google.common.base.Preconditions.checkArgument;
 import static com.google.common.collect.ImmutableList.toImmutableList;
 import static com.google.common.util.concurrent.Futures.immediateFuture;
+import static io.prestosql.spi.StandardErrorCode.GENERIC_INTERNAL_ERROR;
 import static io.prestosql.spi.StandardErrorCode.QUERY_TEXT_TOO_LARGE;
 import static io.prestosql.util.StatementUtils.getQueryType;
 import static io.prestosql.util.StatementUtils.isTransactionControlStatement;
@@ -94,7 +95,6 @@ public class DispatchManager
     private StateFetcher stateFetcher;
     private final HetuConfig hetuConfig;
     private final int maxQueryLength;
-    private final QueryHistoryService queryHistoryService;
 
     private final Executor queryExecutor;
 
@@ -116,8 +116,7 @@ public class DispatchManager
             QueryManagerConfig queryManagerConfig,
             DispatchExecutor dispatchExecutor,
             StateStoreProvider stateStoreProvider,
-            HetuConfig hetuConfig,
-            QueryHistoryService queryHistoryService)
+            HetuConfig hetuConfig)
     {
         this.queryIdGenerator = requireNonNull(queryIdGenerator, "queryIdGenerator is null");
         this.queryPreparer = requireNonNull(queryPreparer, "queryPreparer is null");
@@ -131,7 +130,6 @@ public class DispatchManager
         // StateStoreProvider and load HetuConfig
         this.stateStoreProvider = requireNonNull(stateStoreProvider, "stateStoreProvider is null");
         this.hetuConfig = requireNonNull(hetuConfig, "hetuConfig is null");
-        this.queryHistoryService = requireNonNull(queryHistoryService, "queryHistoryService is null");
         PropertyService.setProperty(HetuConstant.MULTI_COORDINATOR_ENABLED, hetuConfig.isMultipleCoordinatorEnabled());
 
         requireNonNull(queryManagerConfig, "queryManagerConfig is null");
@@ -139,7 +137,7 @@ public class DispatchManager
 
         this.queryExecutor = requireNonNull(dispatchExecutor, "dispatchExecutor is null").getExecutor();
 
-        this.queryTracker = new QueryTracker<>(queryManagerConfig, dispatchExecutor.getScheduledExecutor(), stateStoreProvider);
+        this.queryTracker = new QueryTracker<>(queryManagerConfig, dispatchExecutor.getScheduledExecutor());
     }
 
     @PostConstruct
@@ -194,9 +192,8 @@ public class DispatchManager
      * Creates and registers a dispatch query with the query tracker.  This method will never fail to register a query with the query
      * tracker.  If an error occurs while creating a dispatch query, a failed dispatch will be created and registered.
      */
-    private <C> void createQueryInternal(QueryId queryId, String slug, SessionContext sessionContext, String inputQuery, ResourceGroupManager<C> resourceGroupManager)
+    private <C> void createQueryInternal(QueryId queryId, String slug, SessionContext sessionContext, String query, ResourceGroupManager<C> resourceGroupManager)
     {
-        String query = inputQuery;
         Session session = null;
         DispatchQuery dispatchQuery = null;
         try {
@@ -233,30 +230,21 @@ public class DispatchManager
                     query,
                     preparedQuery,
                     slug,
-                    selectionContext.getResourceGroupId(),
-                    resourceGroupManager);
+                    selectionContext.getResourceGroupId());
 
             boolean queryAdded = queryCreated(dispatchQuery);
             if (queryAdded && !dispatchQuery.isDone()) {
-                try {
-                    resourceGroupManager.submit(dispatchQuery, selectionContext, queryExecutor);
-
-                    if (PropertyService.getBooleanProperty(HetuConstant.MULTI_COORDINATOR_ENABLED) && stateUpdater != null) {
-                        stateUpdater.registerQuery(StateStoreConstants.QUERY_STATE_COLLECTION_NAME, dispatchQuery);
+                if (!PropertyService.getBooleanProperty(HetuConstant.MULTI_COORDINATOR_ENABLED)) {
+                    try {
+                        resourceGroupManager.submit(dispatchQuery, selectionContext, queryExecutor);
                     }
-
-                    if (LOG.isDebugEnabled()) {
-                        long now = System.currentTimeMillis();
-                        LOG.debug("query:%s submission started at %s, ended at %s, total time use: %sms",
-                                dispatchQuery.getQueryId(),
-                                new SimpleDateFormat("HH:mm:ss:SSS").format(dispatchQuery.getCreateTime().toDate()),
-                                new SimpleDateFormat("HH:mm:ss:SSS").format(new Date(now)),
-                                now - dispatchQuery.getCreateTime().getMillis());
+                    catch (Throwable e) {
+                        // dispatch query has already been registered, so just fail it directly
+                        dispatchQuery.fail(e);
                     }
                 }
-                catch (Throwable e) {
-                    // dispatch query has already been registered, so just fail it directly
-                    dispatchQuery.fail(e);
+                else {
+                    submitQuerySync(dispatchQuery, selectionContext);
                 }
             }
         }
@@ -295,10 +283,6 @@ public class DispatchManager
                         queryTracker.removeQuery(dispatchQuery.getQueryId());
                     }
                     else {
-                        if (!isUiQuery && dispatchQuery.getBasicQueryInfo().getState() == QueryState.FAILED) {
-                            QueryInfo queryInfo = queryHistoryService.toFullQueryInfo(dispatchQuery);
-                            queryHistoryService.insert(queryInfo);
-                        }
                         // execution MUST be added to the expiration queue or there will be a leak
                         queryTracker.expireQuery(dispatchQuery.getQueryId());
                     }
@@ -326,11 +310,7 @@ public class DispatchManager
         List<BasicQueryInfo> queryInfos;
         if (isMultiCoordinatorEnabled() && StateCacheStore.get().getCachedStates(StateStoreConstants.QUERY_STATE_COLLECTION_NAME) != null) {
             Map<String, SharedQueryState> queryStates = StateCacheStore.get().getCachedStates(StateStoreConstants.QUERY_STATE_COLLECTION_NAME);
-            Map<String, SharedQueryState> finishedQueryStates = StateCacheStore.get().getCachedStates(StateStoreConstants.FINISHED_QUERY_STATE_COLLECTION_NAME);
-
-            queryInfos = Stream.concat(
-                    queryStates.values().stream(),
-                    finishedQueryStates.values().stream())
+            queryInfos = queryStates.values().stream()
                     .map(SharedQueryState::getBasicQueryInfo)
                     .collect(Collectors.toList());
         }
@@ -415,7 +395,6 @@ public class DispatchManager
 
         // Start state fetcher
         stateFetcher.registerStateCollection(StateStoreConstants.QUERY_STATE_COLLECTION_NAME);
-        stateFetcher.registerStateCollection(StateStoreConstants.FINISHED_QUERY_STATE_COLLECTION_NAME);
         stateFetcher.registerStateCollection(StateStoreConstants.OOM_QUERY_STATE_COLLECTION_NAME);
         stateFetcher.registerStateCollection(StateStoreConstants.CPU_USAGE_STATE_COLLECTION_NAME);
         stateFetcher.start();
@@ -430,6 +409,57 @@ public class DispatchManager
 
         if (stateFetcher != null) {
             stateFetcher.stop();
+        }
+    }
+
+    // Submit query synchronously to the distributed resource group
+    private synchronized void submitQuerySync(DispatchQuery dispatchQuery, SelectionContext selectionContext)
+            throws InterruptedException, PrestoException
+    {
+        if (stateStoreProvider.getStateStore() == null) {
+            LOG.error("StateStore is not loaded yet");
+            throw new PrestoException(GENERIC_INTERNAL_ERROR, "Coordinator is not ready to accept queries");
+        }
+
+        Lock lock = stateStoreProvider.getStateStore().getLock(StateStoreConstants.SUBMIT_QUERY_LOCK_NAME);
+        // Make sure query submission is synchronized
+        boolean locked = lock.tryLock(hetuConfig.getQuerySubmitTimeout().toMillis(), TimeUnit.MILLISECONDS);
+        long start = 0L;
+        if (locked) {
+            try {
+                start = System.currentTimeMillis();
+                LOG.debug("Get submit-query-lock, will submit query:%s, at current time milliseconds: %s, at format HH:mm:ss:SSS:%s",
+                        dispatchQuery.getQueryId(),
+                        start,
+                        new SimpleDateFormat("HH:mm:ss:SSS").format(new Date(start)));
+                stateFetcher.fetchStates();
+                resourceGroupManager.submit(dispatchQuery, selectionContext, queryExecutor);
+                // Register dispatch query to StateUpdater
+                if (PropertyService.getBooleanProperty(HetuConstant.MULTI_COORDINATOR_ENABLED) && stateUpdater != null) {
+                    stateUpdater.registerQuery(StateStoreConstants.QUERY_STATE_COLLECTION_NAME, dispatchQuery);
+                }
+                stateUpdater.updateStates();
+            }
+            catch (IOException e) {
+                throw new PrestoException(GENERIC_INTERNAL_ERROR, format("Failed to fetch states from or update states to state store: " + e.getMessage()));
+            }
+            catch (Throwable e) {
+                // dispatch query has already been registered, so just fail it directly
+                dispatchQuery.fail(e);
+            }
+            finally {
+                lock.unlock();
+                long end = System.currentTimeMillis();
+                LOG.debug("Release submit-query-lock, query:%s, at current time milliseconds: %s, at format HH:mm:ss:SSS:%s, total time use: %s",
+                        dispatchQuery.getQueryId(),
+                        end,
+                        new SimpleDateFormat("HH:mm:ss:SSS").format(new Date(end)),
+                        end - start);
+            }
+        }
+        else {
+            // TODO maybe just queue the query if the queue size is not a problem
+            throw new PrestoException(GENERIC_INTERNAL_ERROR, format("Coordinator probably too busy at the moment, please try again in a few minutes"));
         }
     }
 }

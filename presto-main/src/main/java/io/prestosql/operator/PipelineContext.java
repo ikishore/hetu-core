@@ -343,88 +343,88 @@ public class PipelineContext
             lastExecutionEndTime.compareAndSet(null, now);
         }
 
-        int completedDriverNumber = this.completedDrivers.get();
+        int completedDrivers = this.completedDrivers.get();
         List<DriverContext> driverContexts = ImmutableList.copyOf(this.drivers);
-        int totalSplitNumber = this.totalSplits.get();
-        PipelineStatus pipelineStatus = getPipelineStatus(driverContexts.iterator(), totalSplitNumber, completedDriverNumber, partitioned);
+        int totalSplits = this.totalSplits.get();
+        PipelineStatus pipelineStatus = getPipelineStatus(driverContexts.iterator(), totalSplits, completedDrivers, partitioned);
 
-        int totalDrivers = completedDriverNumber + driverContexts.size();
+        int totalDrivers = completedDrivers + driverContexts.size();
 
-        Distribution queuedTimeDuplicate = this.queuedTime.duplicate();
-        Distribution elapsedTimeDuplicate = this.elapsedTime.duplicate();
+        Distribution queuedTime = this.queuedTime.duplicate();
+        Distribution elapsedTime = this.elapsedTime.duplicate();
 
-        long scheduledTimes = this.totalScheduledTime.get();
-        long cpuTimes = this.totalCpuTime.get();
-        long blockedTimes = this.totalBlockedTime.get();
+        long totalScheduledTime = this.totalScheduledTime.get();
+        long totalCpuTime = this.totalCpuTime.get();
+        long totalBlockedTime = this.totalBlockedTime.get();
 
-        long physicalInputDataSizeTotalCount = this.physicalInputDataSize.getTotalCount();
-        long physicalInputPositionsTotalCount = this.physicalInputPositions.getTotalCount();
+        long physicalInputDataSize = this.physicalInputDataSize.getTotalCount();
+        long physicalInputPositions = this.physicalInputPositions.getTotalCount();
 
-        long internalNetworkInputDataSizeTotalCount = this.internalNetworkInputDataSize.getTotalCount();
-        long internalNetworkInputPositionsTotalCount = this.internalNetworkInputPositions.getTotalCount();
+        long internalNetworkInputDataSize = this.internalNetworkInputDataSize.getTotalCount();
+        long internalNetworkInputPositions = this.internalNetworkInputPositions.getTotalCount();
 
-        long rawInputDataSizeTotalCount = this.rawInputDataSize.getTotalCount();
-        long rawInputPositionsTotalCount = this.rawInputPositions.getTotalCount();
+        long rawInputDataSize = this.rawInputDataSize.getTotalCount();
+        long rawInputPositions = this.rawInputPositions.getTotalCount();
 
-        long processedInputDataSizeTotalCount = this.processedInputDataSize.getTotalCount();
-        long processedInputPositionsTotalCount = this.processedInputPositions.getTotalCount();
+        long processedInputDataSize = this.processedInputDataSize.getTotalCount();
+        long processedInputPositions = this.processedInputPositions.getTotalCount();
 
-        long outputDataSizeTotalCount = this.outputDataSize.getTotalCount();
-        long outputPositionsTotalCount = this.outputPositions.getTotalCount();
+        long outputDataSize = this.outputDataSize.getTotalCount();
+        long outputPositions = this.outputPositions.getTotalCount();
 
-        long physicalWrittenSize = this.physicalWrittenDataSize.get();
+        long physicalWrittenDataSize = this.physicalWrittenDataSize.get();
 
-        List<DriverStats> driverStatsList = new ArrayList<>();
+        List<DriverStats> drivers = new ArrayList<>();
 
-        TreeMap<Integer, OperatorStats> operatorStatsMap = new TreeMap<>(this.operatorSummaries);
+        TreeMap<Integer, OperatorStats> operatorSummaries = new TreeMap<>(this.operatorSummaries);
         Multimap<Integer, OperatorStats> runningOperators = ArrayListMultimap.create();
         for (DriverContext driverContext : driverContexts) {
             DriverStats driverStats = driverContext.getDriverStats();
-            driverStatsList.add(driverStats);
+            drivers.add(driverStats);
 
-            queuedTimeDuplicate.add(driverStats.getQueuedTime().roundTo(NANOSECONDS));
-            elapsedTimeDuplicate.add(driverStats.getElapsedTime().roundTo(NANOSECONDS));
+            queuedTime.add(driverStats.getQueuedTime().roundTo(NANOSECONDS));
+            elapsedTime.add(driverStats.getElapsedTime().roundTo(NANOSECONDS));
 
-            scheduledTimes += driverStats.getTotalScheduledTime().roundTo(NANOSECONDS);
-            cpuTimes += driverStats.getTotalCpuTime().roundTo(NANOSECONDS);
-            blockedTimes += driverStats.getTotalBlockedTime().roundTo(NANOSECONDS);
+            totalScheduledTime += driverStats.getTotalScheduledTime().roundTo(NANOSECONDS);
+            totalCpuTime += driverStats.getTotalCpuTime().roundTo(NANOSECONDS);
+            totalBlockedTime += driverStats.getTotalBlockedTime().roundTo(NANOSECONDS);
 
             List<OperatorStats> operators = driverContext.getOperatorStats();
             for (OperatorStats operator : operators) {
                 runningOperators.put(operator.getOperatorId(), operator);
             }
 
-            physicalInputDataSizeTotalCount += driverStats.getPhysicalInputDataSize().toBytes();
-            physicalInputPositionsTotalCount += driverStats.getPhysicalInputPositions();
+            physicalInputDataSize += driverStats.getPhysicalInputDataSize().toBytes();
+            physicalInputPositions += driverStats.getPhysicalInputPositions();
 
-            internalNetworkInputDataSizeTotalCount += driverStats.getInternalNetworkInputDataSize().toBytes();
-            internalNetworkInputPositionsTotalCount += driverStats.getInternalNetworkInputPositions();
+            internalNetworkInputDataSize += driverStats.getInternalNetworkInputDataSize().toBytes();
+            internalNetworkInputPositions += driverStats.getInternalNetworkInputPositions();
 
-            rawInputDataSizeTotalCount += driverStats.getRawInputDataSize().toBytes();
-            rawInputPositionsTotalCount += driverStats.getRawInputPositions();
+            rawInputDataSize += driverStats.getRawInputDataSize().toBytes();
+            rawInputPositions += driverStats.getRawInputPositions();
 
-            processedInputDataSizeTotalCount += driverStats.getProcessedInputDataSize().toBytes();
-            processedInputPositionsTotalCount += driverStats.getProcessedInputPositions();
+            processedInputDataSize += driverStats.getProcessedInputDataSize().toBytes();
+            processedInputPositions += driverStats.getProcessedInputPositions();
 
-            outputDataSizeTotalCount += driverStats.getOutputDataSize().toBytes();
-            outputPositionsTotalCount += driverStats.getOutputPositions();
+            outputDataSize += driverStats.getOutputDataSize().toBytes();
+            outputPositions += driverStats.getOutputPositions();
 
-            physicalWrittenSize += driverStats.getPhysicalWrittenDataSize().toBytes();
+            physicalWrittenDataSize += driverStats.getPhysicalWrittenDataSize().toBytes();
         }
 
         // merge the running operator stats into the operator summary
         for (Entry<Integer, OperatorStats> entry : runningOperators.entries()) {
-            OperatorStats current = operatorStatsMap.get(entry.getKey());
+            OperatorStats current = operatorSummaries.get(entry.getKey());
             if (current == null) {
                 current = entry.getValue();
             }
             else {
                 current = current.add(entry.getValue());
             }
-            operatorStatsMap.put(entry.getKey(), current);
+            operatorSummaries.put(entry.getKey(), current);
         }
 
-        Set<DriverStats> runningDriverStats = driverStatsList.stream()
+        Set<DriverStats> runningDriverStats = drivers.stream()
                 .filter(driver -> driver.getEndTime() == null && driver.getStartTime() != null)
                 .collect(toImmutableSet());
         ImmutableSet<BlockedReason> blockedReasons = runningDriverStats.stream()
@@ -449,40 +449,40 @@ public class PipelineContext
                 pipelineStatus.getRunningDrivers(),
                 pipelineStatus.getRunningPartitionedDrivers(),
                 pipelineStatus.getBlockedDrivers(),
-                completedDriverNumber,
+                completedDrivers,
 
                 succinctBytes(pipelineMemoryContext.getUserMemory()),
                 succinctBytes(pipelineMemoryContext.getRevocableMemory()),
                 succinctBytes(pipelineMemoryContext.getSystemMemory()),
 
-                queuedTimeDuplicate.snapshot(),
-                elapsedTimeDuplicate.snapshot(),
+                queuedTime.snapshot(),
+                elapsedTime.snapshot(),
 
-                new Duration(scheduledTimes, NANOSECONDS).convertToMostSuccinctTimeUnit(),
-                new Duration(cpuTimes, NANOSECONDS).convertToMostSuccinctTimeUnit(),
-                new Duration(blockedTimes, NANOSECONDS).convertToMostSuccinctTimeUnit(),
+                new Duration(totalScheduledTime, NANOSECONDS).convertToMostSuccinctTimeUnit(),
+                new Duration(totalCpuTime, NANOSECONDS).convertToMostSuccinctTimeUnit(),
+                new Duration(totalBlockedTime, NANOSECONDS).convertToMostSuccinctTimeUnit(),
                 fullyBlocked,
                 blockedReasons,
 
-                succinctBytes(physicalInputDataSizeTotalCount),
-                physicalInputPositionsTotalCount,
+                succinctBytes(physicalInputDataSize),
+                physicalInputPositions,
 
-                succinctBytes(internalNetworkInputDataSizeTotalCount),
-                internalNetworkInputPositionsTotalCount,
+                succinctBytes(internalNetworkInputDataSize),
+                internalNetworkInputPositions,
 
-                succinctBytes(rawInputDataSizeTotalCount),
-                rawInputPositionsTotalCount,
+                succinctBytes(rawInputDataSize),
+                rawInputPositions,
 
-                succinctBytes(processedInputDataSizeTotalCount),
-                processedInputPositionsTotalCount,
+                succinctBytes(processedInputDataSize),
+                processedInputPositions,
 
-                succinctBytes(outputDataSizeTotalCount),
-                outputPositionsTotalCount,
+                succinctBytes(outputDataSize),
+                outputPositions,
 
-                succinctBytes(physicalWrittenSize),
+                succinctBytes(physicalWrittenDataSize),
 
-                ImmutableList.copyOf(operatorStatsMap.values()),
-                driverStatsList);
+                ImmutableList.copyOf(operatorSummaries.values()),
+                drivers);
     }
 
     public <C, R> R accept(QueryContextVisitor<C, R> visitor, C context)

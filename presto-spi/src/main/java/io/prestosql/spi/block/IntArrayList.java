@@ -21,7 +21,7 @@ import static java.lang.String.format;
 /**
  * A simplified version of fastutils IntArrayList for the purpose of positions copying.
  */
-public class IntArrayList
+class IntArrayList
 {
     private static final int DEFAULT_INITIAL_CAPACITY = 16;
     private int[] array;

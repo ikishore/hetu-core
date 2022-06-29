@@ -17,8 +17,6 @@ import com.google.common.util.concurrent.ListenableFuture;
 import io.prestosql.metadata.CatalogMetadata;
 import io.prestosql.spi.connector.CatalogName;
 import io.prestosql.spi.connector.ConnectorTransactionHandle;
-import io.prestosql.spi.function.FunctionNamespaceManager;
-import io.prestosql.spi.function.FunctionNamespaceTransactionHandle;
 import io.prestosql.spi.transaction.IsolationLevel;
 
 import java.util.List;
@@ -89,17 +87,6 @@ public class NoOpTransactionManager
     public CatalogMetadata getCatalogMetadataForWrite(TransactionId transactionId, String catalogName)
     {
         throw new UnsupportedOperationException();
-    }
-
-    @Override
-    public void registerFunctionNamespaceManager(String catalogNames, FunctionNamespaceManager<?> functionNamespaceManager)
-    {
-    }
-
-    @Override
-    public FunctionNamespaceTransactionHandle getFunctionNamespaceTransaction(TransactionId transactionId, String catalogName)
-    {
-        return null;
     }
 
     @Override

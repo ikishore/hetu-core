@@ -13,7 +13,6 @@
  */
 package io.prestosql.plugin.hive;
 
-import io.airlift.log.Logger;
 import io.airlift.slice.Slice;
 import io.airlift.slice.Slices;
 import io.prestosql.hadoop.TextLineLengthLimitExceededException;
@@ -27,9 +26,7 @@ import io.prestosql.spi.type.Type;
 import io.prestosql.spi.type.TypeManager;
 import org.apache.hadoop.conf.Configuration;
 import org.apache.hadoop.fs.Path;
-import org.apache.hadoop.hive.common.type.Date;
 import org.apache.hadoop.hive.common.type.HiveDecimal;
-import org.apache.hadoop.hive.common.type.Timestamp;
 import org.apache.hadoop.hive.serde2.Deserializer;
 import org.apache.hadoop.hive.serde2.SerDeException;
 import org.apache.hadoop.hive.serde2.io.HiveCharWritable;
@@ -43,13 +40,17 @@ import org.apache.hadoop.io.BytesWritable;
 import org.apache.hadoop.io.Text;
 import org.apache.hadoop.io.Writable;
 import org.apache.hadoop.mapred.RecordReader;
+import org.joda.time.DateTimeZone;
 
 import java.io.IOException;
 import java.io.UncheckedIOException;
 import java.math.BigInteger;
+import java.sql.Date;
+import java.sql.Timestamp;
 import java.util.Arrays;
 import java.util.List;
 import java.util.Properties;
+import java.util.concurrent.TimeUnit;
 
 import static com.google.common.base.Preconditions.checkArgument;
 import static com.google.common.base.Preconditions.checkState;
@@ -81,8 +82,6 @@ import static java.util.Objects.requireNonNull;
 class GenericHiveRecordCursor<K, V extends Writable>
         implements RecordCursor
 {
-    private static final Logger log = Logger.get(GenericHiveRecordCursor.class);
-
     private final Path path;
     private final RecordReader<K, V> recordReader;
     private final K key;
@@ -106,6 +105,7 @@ class GenericHiveRecordCursor<K, V extends Writable>
     private final boolean[] nulls;
 
     private final long totalBytes;
+    private final DateTimeZone hiveStorageTimeZone;
 
     private long completedBytes;
     private Object rowData;
@@ -118,6 +118,7 @@ class GenericHiveRecordCursor<K, V extends Writable>
             long totalBytes,
             Properties splitSchema,
             List<HiveColumnHandle> columns,
+            DateTimeZone hiveStorageTimeZone,
             TypeManager typeManager)
     {
         requireNonNull(path, "path is null");
@@ -125,12 +126,14 @@ class GenericHiveRecordCursor<K, V extends Writable>
         checkArgument(totalBytes >= 0, "totalBytes is negative");
         requireNonNull(splitSchema, "splitSchema is null");
         requireNonNull(columns, "columns is null");
+        requireNonNull(hiveStorageTimeZone, "hiveStorageTimeZone is null");
 
         this.path = path;
         this.recordReader = recordReader;
         this.totalBytes = totalBytes;
         this.key = recordReader.createKey();
         this.value = recordReader.createValue();
+        this.hiveStorageTimeZone = hiveStorageTimeZone;
 
         this.deserializer = getDeserializer(configuration, splitSchema);
         this.rowInspector = getTableObjectInspector(deserializer);
@@ -187,7 +190,6 @@ class GenericHiveRecordCursor<K, V extends Writable>
             completedBytes = min(totalBytes, max(completedBytes, newCompletedBytes));
         }
         catch (IOException ignored) {
-            log.warn("updateCompletedBytes error");
         }
     }
 
@@ -276,18 +278,35 @@ class GenericHiveRecordCursor<K, V extends Writable>
         else {
             Object fieldValue = ((PrimitiveObjectInspector) fieldInspectors[column]).getPrimitiveJavaObject(fieldData);
             checkState(fieldValue != null, "fieldValue should not be null");
-            longs[column] = getLongExpressedValue(fieldValue);
+            longs[column] = getLongExpressedValue(fieldValue, hiveStorageTimeZone);
             nulls[column] = false;
         }
     }
 
-    private long getLongExpressedValue(Object value)
+    private static long getLongExpressedValue(Object value, DateTimeZone hiveTimeZone)
     {
         if (value instanceof Date) {
-            return ((Date) value).toEpochDay();
+            long storageTime = ((Date) value).getTime();
+            // convert date from VM current time zone to UTC
+            long utcMillis = storageTime + DateTimeZone.getDefault().getOffset(storageTime);
+            return TimeUnit.MILLISECONDS.toDays(utcMillis);
         }
         if (value instanceof Timestamp) {
-            return ((Timestamp) value).toEpochMilli();
+            // The Hive SerDe parses timestamps using the default time zone of
+            // this JVM, but the data might have been written using a different
+            // time zone. We need to convert it to the configured time zone.
+
+            // the timestamp that Hive parsed using the JVM time zone
+            long parsedJvmMillis = ((Timestamp) value).getTime();
+
+            // remove the JVM time zone correction from the timestamp
+            DateTimeZone jvmTimeZone = DateTimeZone.getDefault();
+            long hiveMillis = jvmTimeZone.convertUTCToLocal(parsedJvmMillis);
+
+            // convert to UTC using the real time zone for the underlying data
+            long utcMillis = hiveTimeZone.convertLocalToUTC(hiveMillis, false);
+
+            return utcMillis;
         }
         if (value instanceof Float) {
             return floatToRawIntBits(((Float) value));
@@ -366,17 +385,17 @@ class GenericHiveRecordCursor<K, V extends Writable>
             }
 
             // create a slice view over the hive value and trim to character limits
-            Slice localValue = Slices.wrappedBuffer(hiveValue.getBytes(), 0, hiveValue.getLength());
+            Slice value = Slices.wrappedBuffer(hiveValue.getBytes(), 0, hiveValue.getLength());
             Type type = types[column];
             if (isVarcharType(type)) {
-                localValue = truncateToLength(localValue, type);
+                value = truncateToLength(value, type);
             }
             if (isCharType(type)) {
-                localValue = truncateToLengthAndTrimSpaces(localValue, type);
+                value = truncateToLengthAndTrimSpaces(value, type);
             }
 
             // store a copy of the bytes, since the hive reader can reuse the underlying buffer
-            slices[column] = Slices.copyOf(localValue);
+            slices[column] = Slices.copyOf(value);
             nulls[column] = false;
         }
     }

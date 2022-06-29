@@ -337,7 +337,7 @@ public class AddLocalExchanges
                     .withDefaultParallelism(session)
                     .withPartitioning(groupingKeys);
 
-            PlanWithProperties child = planAndEnforce(node.getSource(), childRequirements, childRequirements, node.getAggregationType());
+            PlanWithProperties child = planAndEnforce(node.getSource(), childRequirements, childRequirements);
 
             List<Symbol> preGroupedSymbols = ImmutableList.of();
             if (!LocalProperties.match(child.getProperties().getLocalProperties(), LocalProperties.grouped(groupingKeys)).get(0).isPresent()) {
@@ -353,9 +353,7 @@ public class AddLocalExchanges
                     preGroupedSymbols,
                     node.getStep(),
                     node.getHashSymbol(),
-                    node.getGroupIdSymbol(),
-                    node.getAggregationType(),
-                    node.getFinalizeSymbol());
+                    node.getGroupIdSymbol());
 
             return deriveProperties(result, child.getProperties());
         }
@@ -590,8 +588,7 @@ public class AddLocalExchanges
                         new PartitioningScheme(Partitioning.create(SINGLE_DISTRIBUTION, ImmutableList.of()), node.getOutputSymbols()),
                         sources,
                         inputLayouts,
-                        Optional.empty(),
-                        AggregationNode.AggregationType.HASH);
+                        Optional.empty());
                 return deriveProperties(exchangeNode, inputProperties);
             }
 
@@ -607,8 +604,7 @@ public class AddLocalExchanges
                                 Optional.empty()),
                         sources,
                         inputLayouts,
-                        Optional.empty(),
-                        AggregationNode.AggregationType.HASH);
+                        Optional.empty());
                 return deriveProperties(exchangeNode, inputProperties);
             }
 
@@ -620,8 +616,7 @@ public class AddLocalExchanges
                     new PartitioningScheme(Partitioning.create(FIXED_ARBITRARY_DISTRIBUTION, ImmutableList.of()), node.getOutputSymbols()),
                     sources,
                     inputLayouts,
-                    Optional.empty(),
-                    AggregationNode.AggregationType.HASH);
+                    Optional.empty());
             ExchangeNode exchangeNode = result;
 
             return deriveProperties(exchangeNode, inputProperties);
@@ -632,9 +627,8 @@ public class AddLocalExchanges
         //
 
         @Override
-        public PlanWithProperties visitJoin(JoinNode inputNode, StreamPreferredProperties parentPreferences)
+        public PlanWithProperties visitJoin(JoinNode node, StreamPreferredProperties parentPreferences)
         {
-            JoinNode node = inputNode;
             PlanWithProperties probe = planAndEnforce(
                     node.getLeft(),
                     defaultParallelism(session),
@@ -737,11 +731,6 @@ public class AddLocalExchanges
 
         private PlanWithProperties planAndEnforce(PlanNode node, StreamPreferredProperties requiredProperties, StreamPreferredProperties preferredProperties)
         {
-            return planAndEnforce(node, requiredProperties, preferredProperties, AggregationNode.AggregationType.HASH);
-        }
-
-        private PlanWithProperties planAndEnforce(PlanNode node, StreamPreferredProperties requiredProperties, StreamPreferredProperties preferredProperties, AggregationNode.AggregationType aggregationType)
-        {
             // verify properties are in terms of symbols produced by the node
             List<Symbol> outputSymbols = node.getOutputSymbols();
             checkArgument(requiredProperties.getPartitioningColumns().map(outputSymbols::containsAll).orElse(true));
@@ -751,13 +740,13 @@ public class AddLocalExchanges
             PlanWithProperties result = node.accept(this, preferredProperties);
 
             // enforce the required properties
-            result = enforce(result, requiredProperties, aggregationType);
+            result = enforce(result, requiredProperties);
 
             checkState(requiredProperties.isSatisfiedBy(result.getProperties()), "required properties not enforced");
             return result;
         }
 
-        private PlanWithProperties enforce(PlanWithProperties planWithProperties, StreamPreferredProperties requiredProperties, AggregationNode.AggregationType aggregationType)
+        private PlanWithProperties enforce(PlanWithProperties planWithProperties, StreamPreferredProperties requiredProperties)
         {
             if (requiredProperties.isSatisfiedBy(planWithProperties.getProperties())) {
                 return planWithProperties;
@@ -787,9 +776,7 @@ public class AddLocalExchanges
                         LOCAL,
                         planWithProperties.getNode(),
                         requiredPartitionColumns.get(),
-                        Optional.empty(),
-                        false,
-                        aggregationType);
+                        Optional.empty());
                 return deriveProperties(exchangeNode, planWithProperties.getProperties());
             }
 

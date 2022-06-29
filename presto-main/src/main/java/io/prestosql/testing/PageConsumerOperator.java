@@ -13,16 +13,14 @@
  */
 package io.prestosql.testing;
 
+import io.hetu.core.transport.execution.buffer.PagesSerdeFactory;
 import io.prestosql.operator.DriverContext;
 import io.prestosql.operator.Operator;
 import io.prestosql.operator.OperatorContext;
 import io.prestosql.operator.OperatorFactory;
 import io.prestosql.operator.OutputFactory;
-import io.prestosql.operator.SinkOperator;
-import io.prestosql.operator.TaskContext;
 import io.prestosql.spi.Page;
 import io.prestosql.spi.plan.PlanNodeId;
-import io.prestosql.spi.snapshot.RestorableConfig;
 import io.prestosql.spi.type.Type;
 
 import java.util.List;
@@ -32,9 +30,8 @@ import java.util.function.Function;
 import static com.google.common.base.Preconditions.checkState;
 import static java.util.Objects.requireNonNull;
 
-@RestorableConfig(unsupported = true)
 public class PageConsumerOperator
-        implements SinkOperator
+        implements Operator
 {
     public static class PageConsumerOutputFactory
             implements OutputFactory
@@ -47,12 +44,7 @@ public class PageConsumerOperator
         }
 
         @Override
-        public OperatorFactory createOutputOperator(
-                int operatorId,
-                PlanNodeId planNodeId,
-                List<Type> types,
-                Function<Page, Page> pagePreprocessor,
-                TaskContext taskContext)
+        public OperatorFactory createOutputOperator(int operatorId, PlanNodeId planNodeId, List<Type> types, Function<Page, Page> pagePreprocessor, PagesSerdeFactory serdeFactory)
         {
             return new PageConsumerOperatorFactory(operatorId, planNodeId, pageConsumerFactory.apply(types), pagePreprocessor);
         }
@@ -79,8 +71,8 @@ public class PageConsumerOperator
         public Operator createOperator(DriverContext driverContext)
         {
             checkState(!closed, "Factory is already closed");
-            OperatorContext oprContext = driverContext.addOperatorContext(operatorId, planNodeId, PageConsumerOperator.class.getSimpleName());
-            return new PageConsumerOperator(oprContext, pageConsumer, pagePreprocessor);
+            OperatorContext operatorContext = driverContext.addOperatorContext(operatorId, planNodeId, PageConsumerOperator.class.getSimpleName());
+            return new PageConsumerOperator(operatorContext, pageConsumer, pagePreprocessor);
         }
 
         @Override
@@ -144,9 +136,15 @@ public class PageConsumerOperator
         requireNonNull(page, "page is null");
         checkState(!finished, "operator finished");
 
-        Page tmpPage = pagePreprocessor.apply(page);
-        pageConsumer.accept(tmpPage);
-        operatorContext.recordOutput(tmpPage.getSizeInBytes(), tmpPage.getPositionCount());
+        page = pagePreprocessor.apply(page);
+        pageConsumer.accept(page);
+        operatorContext.recordOutput(page.getSizeInBytes(), page.getPositionCount());
+    }
+
+    @Override
+    public Page getOutput()
+    {
+        return null;
     }
 
     @Override

@@ -22,8 +22,6 @@ import io.prestosql.operator.project.PageProcessor;
 import io.prestosql.spi.Page;
 import io.prestosql.spi.block.Block;
 import io.prestosql.spi.block.BlockBuilder;
-import io.prestosql.spi.connector.QualifiedObjectName;
-import io.prestosql.spi.function.BuiltInFunctionHandle;
 import io.prestosql.spi.function.FunctionKind;
 import io.prestosql.spi.function.Signature;
 import io.prestosql.spi.relation.LambdaDefinitionExpression;
@@ -134,23 +132,23 @@ public class BenchmarkTransformValue
             MapType mapType = mapType(elementType, elementType);
             MapType returnType = mapType(elementType, BOOLEAN);
             Signature signature = new Signature(
-                    QualifiedObjectName.valueOfDefaultFunction(name),
+                    name,
                     FunctionKind.SCALAR,
                     returnType.getTypeSignature(),
                     mapType.getTypeSignature(),
                     parseTypeSignature(format("function(%s, %s, boolean)", type, type)));
             Signature greaterThan = new Signature(
-                    QualifiedObjectName.valueOfDefaultFunction("$operator$" + GREATER_THAN.name()),
+                    "$operator$" + GREATER_THAN.name(),
                     FunctionKind.SCALAR,
                     BOOLEAN.getTypeSignature(),
                     elementType.getTypeSignature(),
                     elementType.getTypeSignature());
-            projectionsBuilder.add(call(signature.toString(), new BuiltInFunctionHandle(signature), returnType, ImmutableList.of(
+            projectionsBuilder.add(call(signature, returnType, ImmutableList.of(
                     field(0, mapType),
                     new LambdaDefinitionExpression(
                             ImmutableList.of(elementType, elementType),
                             ImmutableList.of("x", "y"),
-                            call(greaterThan.getName().toString(), new BuiltInFunctionHandle(greaterThan), BOOLEAN, ImmutableList.of(
+                            call(greaterThan, BOOLEAN, ImmutableList.of(
                                     new VariableReferenceExpression("y", elementType),
                                     constant(compareValue, elementType)))))));
             Block block = createChannel(POSITIONS, mapType, elementType);

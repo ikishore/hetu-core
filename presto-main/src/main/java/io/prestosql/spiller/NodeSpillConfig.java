@@ -16,8 +16,6 @@ package io.prestosql.spiller;
 import io.airlift.configuration.Config;
 import io.airlift.units.DataSize;
 
-import javax.validation.constraints.Max;
-import javax.validation.constraints.Min;
 import javax.validation.constraints.NotNull;
 
 public class NodeSpillConfig
@@ -27,11 +25,6 @@ public class NodeSpillConfig
 
     private boolean spillCompressionEnabled;
     private boolean spillEncryptionEnabled;
-
-    private boolean spillDirectSerdeEnabled;
-
-    private int spillPrefetchReadPages = 1;
-    private boolean spillUseKryoSerialization;
 
     @NotNull
     public DataSize getMaxSpillPerNode()
@@ -80,44 +73,6 @@ public class NodeSpillConfig
     public NodeSpillConfig setSpillEncryptionEnabled(boolean spillEncryptionEnabled)
     {
         this.spillEncryptionEnabled = spillEncryptionEnabled;
-        return this;
-    }
-
-    public boolean isSpillDirectSerdeEnabled()
-    {
-        return spillDirectSerdeEnabled;
-    }
-
-    @Config("experimental.spill-direct-serde-enabled")
-    public NodeSpillConfig setSpillDirectSerdeEnabled(boolean spillDirectSerdeEnabled)
-    {
-        this.spillDirectSerdeEnabled = spillDirectSerdeEnabled;
-        return this;
-    }
-
-    @Min(1)
-    @Max(100)
-    public int getSpillPrefetchReadPages()
-    {
-        return spillPrefetchReadPages;
-    }
-
-    @Config("experimental.spill-prefetch-read-pages")
-    public NodeSpillConfig setSpillPrefetchReadPages(int spillPrefetchedReadPages)
-    {
-        this.spillPrefetchReadPages = spillPrefetchedReadPages;
-        return this;
-    }
-
-    public boolean isSpillUseKryoSerialization()
-    {
-        return spillUseKryoSerialization;
-    }
-
-    @Config("experimental.spill-use-kryo-serialization")
-    public NodeSpillConfig setSpillUseKryoSerialization(boolean spillUseKryoSerialization)
-    {
-        this.spillUseKryoSerialization = spillUseKryoSerialization;
         return this;
     }
 }

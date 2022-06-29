@@ -1,5 +1,5 @@
 /*
- * Copyright (C) 2018-2021. Huawei Technologies Co., Ltd. All rights reserved.
+ * Copyright (C) 2018-2020. Huawei Technologies Co., Ltd. All rights reserved.
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
  * You may obtain a copy of the License at
@@ -66,16 +66,16 @@ import static javax.ws.rs.core.Response.Status.NOT_FOUND;
 
 public class PagePublisherQueryRunner
 {
-    private static final Logger LOGGER = Logger.get(PagePublisherQueryRunner.class);
+    private static final Logger log = Logger.get(PagePublisherQueryRunner.class);
 
     private static final DataCenterQueryResults RUNNING_RESULTS = new DataCenterQueryResults("", URI.create(""), null, URI.create(""), null, null,
-            new StatementStats("RUNNING", false, false, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, null, null), null,
+            new StatementStats("RUNNING", false, false, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, null), null,
             Collections.emptyList(), null, true);
     private static final DataCenterQueryResults FINISHED_RESULTS = new DataCenterQueryResults("", URI.create(""), null, null, null, null,
-            new StatementStats("FINISHED", false, false, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, null, null), null,
+            new StatementStats("FINISHED", false, false, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, null), null,
             Collections.emptyList(), null, true);
     private static final DataCenterQueryResults FAILED_RESULTS = new DataCenterQueryResults("", URI.create(""), null, null, null, null,
-            new StatementStats("FAILED", false, false, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, null, null), null,
+            new StatementStats("FAILED", false, false, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, null), null,
             Collections.emptyList(), null, true);
     private static final Ordering<Comparable<Duration>> WAIT_ORDERING = Ordering.natural().nullsLast();
     private static final Duration MAX_WAIT_TIME = new Duration(1, SECONDS);
@@ -372,7 +372,7 @@ public class PagePublisherQueryRunner
                     Thread.sleep(1);
                 }
                 catch (InterruptedException ignore) {
-                    LOGGER.error("InterruptedException : %s", ignore.getMessage());
+                    // ignore this exception and continue to wait
                 }
             }
 
@@ -426,7 +426,7 @@ public class PagePublisherQueryRunner
                             queryManager.recordHeartbeat(queryId);
                         }
                         catch (InterruptedException e) {
-                            LOGGER.debug(e, "Queue was full, retrying...");
+                            log.debug(e, "Queue was full, retrying...");
                         }
                     }
                 }

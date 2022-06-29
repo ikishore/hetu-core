@@ -567,9 +567,9 @@ public final class GraphvizPrinter
         private void printNode(PlanNode node, String label, String color)
         {
             String nodeId = idGenerator.getNodeId(node);
-            String tmpLabel = escapeSpecialCharacters(label);
+            label = escapeSpecialCharacters(label);
             output.append(nodeId)
-                    .append(format("[label=\"{%s}\", style=\"rounded, filled\", shape=record, fillcolor=%s]", tmpLabel, color))
+                    .append(format("[label=\"{%s}\", style=\"rounded, filled\", shape=record, fillcolor=%s]", label, color))
                     .append(';')
                     .append('\n');
         }
@@ -581,10 +581,10 @@ public final class GraphvizPrinter
             }
             else {
                 String nodeId = idGenerator.getNodeId(node);
-                String tmpLabel = escapeSpecialCharacters(label);
-                String tmpDetails = escapeSpecialCharacters(details);
+                label = escapeSpecialCharacters(label);
+                details = escapeSpecialCharacters(details);
                 output.append(nodeId)
-                        .append(format("[label=\"{%s|%s}\", style=\"rounded, filled\", shape=record, fillcolor=%s]", tmpLabel, tmpDetails, color))
+                        .append(format("[label=\"{%s|%s}\", style=\"rounded, filled\", shape=record, fillcolor=%s]", label, details, color))
                         .append(';')
                         .append('\n');
             }

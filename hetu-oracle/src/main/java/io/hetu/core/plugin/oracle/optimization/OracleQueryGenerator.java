@@ -1,5 +1,5 @@
 /*
- * Copyright (C) 2018-2021. Huawei Technologies Co., Ltd. All rights reserved.
+ * Copyright (C) 2018-2020. Huawei Technologies Co., Ltd. All rights reserved.
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
  * You may obtain a copy of the License at
@@ -16,16 +16,13 @@ package io.hetu.core.plugin.oracle.optimization;
 
 import io.prestosql.plugin.jdbc.optimization.BaseJdbcQueryGenerator;
 import io.prestosql.plugin.jdbc.optimization.JdbcPushDownParameter;
-import io.prestosql.spi.function.FunctionMetadataManager;
-import io.prestosql.spi.function.StandardFunctionResolution;
-import io.prestosql.spi.relation.DeterminismEvaluator;
 import io.prestosql.spi.relation.RowExpressionService;
 
 public class OracleQueryGenerator
         extends BaseJdbcQueryGenerator
 {
-    public OracleQueryGenerator(DeterminismEvaluator determinismEvaluator, RowExpressionService rowExpressionService, FunctionMetadataManager functionManager, StandardFunctionResolution functionResolution, JdbcPushDownParameter pushDownParameter)
+    public OracleQueryGenerator(RowExpressionService rowExpressionService, JdbcPushDownParameter pushDownParameter)
     {
-        super(pushDownParameter, new OracleRowExpressionConverter(determinismEvaluator, rowExpressionService, functionManager, functionResolution), new OracleSqlStatementWriter(pushDownParameter));
+        super(pushDownParameter, new OracleRowExpressionConverter(rowExpressionService), new OracleSqlStatementWriter(pushDownParameter));
     }
 }

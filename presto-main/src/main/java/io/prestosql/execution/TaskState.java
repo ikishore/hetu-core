@@ -31,10 +31,6 @@ public enum TaskState
      */
     RUNNING(false),
     /**
-     * Task is temporarily.
-     */
-    SUSPENDED(false),
-    /**
      * Task has finished executing and all output has been consumed.
      */
     FINISHED(true),
@@ -43,10 +39,6 @@ public enum TaskState
      */
     CANCELED(true),
     /**
-     * Task was canceled so that it can be rescheduled.
-     */
-    CANCELED_TO_RESUME(true),
-    /**
      * Task was aborted due to a failure in the query.  The failure
      * was not in this task.
      */
@@ -54,11 +46,7 @@ public enum TaskState
     /**
      * Task execution failed.
      */
-    FAILED(true),
-    /**
-     * Task execution failed, but is resumable
-     */
-    RESUMABLE_FAILURE(true);
+    FAILED(true);
 
     public static final Set<TaskState> TERMINAL_TASK_STATES = Stream.of(TaskState.values()).filter(TaskState::isDone).collect(toImmutableSet());
 

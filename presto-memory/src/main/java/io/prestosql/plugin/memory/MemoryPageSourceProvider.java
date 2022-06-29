@@ -13,7 +13,6 @@
  */
 package io.prestosql.plugin.memory;
 
-import io.prestosql.plugin.memory.data.MemoryTableManager;
 import io.prestosql.spi.Page;
 import io.prestosql.spi.connector.ColumnHandle;
 import io.prestosql.spi.connector.ConnectorPageSource;
@@ -25,7 +24,6 @@ import io.prestosql.spi.connector.ConnectorTransactionHandle;
 import io.prestosql.spi.connector.FixedPageSource;
 import io.prestosql.spi.dynamicfilter.DynamicFilter;
 import io.prestosql.spi.dynamicfilter.DynamicFilterSupplier;
-import io.prestosql.spi.predicate.TupleDomain;
 import io.prestosql.spi.type.TypeManager;
 import io.prestosql.spi.type.TypeUtils;
 
@@ -42,14 +40,12 @@ import static java.util.stream.Collectors.toList;
 public final class MemoryPageSourceProvider
         implements ConnectorPageSourceProvider
 {
-    private final TypeManager typeManager;
-    private final MemoryTableManager pagesStore;
+    private final MemoryPagesStore pagesStore;
 
     @Inject
-    public MemoryPageSourceProvider(MemoryTableManager pagesStore, TypeManager typeManager, MemoryMetadata memoryMetadata)
+    public MemoryPageSourceProvider(MemoryPagesStore pagesStore, TypeManager typeManager, MemoryMetadata memoryMetadata)
     {
         this.pagesStore = requireNonNull(pagesStore, "pagesStore is null");
-        this.typeManager = requireNonNull(typeManager, "typeManager is null");
     }
 
     @Override
@@ -74,34 +70,28 @@ public final class MemoryPageSourceProvider
     {
         MemorySplit memorySplit = (MemorySplit) split;
         long tableId = memorySplit.getTable();
-        int logicalPartNumber = memorySplit.getLogicalPartNum();
+        int partNumber = memorySplit.getPartNumber();
+        int totalParts = memorySplit.getTotalPartsPerWorker();
         long expectedRows = memorySplit.getExpectedRows();
         MemoryTableHandle memoryTable = (MemoryTableHandle) table;
         OptionalDouble sampleRatio = memoryTable.getSampleRatio();
 
-        TupleDomain<ColumnHandle> predicate = memoryTable.getPredicate();
         // Commenting for Dynamic filter changes
 
         List<Integer> columnIndexes = columns.stream()
-                .map(MemoryColumnHandle.class::cast)
-                .map(MemoryColumnHandle::getColumnIndex).collect(toList());
+                                             .map(MemoryColumnHandle.class::cast)
+                                             .map(MemoryColumnHandle::getColumnIndex).collect(toList());
         List<Page> pages = pagesStore.getPages(
                 tableId,
-                logicalPartNumber,
+                partNumber,
+                totalParts,
                 columnIndexes,
                 expectedRows,
                 memorySplit.getLimit(),
-                sampleRatio,
-                predicate);
-
-        if (dynamicFilterSupplier.isPresent()) {
-            return new FixedPageSource(pages.stream()
-                    .map(page -> applyFilter(page, dynamicFilterSupplier, columns))
-                    .collect(toList()));
-        }
-        else {
-            return new FixedPageSource(pages);
-        }
+                sampleRatio);
+        return new FixedPageSource(pages.stream()
+                                        .map(page -> applyFilter(page, dynamicFilterSupplier, columns))
+                                        .collect(toList()));
     }
 
     private Page applyFilter(Page page, Optional<DynamicFilterSupplier> dynamicFilters, List<ColumnHandle> columns)
@@ -112,20 +102,16 @@ public final class MemoryPageSourceProvider
         int[] positions = new int[page.getPositionCount()];
         int length = 0;
         for (int i = 0; i < page.getPositionCount(); ++i) {
-            boolean union = false;
-            for (Map<ColumnHandle, DynamicFilter> filter : dynamicFilters.get().getDynamicFilters()) {
-                boolean match = true;
-                for (Map.Entry<ColumnHandle, DynamicFilter> entry : filter.entrySet()) {
-                    MemoryColumnHandle columnHandle = (MemoryColumnHandle) entry.getKey();
-                    DynamicFilter dynamicFilter = entry.getValue();
-                    Object value = TypeUtils.readNativeValue(columnHandle.getType(typeManager), page.getBlock(columns.indexOf(columnHandle)), i);
-                    if (!dynamicFilter.contains(value)) {
-                        match = false;
-                    }
+            boolean match = true;
+            for (Map.Entry<ColumnHandle, DynamicFilter> entry : dynamicFilters.get().getDynamicFilters().entrySet()) {
+                MemoryColumnHandle columnHandle = (MemoryColumnHandle) entry.getKey();
+                DynamicFilter dynamicFilter = entry.getValue();
+                Object value = TypeUtils.readNativeValue(columnHandle.getType(), page.getBlock(columns.indexOf(columnHandle)), i);
+                if (!dynamicFilter.contains(value)) {
+                    match = false;
                 }
-                union = union || match;
             }
-            if (dynamicFilters.get().getDynamicFilters().isEmpty() || union) {
+            if (match) {
                 positions[length++] = i;
             }
         }

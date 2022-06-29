@@ -1,5 +1,5 @@
 /*
- * Copyright (C) 2018-2021. Huawei Technologies Co., Ltd. All rights reserved.
+ * Copyright (C) 2018-2020. Huawei Technologies Co., Ltd. All rights reserved.
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
  * You may obtain a copy of the License at
@@ -18,7 +18,6 @@ package io.hetu.core.plugin.carbondata.integrationtest;
 import com.google.gson.Gson;
 import io.hetu.core.plugin.carbondata.server.HetuTestServer;
 import io.prestosql.hive.$internal.au.com.bytecode.opencsv.CSVReader;
-import io.prestosql.spi.PrestoException;
 import org.apache.carbondata.common.logging.LogServiceFactory;
 import org.apache.carbondata.core.constants.CarbonCommonConstants;
 import org.apache.carbondata.core.datastore.filesystem.CarbonFile;
@@ -53,7 +52,6 @@ import java.math.BigDecimal;
 import java.nio.file.Files;
 import java.nio.file.Paths;
 import java.sql.SQLException;
-import java.text.DateFormat;
 import java.text.ParseException;
 import java.text.SimpleDateFormat;
 import java.util.ArrayList;
@@ -63,9 +61,7 @@ import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.TreeMap;
-import java.util.stream.Collectors;
 
-import static io.prestosql.spi.StandardErrorCode.GENERIC_INTERNAL_ERROR;
 import static org.testng.Assert.assertEquals;
 import static org.testng.Assert.assertFalse;
 import static org.testng.Assert.assertTrue;
@@ -101,9 +97,6 @@ public class TestCarbonAllDataType
         Map<String, String> map = new HashMap<String, String>();
         map.put("hive.metastore", "file");
         map.put("hive.allow-drop-table", "true");
-        map.put("hive.allow-drop-column", "true");
-        map.put("hive.allow-add-column", "true");
-        map.put("hive.allow-rename-column", "true");
         map.put("hive.metastore.catalog.dir", "file://" + storePath + "/hive.store");
         map.put("carbondata.store-location", "file://" + carbonStoreLocation);
         map.put("carbondata.minor-vacuum-seg-count", "4");
@@ -115,6 +108,9 @@ public class TestCarbonAllDataType
 
         hetuServer.startServer("testdb", map);
         hetuServer.execute("drop table if exists testdb.testtable");
+        hetuServer.execute("drop table if exists testdb.testtable2");
+        hetuServer.execute("drop table if exists testdb.testtable3");
+        hetuServer.execute("drop table if exists testdb.testtable4");
         hetuServer.execute("drop schema if exists testdb");
         hetuServer.execute("drop schema if exists default");
         hetuServer.execute("create schema testdb");
@@ -157,804 +153,6 @@ public class TestCarbonAllDataType
         List<Map<String, Object>> actualResult = hetuServer.executeQuery("SELECT COUNT(DISTINCT ID) AS RESULT FROM testdb.testtable");
         List<Map<String, Object>> expectedResult = new ArrayList<Map<String, Object>>() {{
             add(new HashMap<String, Object>() {{    put("RESULT", 9); }});
-        }};
-
-        assertEquals(actualResult.toString(), expectedResult.toString());
-    }
-
-    @Test
-    public void testSelectSum()
-            throws SQLException
-    {
-        List<Map<String, Object>> actualResult = hetuServer.executeQuery("SELECT SUM(ID) AS RESULT FROM TESTDB.TESTTABLE");
-        List<Map<String, Object>> expectedResult = new ArrayList<Map<String, Object>>()
-        {{
-            add(new HashMap<String, Object>()
-            {{
-                put("RESULT", 54);
-            }});
-        }};
-
-        assertEquals(actualResult.toString(), expectedResult.toString());
-    }
-
-    @Test
-    public void testSelectAvgDistinct()
-            throws SQLException
-    {
-        List<Map<String, Object>> actualResult = hetuServer.executeQuery("SELECT AVG(DISTINCT ID) AS RESULT FROM TESTDB.TESTTABLE");
-        List<Map<String, Object>> expectedResult = new ArrayList<Map<String, Object>>()
-        {{
-            add(new HashMap<String, Object>()
-            {{
-                put("RESULT", 5.0);
-            }});
-        }};
-
-        assertEquals(actualResult.toString(), expectedResult.toString());
-    }
-
-    @Test
-    public void testSelectMinDistinct()
-            throws SQLException
-    {
-        List<Map<String, Object>> actualResult = hetuServer.executeQuery("SELECT MIN(DISTINCT ID) AS RESULT FROM TESTDB.TESTTABLE");
-        List<Map<String, Object>> expectedResult = new ArrayList<Map<String, Object>>()
-        {{
-            add(new HashMap<String, Object>()
-            {{
-                put("RESULT", 1);
-            }});
-        }};
-
-        assertEquals(actualResult.toString(), expectedResult.toString());
-    }
-
-    @Test
-    public void testSelectMaxDistinct()
-            throws SQLException
-    {
-        List<Map<String, Object>> actualResult = hetuServer.executeQuery("SELECT MAX(DISTINCT ID) AS RESULT FROM TESTDB.TESTTABLE");
-        List<Map<String, Object>> expectedResult = new ArrayList<Map<String, Object>>()
-        {{
-            add(new HashMap<String, Object>()
-            {{
-                put("RESULT", 9);
-            }});
-        }};
-
-        assertEquals(actualResult.toString(), expectedResult.toString());
-    }
-
-    @Test
-    public void testSelectCountDistinctDecimal()
-            throws SQLException
-    {
-        List<Map<String, Object>> actualResult = hetuServer.executeQuery("SELECT COUNT(DISTINCT BONUS) AS RESULT FROM TESTDB.TESTTABLE");
-        List<Map<String, Object>> expectedResult = new ArrayList<Map<String, Object>>()
-        {{
-            add(new HashMap<String, Object>()
-            {{
-                put("RESULT", 10);
-            }});
-        }};
-
-        assertEquals(actualResult.toString(), expectedResult.toString());
-    }
-
-    @Test
-    public void testSelectCountDecimal()
-            throws SQLException
-    {
-        List<Map<String, Object>> actualResult = hetuServer.executeQuery("SELECT COUNT(BONUS) AS RESULT FROM TESTDB.TESTTABLE");
-        List<Map<String, Object>> expectedResult = new ArrayList<Map<String, Object>>()
-        {{
-            add(new HashMap<String, Object>()
-            {{
-                put("RESULT", 10);
-            }});
-        }};
-
-        assertEquals(actualResult.toString(), expectedResult.toString());
-    }
-
-    @Test
-    public void testSelectSumDecimal()
-            throws SQLException
-    {
-        List<Map<String, Object>> actualResult = hetuServer.executeQuery("SELECT SUM(BONUS) AS RESULT FROM TESTDB.TESTTABLE");
-        List<Map<String, Object>> expectedResult = new ArrayList<Map<String, Object>>()
-        {{
-            add(new HashMap<String, Object>()
-            {{
-                put("RESULT", 20774.6475);
-            }});
-        }};
-
-        assertEquals(actualResult.toString(), expectedResult.toString());
-    }
-
-    @Test
-    public void testSelectSumDistinctDecimal()
-            throws SQLException
-    {
-        List<Map<String, Object>> actualResult = hetuServer.executeQuery("SELECT SUM(DISTINCT BONUS) AS RESULT FROM TESTDB.TESTTABLE");
-        List<Map<String, Object>> expectedResult = new ArrayList<Map<String, Object>>()
-        {{
-            add(new HashMap<String, Object>()
-            {{
-                put("RESULT", 20774.6475);
-            }});
-        }};
-
-        assertEquals(actualResult.toString(), expectedResult.toString());
-    }
-
-    @Test
-    public void testSelectAvgDistinctDecimal()
-            throws SQLException
-    {
-        List<Map<String, Object>> actualResult = hetuServer.executeQuery("SELECT AVG(DISTINCT BONUS) AS RESULT FROM TESTDB.TESTTABLE");
-        List<Map<String, Object>> expectedResult = new ArrayList<Map<String, Object>>()
-        {{
-            add(new HashMap<String, Object>()
-            {{
-                put("RESULT", 2077.4648);
-            }});
-        }};
-
-        assertEquals(actualResult.toString(), expectedResult.toString());
-    }
-
-    @Test
-    public void testSelectMinDistinctDecimal()
-            throws SQLException
-    {
-        List<Map<String, Object>> actualResult = hetuServer.executeQuery("SELECT MIN(DISTINCT BONUS) AS RESULT FROM TESTDB.TESTTABLE");
-        List<Map<String, Object>> expectedResult = new ArrayList<Map<String, Object>>()
-        {{
-            add(new HashMap<String, Object>()
-            {{
-                put("RESULT", BigDecimal.valueOf(500.4140).setScale(4));
-            }});
-        }};
-
-        assertEquals(actualResult.toString(), expectedResult.toString());
-    }
-
-    @Test
-    public void testSelectMaxDistinctDecimal()
-            throws SQLException
-    {
-        List<Map<String, Object>> actualResult = hetuServer.executeQuery("SELECT MAX(DISTINCT BONUS) AS RESULT FROM TESTDB.TESTTABLE");
-        List<Map<String, Object>> expectedResult = new ArrayList<Map<String, Object>>()
-        {{
-            add(new HashMap<String, Object>()
-            {{
-                put("RESULT", BigDecimal.valueOf(9999.9990).setScale(4));
-            }});
-        }};
-
-        assertEquals(actualResult.toString(), expectedResult.toString());
-    }
-
-    @Test
-    public void testSelectDecimalOrderBy()
-            throws SQLException
-    {
-        List<Map<String, Object>> actualResult = hetuServer.executeQuery("SELECT DISTINCT BONUS AS RESULT FROM TESTDB.TESTTABLE ORDER BY BONUS LIMIT 3");
-        List<Map<String, Object>> expectedResult = new ArrayList<Map<String, Object>>()
-        {{
-            add(new HashMap<String, Object>()
-            {{
-                put("RESULT", BigDecimal.valueOf(500.414).setScale(4));
-            }});
-            add(new HashMap<String, Object>()
-            {{
-                put("RESULT", BigDecimal.valueOf(500.59).setScale(4));
-            }});
-            add(new HashMap<String, Object>()
-            {{
-                put("RESULT", BigDecimal.valueOf(500.88).setScale(4));
-            }});
-        }};
-
-        assertEquals(actualResult.toString(), expectedResult.toString());
-    }
-
-    @Test
-    public void testSelectStringOrderBy()
-            throws SQLException
-    {
-        List<Map<String, Object>> actualResult = hetuServer.executeQuery("SELECT NAME AS RESULT FROM TESTDB.TESTTABLE ORDER BY NAME");
-        List<Map<String, Object>> expectedResult = new ArrayList<Map<String, Object>>()
-        {{
-            add(new HashMap<String, Object>()
-            {{
-                put("RESULT", "akash");
-            }});
-            add(new HashMap<String, Object>()
-            {{
-                put("RESULT", "anubhav");
-            }});
-            add(new HashMap<String, Object>()
-            {{
-                put("RESULT", "bhavya");
-            }});
-            add(new HashMap<String, Object>()
-            {{
-                put("RESULT", "geetika");
-            }});
-            add(new HashMap<String, Object>()
-            {{
-                put("RESULT", "jatin");
-            }});
-            add(new HashMap<String, Object>()
-            {{
-                put("RESULT", "jitesh");
-            }});
-            add(new HashMap<String, Object>()
-            {{
-                put("RESULT", "liang");
-            }});
-            add(new HashMap<String, Object>()
-            {{
-                put("RESULT", "prince");
-            }});
-            add(new HashMap<String, Object>()
-            {{
-                put("RESULT", "ravindra");
-            }});
-            add(new HashMap<String, Object>()
-            {{
-                put("RESULT", "sahil");
-            }});
-            add(new HashMap<String, Object>()
-            {{
-                put("RESULT", null);
-            }});
-        }};
-
-        assertEquals(actualResult.toString(), expectedResult.toString());
-    }
-
-    @Test
-    public void testSelectDateOrderBy()
-            throws SQLException, ParseException
-    {
-        List<Map<String, Object>> actualResult = hetuServer.executeQuery("SELECT DATE AS RESULT FROM TESTDB.TESTTABLE WHERE id < 10 ORDER BY DATE");
-        DateFormat formatter = new SimpleDateFormat("yyyy-mm-dd");
-        List<Map<String, Object>> expectedResult = new ArrayList<Map<String, Object>>()
-        {{
-            add(new HashMap<String, Object>()
-            {{
-                put("RESULT", "2015-07-18");
-            }});
-            add(new HashMap<String, Object>()
-            {{
-                put("RESULT", "2015-07-18");
-            }});
-            add(new HashMap<String, Object>()
-            {{
-                put("RESULT", "2015-07-23");
-            }});
-            add(new HashMap<String, Object>()
-            {{
-                put("RESULT", "2015-07-24");
-            }});
-            add(new HashMap<String, Object>()
-            {{
-                put("RESULT", "2015-07-25");
-            }});
-            add(new HashMap<String, Object>()
-            {{
-                put("RESULT", "2015-07-26");
-            }});
-            add(new HashMap<String, Object>()
-            {{
-                put("RESULT", "2015-07-27");
-            }});
-            add(new HashMap<String, Object>()
-            {{
-                put("RESULT", "2015-07-28");
-            }});
-            add(new HashMap<String, Object>()
-            {{
-                put("RESULT", "2015-07-29");
-            }});
-            add(new HashMap<String, Object>()
-            {{
-                put("RESULT", "2015-07-30");
-            }});
-        }};
-
-        assertEquals(actualResult.toString(), expectedResult.toString());
-    }
-
-    @Test
-    public void testFilterWithLessThanEqualTo()
-            throws SQLException
-    {
-        List<Map<String, Object>> actualResult = hetuServer.executeQuery("SELECT ID,DATE,COUNTRY,NAME,PHONETYPE,SERIALNAME,SALARY,BONUS FROM TESTDB.TESTTABLE" +
-                " WHERE BONUS <= 1234.444 AND ID > 2 GROUP BY ID,DATE,COUNTRY,NAME,PHONETYPE,SERIALNAME,SALARY, " +
-                "BONUS ORDER BY ID LIMIT 2");
-        List<Map<String, Object>> expectedResult = new ArrayList<Map<String, Object>>()
-        {{
-            add(new TreeMap<String, Object>()
-            {{
-                put("ID", 3);
-                put("NAME", "liang");
-                put("BONUS", BigDecimal.valueOf(600.7770).setScale(4));
-                put("DATE", "2015-07-25");
-                put("SALARY", 15002.11);
-                put("SERIALNAME", "ASD37014");
-                put("COUNTRY", "china");
-                put("PHONETYPE", "phone1904");
-            }});
-
-            add(new TreeMap<String, Object>()
-            {{
-                put("ID", 6);
-                put("NAME", "akash");
-                put("BONUS", BigDecimal.valueOf(500.5900).setScale(4));
-                put("DATE", "2015-07-28");
-                put("SALARY", 15005.0);
-                put("SERIALNAME", "ASD59961");
-                put("COUNTRY", "china");
-                put("PHONETYPE", "phone294");
-            }});
-        }};
-
-        assertEquals(actualResult.toString(), expectedResult.toString());
-    }
-
-    @Test
-    public void testFilterWithEqualToOnDecimal()
-            throws SQLException
-    {
-        List<Map<String, Object>> actualResult = hetuServer.executeQuery("SELECT ID AS RESULT FROM TESTDB.TESTTABLE WHERE BONUS=1234.444");
-        List<Map<String, Object>> expectedResult = new ArrayList<Map<String, Object>>()
-        {{
-            add(new HashMap<String, Object>()
-            {{
-                put("RESULT", 1);
-            }});
-        }};
-
-        assertEquals(actualResult.toString(), expectedResult.toString());
-    }
-
-    @Test
-    public void testFilterWithLessThanWithAnd()
-            throws SQLException
-    {
-        List<Map<String, Object>> actualResult = hetuServer.executeQuery("SELECT ID,DATE,COUNTRY,NAME,PHONETYPE,SERIALNAME,SALARY,BONUS FROM TESTDB.TESTTABLE" +
-                " WHERE BONUS>1234 AND ID<2 GROUP BY ID,DATE,COUNTRY,NAME,PHONETYPE,SERIALNAME,SALARY," + " BONUS ORDER BY ID");
-        List<Map<String, Object>> expectedResult = new ArrayList<Map<String, Object>>()
-        {{
-            add(new TreeMap<String, Object>()
-            {{
-                put("ID", 1);
-                put("NAME", "anubhav");
-                put("BONUS", BigDecimal.valueOf(1234.4440).setScale(4));
-                put("DATE", "2015-07-23");
-                put("SALARY", 5000000.0);
-                put("SERIALNAME", "ASD69643");
-                put("COUNTRY", "china");
-                put("PHONETYPE", "phone197");
-            }});
-        }};
-
-        assertEquals(actualResult.toString(), expectedResult.toString());
-    }
-
-    @Test
-    public void testSelectWithIn()
-            throws SQLException
-    {
-        List<Map<String, Object>> actualResult = hetuServer.executeQuery("SELECT NAME AS RESULT from testdb.testtable WHERE PHONETYPE IN('phone1848','phone706') ORDER BY NAME");
-        List<Map<String, Object>> expectedResult = new ArrayList<Map<String, Object>>()
-        {{
-            add(new HashMap<String, Object>()
-            {{
-                put("RESULT", "geetika");
-            }});
-            add(new HashMap<String, Object>()
-            {{
-                put("RESULT", "jitesh");
-            }});
-            add(new HashMap<String, Object>()
-            {{
-                put("RESULT", "ravindra");
-            }});
-        }};
-
-        assertEquals(actualResult.toString(), expectedResult.toString());
-    }
-
-    @Test
-    public void testSelectWithNotIn()
-            throws SQLException
-    {
-        List<Map<String, Object>> actualResult = hetuServer.executeQuery("SELECT NAME AS RESULT from testdb.testtable WHERE PHONETYPE NOT IN('phone1848','phone706') ORDER BY NAME");
-        List<Map<String, Object>> expectedResult = new ArrayList<Map<String, Object>>()
-        {{
-            add(new HashMap<String, Object>()
-            {{
-                put("RESULT", "akash");
-            }});
-            add(new HashMap<String, Object>()
-            {{
-                put("RESULT", "anubhav");
-            }});
-            add(new HashMap<String, Object>()
-            {{
-                put("RESULT", "bhavya");
-            }});
-            add(new HashMap<String, Object>()
-            {{
-                put("RESULT", "jatin");
-            }});
-            add(new HashMap<String, Object>()
-            {{
-                put("RESULT", "liang");
-            }});
-            add(new HashMap<String, Object>()
-            {{
-                put("RESULT", "prince");
-            }});
-            add(new HashMap<String, Object>()
-            {{
-                put("RESULT", "sahil");
-            }});
-        }};
-
-        assertEquals(actualResult.toString(), expectedResult.toString());
-    }
-
-    @Test
-    public void testIsNotNullOnDate()
-            throws SQLException
-    {
-        List<Map<String, Object>> actualResult = hetuServer.executeQuery("SELECT NAME AS RESULT FROM TESTDB.TESTTABLE WHERE DATE IS NOT NULL AND ID=9");
-        List<Map<String, Object>> expectedResult = new ArrayList<Map<String, Object>>()
-        {{
-            add(new HashMap<String, Object>()
-            {{
-                put("RESULT", "ravindra");
-            }});
-            add(new HashMap<String, Object>()
-            {{
-                put("RESULT", "jitesh");
-            }});
-        }};
-
-        assertEquals(actualResult.toString(), expectedResult.toString());
-    }
-
-    @Test
-    public void testIsNotNullTimestamp()
-            throws SQLException
-    {
-        List<Map<String, Object>> actualResult = hetuServer.executeQuery("SELECT NAME AS RESULT FROM TESTDB.TESTTABLE WHERE DOB IS NOT NULL AND ID=9");
-        List<Map<String, Object>> expectedResult = new ArrayList<Map<String, Object>>()
-        {{
-            add(new HashMap<String, Object>()
-            {{
-                put("RESULT", "ravindra");
-            }});
-            add(new HashMap<String, Object>()
-            {{
-                put("RESULT", "jitesh");
-            }});
-        }};
-
-        assertEquals(actualResult.toString(), expectedResult.toString());
-    }
-
-    @Test
-    public void testSelectShortWithOrderBy()
-            throws SQLException
-    {
-        List<Map<String, Object>> actualResult = hetuServer.executeQuery("SELECT DISTINCT SHORTFIELD AS RESULT from testdb.testtable ORDER BY SHORTFIELD");
-        List<Map<String, Object>> expectedResult = new ArrayList<Map<String, Object>>()
-        {{
-            add(new HashMap<String, Object>()
-            {{
-                put("RESULT", 1);
-            }});
-            add(new HashMap<String, Object>()
-            {{
-                put("RESULT", 4);
-            }});
-            add(new HashMap<String, Object>()
-            {{
-                put("RESULT", 8);
-            }});
-            add(new HashMap<String, Object>()
-            {{
-                put("RESULT", 10);
-            }});
-            add(new HashMap<String, Object>()
-            {{
-                put("RESULT", 11);
-            }});
-            add(new HashMap<String, Object>()
-            {{
-                put("RESULT", 12);
-            }});
-            add(new HashMap<String, Object>()
-            {{
-                put("RESULT", 17);
-            }});
-            add(new HashMap<String, Object>()
-            {{
-                put("RESULT", 18);
-            }});
-            add(new HashMap<String, Object>()
-            {{
-                put("RESULT", null);
-            }});
-        }};
-
-        assertEquals(actualResult.toString(), expectedResult.toString());
-    }
-
-    @Test
-    public void testSelectShortIsNullWithOrderBy()
-            throws SQLException
-    {
-        List<Map<String, Object>> actualResult = hetuServer.executeQuery("SELECT ID AS RESULT from testdb.testtable WHERE SHORTFIELD IS NULL ORDER BY SHORTFIELD");
-        List<Map<String, Object>> expectedResult = new ArrayList<Map<String, Object>>()
-        {{
-            add(new HashMap<String, Object>()
-            {{
-                put("RESULT", null);
-            }});
-        }};
-
-        assertEquals(actualResult.toString(), expectedResult.toString());
-    }
-
-    @Test
-    public void testSelectShortWithGreaterThan()
-            throws SQLException
-    {
-        List<Map<String, Object>> actualResult = hetuServer.executeQuery("SELECT ID AS RESULT from testdb.testtable WHERE SHORTFIELD>11 ORDER BY ID");
-        List<Map<String, Object>> expectedResult = new ArrayList<Map<String, Object>>()
-        {{
-            add(new HashMap<String, Object>()
-            {{
-                put("RESULT", 6);
-            }});
-            add(new HashMap<String, Object>()
-            {{
-                put("RESULT", 7);
-            }});
-            add(new HashMap<String, Object>()
-            {{
-                put("RESULT", 9);
-            }});
-        }};
-
-        assertEquals(actualResult.toString(), expectedResult.toString());
-    }
-
-    @Test
-    public void testSelectLongDecimal()
-            throws SQLException
-    {
-        List<Map<String, Object>> actualResult = hetuServer.executeQuery("SELECT ID  AS RESULT from testdb.testtable WHERE bonus = DECIMAL '1234.5555'");
-        List<Map<String, Object>> expectedResult = new ArrayList<Map<String, Object>>()
-        {{
-            add(new HashMap<String, Object>()
-            {{
-                put("RESULT", 2);
-            }});
-        }};
-
-        assertEquals(actualResult.toString(), expectedResult.toString());
-    }
-
-    @Test
-    public void testSelectShortDecimal()
-            throws SQLException
-    {
-        List<Map<String, Object>> actualResult = hetuServer.executeQuery("SELECT ID AS RESULT from testdb.testtable WHERE monthlyBonus = 15.13");
-        List<Map<String, Object>> expectedResult = new ArrayList<Map<String, Object>>()
-        {{
-            add(new HashMap<String, Object>()
-            {{
-                put("RESULT", 2);
-            }});
-        }};
-
-        assertEquals(actualResult.toString(), expectedResult.toString());
-    }
-
-    @Test
-    public void testSelectBoolean()
-            throws SQLException
-    {
-        List<Map<String, Object>> actualResult = hetuServer.executeQuery("SELECT isCurrentEmployee AS RESULT FROM TESTDB.TESTTABLE WHERE ID=1");
-        List<Map<String, Object>> expectedResult = new ArrayList<Map<String, Object>>()
-        {{
-            add(new HashMap<String, Object>()
-            {{
-                put("RESULT", true);
-            }});
-        }};
-
-        assertEquals(actualResult.toString(), expectedResult.toString());
-    }
-
-    @Test
-    public void testSelectBooleanIsNull()
-            throws SQLException
-    {
-        List<Map<String, Object>> actualResult = hetuServer.executeQuery("SELECT id AS RESULT FROM TESTDB.TESTTABLE WHERE isCurrentEmployee is null");
-        List<Map<String, Object>> expectedResult = new ArrayList<Map<String, Object>>()
-        {{
-            add(new HashMap<String, Object>()
-            {{
-                put("RESULT", 2);
-            }});
-            add(new HashMap<String, Object>()
-            {{
-                put("RESULT", null);
-            }});
-        }};
-
-        assertEquals(actualResult.toString(), expectedResult.toString());
-    }
-
-    @Test
-    public void testSelectBooleanIsNotNull()
-            throws SQLException
-    {
-        List<Map<String, Object>> actualResult = hetuServer.executeQuery("SELECT id AS RESULT FROM TESTDB.TESTTABLE WHERE isCurrentEmployee is NOT null AND ID>8 ORDER BY ID");
-        List<Map<String, Object>> expectedResult = new ArrayList<Map<String, Object>>()
-        {{
-            add(new HashMap<String, Object>()
-            {{
-                put("RESULT", 9);
-            }});
-            add(new HashMap<String, Object>()
-            {{
-                put("RESULT", 9);
-            }});
-        }};
-
-        assertEquals(actualResult.toString(), expectedResult.toString());
-    }
-
-    @Test
-    public void testShowSchemas()
-            throws SQLException
-    {
-        List<Map<String, Object>> actualResult = hetuServer.executeQuery("SHOW SCHEMAS");
-        List<Map<String, Object>> expectedResult = new ArrayList<Map<String, Object>>()
-        {{
-            add(new HashMap<String, Object>()
-            {{
-                put("Schema", "default");
-            }});
-            add(new HashMap<String, Object>()
-            {{
-                put("Schema", "information_schema");
-            }});
-            add(new HashMap<String, Object>()
-            {{
-                put("Schema", "testdb");
-            }});
-        }};
-
-        assertEquals(actualResult.toString(), expectedResult.toString());
-    }
-
-    @Test
-    public void testSelectWithOr()
-            throws SQLException
-    {
-        List<Map<String, Object>> actualResult = hetuServer.executeQuery("SELECT BONUS AS RESULT FROM TESTDB.TESTTABLE WHERE" +
-                " BONUS < 600 OR BONUS > 5000 ORDER BY BONUS");
-        List<Map<String, Object>> expectedResult = new ArrayList<Map<String, Object>>()
-        {{
-            add(new HashMap<String, Object>()
-            {{
-                put("RESULT", BigDecimal.valueOf(500.414).setScale(4));
-            }});
-            add(new HashMap<String, Object>()
-            {{
-                put("RESULT", BigDecimal.valueOf(500.59).setScale(4));
-            }});
-            add(new HashMap<String, Object>()
-            {{
-                put("RESULT", BigDecimal.valueOf(500.88).setScale(4));
-            }});
-            add(new HashMap<String, Object>()
-            {{
-                put("RESULT", BigDecimal.valueOf(500.99).setScale(4));
-            }});
-            add(new HashMap<String, Object>()
-            {{
-                put("RESULT", BigDecimal.valueOf(5000.9990).setScale(4));
-            }});
-            add(new HashMap<String, Object>()
-            {{
-                put("RESULT", BigDecimal.valueOf(9999.9990).setScale(4));
-            }});
-        }};
-
-        assertEquals(actualResult.toString(), expectedResult.toString());
-    }
-
-    @Test
-    public void testSelectWithOrAndAnd()
-            throws SQLException
-    {
-        List<Map<String, Object>> actualResult = hetuServer.executeQuery("SELECT SHORTFIELD AS RESULT FROM TESTDB.TESTTABLE WHERE" +
-                " SHORTFIELD > 4 AND (SHORTFIELD < 10 or SHORTFIELD > 15) ORDER BY SHORTFIELD");
-        List<Map<String, Object>> expectedResult = new ArrayList<Map<String, Object>>()
-        {{
-            add(new HashMap<String, Object>()
-            {{
-                put("RESULT", 8);
-            }});
-            add(new HashMap<String, Object>()
-            {{
-                put("RESULT", 17);
-            }});
-            add(new HashMap<String, Object>()
-            {{
-                put("RESULT", 18);
-            }});
-        }};
-
-        assertEquals(actualResult.toString(), expectedResult.toString());
-    }
-
-    @Test
-    public void testSelectWithOrAndMultipleAnds()
-            throws SQLException
-    {
-        List<Map<String, Object>> actualResult = hetuServer.executeQuery("SELECT SHORTFIELD AS RESULT FROM TESTDB.TESTTABLE WHERE" +
-                " (SHORTFIELD > 1 AND SHORTFIELD < 5) OR (SHORTFIELD > 10 AND SHORTFIELD < 15) ORDER BY SHORTFIELD");
-        List<Map<String, Object>> expectedResult = new ArrayList<Map<String, Object>>()
-        {{
-            add(new HashMap<String, Object>()
-            {{
-                put("RESULT", 4);
-            }});
-            add(new HashMap<String, Object>()
-            {{
-                put("RESULT", 11);
-            }});
-            add(new HashMap<String, Object>()
-            {{
-                put("RESULT", 12);
-            }});
-        }};
-
-        assertEquals(actualResult.toString(), expectedResult.toString());
-    }
-
-    @Test
-    public void testSelectWithOrAndAndOnDiffColumn()
-            throws SQLException
-    {
-        List<Map<String, Object>> actualResult = hetuServer.executeQuery("SELECT SHORTFIELD AS RESULT FROM TESTDB.TESTTABLE WHERE" +
-                " ID < 7 AND (SHORTFIELD < 5 OR SHORTFIELD > 15) ORDER BY SHORTFIELD");
-        List<Map<String, Object>> expectedResult = new ArrayList<Map<String, Object>>()
-        {{
-            add(new HashMap<String, Object>()
-            {{
-                put("RESULT", 4);
-            }});
-            add(new HashMap<String, Object>()
-            {{
-                put("RESULT", 18);
-            }});
         }};
 
         assertEquals(actualResult.toString(), expectedResult.toString());
@@ -1182,107 +380,6 @@ public class TestCarbonAllDataType
         assertEquals(actualResult.toString(), expectedResult.toString());
     }
 
-    @Test
-    public void testAlterAddColumn() throws SQLException
-    {
-        hetuServer.execute("CREATE TABLE testdb.addcolumn(NAME varchar(7), AGE int)");
-        hetuServer.execute("INSERT INTO testdb.addcolumn VALUES ('Raj', 11)");
-
-        List<Map<String, Object>> actualResult = hetuServer.executeQuery("SELECT AGE FROM testdb.addcolumn");
-
-        List<Map<String, Object>> expectedResult = new ArrayList<Map<String, Object>>() {{
-            add(new HashMap<String, Object>() {{    put("AGE", 11); }});
-        }};
-
-        assertEquals(actualResult.toString(), expectedResult.toString());
-
-        hetuServer.execute("ALTER TABLE testdb.addcolumn ADD COLUMN COUNTRY varchar(7)");
-
-        TableInfo tableInfo = getTableInfoFromSchemaFile("addcolumn");
-        assertEquals(tableInfo.getFactTable().getListOfColumns().stream().filter(s -> s.getColumnName().equals("country")).collect(Collectors.toList()).get(0).getColumnName(), "country" );
-        if(tableInfo.getFactTable().getListOfColumns().stream().filter(s -> s.getColumnName().equals("country")).collect(Collectors.toList()).get(0).getColumnName().equals("country")) {
-            actualResult = hetuServer.executeQuery("SELECT * FROM testdb.addcolumn");
-
-            expectedResult = new ArrayList<Map<String, Object>>() {{
-                add(new TreeMap<String, Object>() {{
-                    put("age", 11);
-                    put("country", null);
-                    put("name", "Raj");
-                }});
-            }};
-            assertEquals(actualResult.toString(), expectedResult.toString());
-        }
-        hetuServer.execute("drop table if exists testdb.addcolumn");
-    }
-
-    @Test
-    public void testAlterRenameColumn() throws SQLException
-    {
-        hetuServer.execute("CREATE TABLE testdb.renamecolumn(NAME varchar(7), AGE int) with(format='CARBON') ");
-        hetuServer.execute("INSERT INTO testdb.renamecolumn VALUES ('Raj', 11)");
-
-        List<Map<String, Object>> actualResult = hetuServer.executeQuery("SELECT AGE FROM testdb.renamecolumn");
-
-        List<Map<String, Object>> expectedResult = new ArrayList<Map<String, Object>>()
-        {{
-            add(new HashMap<String, Object>()
-            {{
-                put("AGE", 11);
-            }});
-        }};
-
-        assertEquals(actualResult.toString(), expectedResult.toString());
-
-        hetuServer.execute("ALTER TABLE testdb.renamecolumn RENAME COLUMN AGE TO ID");
-
-        TableInfo tableInfo = getTableInfoFromSchemaFile("renamecolumn");
-        assertEquals(tableInfo.getFactTable().getListOfColumns().stream().filter(s -> s.getColumnName().equals("id")).collect(Collectors.toList()).get(0).getColumnName(), "id" );
-
-        if(tableInfo.getFactTable().getListOfColumns().stream().filter(s -> s.getColumnName().equals("id")).collect(Collectors.toList()).get(0).getColumnName().equals("id")) {
-            actualResult = hetuServer.executeQuery("SELECT * FROM testdb.renamecolumn");
-
-            expectedResult = new ArrayList<Map<String, Object>>() {{
-                add(new TreeMap<String, Object>() {{
-                    put("id", "11");
-                    put("name", "Raj");
-                }});
-            }};
-            assertEquals(actualResult.toString(), expectedResult.toString());
-        }
-        hetuServer.execute("drop table if exists testdb.renamecolumn");
-    }
-
-    @Test
-    public void testAlterDropColumn() throws SQLException
-    {
-        hetuServer.execute("CREATE TABLE testdb.dropcolumn(NAME varchar(7), AGE int) with(format='CARBON') ");
-        hetuServer.execute("INSERT INTO testdb.dropcolumn VALUES ('Raj', 11)");
-
-        List<Map<String, Object>> actualResult = hetuServer.executeQuery("SELECT AGE FROM testdb.dropcolumn");
-
-        List<Map<String, Object>> expectedResult = new ArrayList<Map<String, Object>>()
-        {{
-            add(new HashMap<String, Object>()
-            {{
-                put("AGE", 11);
-            }});
-        }};
-
-        assertEquals(actualResult.toString(), expectedResult.toString());
-
-        hetuServer.execute("ALTER TABLE testdb.dropcolumn DROP COLUMN AGE");
-
-        actualResult = hetuServer.executeQuery("SELECT * FROM testdb.dropcolumn");
-
-        expectedResult = new ArrayList<Map<String, Object>>() {{
-            add(new HashMap<String, Object>() {{    put("name", "Raj"); }});
-        }};
-        assertEquals(actualResult.toString(), expectedResult.toString());
-
-        hetuServer.execute("drop table if exists testdb.dropcolumn");
-    }
-
-
     @Test(dependsOnMethods = {"testInsertOverwriteEmptyTable"})
     public void testInsertExistingPartitionsOverwriteEmptyTable() throws SQLException
     {
@@ -1317,96 +414,72 @@ public class TestCarbonAllDataType
     @Test
     public void testCreateTable() throws SQLException
     {
-        hetuServer.execute("drop table if exists testdb.testtablecreate");
-        hetuServer.execute("CREATE TABLE testdb.testtablecreate(a int, b int) with(format='CARBON') ");
-        hetuServer.execute("INSERT INTO testdb.testtablecreate VALUES (10, 11)");
-        List<Map<String, Object>> actualResult = hetuServer.executeQuery("Select count (*) as RESULT from testdb.testtablecreate");
+        hetuServer.execute("CREATE TABLE testdb.testtable2(a int, b int) with(format='CARBON') ");
+        hetuServer.execute("INSERT INTO testdb.testtable2 VALUES (10, 11)");
+        List<Map<String, Object>> actualResult = hetuServer.executeQuery("Select count (*) as RESULT from testdb.testtable2");
 
         List<Map<String, Object>> expectedResult = new ArrayList<Map<String, Object>>() {{
             add(new HashMap<String, Object>() {{    put("RESULT", 1); }});
         }};
 
         assertEquals(actualResult.toString(), expectedResult.toString());
-        hetuServer.execute("drop table testdb.testtablecreate");
+        hetuServer.execute("drop table testdb.testtable2");
     }
 
-    @Test
-    public void testReadWriteVarbinaryDatatype()
-            throws SQLException
-    {
-        hetuServer.execute("CREATE TABLE testdb.varbinarytype(a int, b varbinary)");
-        hetuServer.execute("INSERT INTO testdb.varbinarytype VALUES (10, varbinary 'b'),(11, varbinary 'c'),(12, varbinary 'd')");
-
-        List<Map<String, Object>> actualResult = hetuServer.executeQuery("Select count(b) as RESULT from testdb.varbinarytype where a = 10");
-
-        List<Map<String, Object>> expectedResult = new ArrayList<Map<String, Object>>()
-        {{
-            add(new HashMap<String, Object>()
-            {{ put("RESULT", 1); }});
-        }};
-
-        assertEquals(actualResult.toString(), expectedResult.toString());
-
-        hetuServer.execute("drop table  testdb.varbinarytype");
-    }
 
     @Test
     public void testCreateTableLocation() throws SQLException
     {
-        hetuServer.execute("drop table if exists testdb.testtablelocation");
         String location = "'" + "file:///" + storePath + "/carbon.store" + "')" ;
-        hetuServer.execute("CREATE TABLE testdb.testtablelocation(a int, b int) with(format='CARBON', location = " + location);
-        hetuServer.execute("INSERT INTO testdb.testtablelocation VALUES (10, 11)");
-        List<Map<String, Object>> actualResult = hetuServer.executeQuery("Select count (*) as RESULT from testdb.testtablelocation");
+        hetuServer.execute("CREATE TABLE testdb.testtable2(a int, b int) with(format='CARBON', location = " + location);
+        hetuServer.execute("INSERT INTO testdb.testtable2 VALUES (10, 11)");
+        List<Map<String, Object>> actualResult = hetuServer.executeQuery("Select count (*) as RESULT from testdb.testtable2");
 
         List<Map<String, Object>> expectedResult = new ArrayList<Map<String, Object>>() {{
             add(new HashMap<String, Object>() {{    put("RESULT", 1); }});
         }};
 
         assertEquals(actualResult.toString(), expectedResult.toString());
-        hetuServer.execute("drop table testdb.testtablelocation");
+        hetuServer.execute("drop table testdb.testtable2");
     }
 
     @Test
     public void testCreateTableAs() throws SQLException
     {
-        hetuServer.execute("drop table if exists testdb.createsourcetable");
-        hetuServer.execute("CREATE TABLE testdb.createsourcetable(a int, b int) with(format='CARBON') ");
-        hetuServer.execute("INSERT INTO testdb.createsourcetable VALUES (10, 11)");
-        hetuServer.execute("INSERT INTO testdb.createsourcetable VALUES (20, 11)");
-        hetuServer.execute("INSERT INTO testdb.createsourcetable VALUES (30, 11)");
-        hetuServer.execute("CREATE TABLE testdb.createtableas as select a, b from  testdb.createsourcetable ");
-        List<Map<String, Object>> actualResult = hetuServer.executeQuery("Select count (*) as RESULT from testdb.createtableas");
+        hetuServer.execute("CREATE TABLE testdb.testtable2(a int, b int) with(format='CARBON') ");
+        hetuServer.execute("INSERT INTO testdb.testtable2 VALUES (10, 11)");
+        hetuServer.execute("INSERT INTO testdb.testtable2 VALUES (20, 11)");
+        hetuServer.execute("INSERT INTO testdb.testtable2 VALUES (30, 11)");
+        hetuServer.execute("CREATE TABLE testdb.testtable3 as select a, b from  testdb.testtable2 ");
+        List<Map<String, Object>> actualResult = hetuServer.executeQuery("Select count (*) as RESULT from testdb.testtable3");
 
         List<Map<String, Object>> expectedResult = new ArrayList<Map<String, Object>>() {{
             add(new HashMap<String, Object>() {{    put("RESULT", 3); }});
         }};
 
         assertEquals(actualResult.toString(), expectedResult.toString());
-        hetuServer.execute("drop table testdb.createsourcetable");
-        hetuServer.execute("drop table testdb.createtableas");
+        hetuServer.execute("drop table testdb.testtable2");
+        hetuServer.execute("drop table testdb.testtable3");
     }
     @Test
     public void testCreateTableAsMultiRow() throws SQLException
     {
-        hetuServer.execute("drop table if exists testdb.createtablemultiplerows");
-        hetuServer.execute("CREATE TABLE testdb.createtablemultiplerows as " +
+        hetuServer.execute("CREATE TABLE testdb.testtable3 as " +
                 "select ID,date,country,name,phonetype,serialname,salary,bonus, monthlyBonus,dob,shortField,isCurrentEmployee " +
                 "from  testdb.testtable");
 
-        List<Map<String, Object>> actualResult = hetuServer.executeQuery("Select count (*) as RESULT from testdb.createtablemultiplerows");
+        List<Map<String, Object>> actualResult = hetuServer.executeQuery("Select count (*) as RESULT from testdb.testtable3");
 
         List<Map<String, Object>> expectedResult = new ArrayList<Map<String, Object>>() {{
             add(new HashMap<String, Object>() {{    put("RESULT", 11); }});
         }};
 
         assertEquals(actualResult.toString(), expectedResult.toString());
-        hetuServer.execute("drop table testdb.createtablemultiplerows");
+        hetuServer.execute("drop table testdb.testtable3");
     }
 
     @Test
     public void testCreateTableWithLocationDisabled() throws SQLException {
-        hetuServer.execute("drop table if exists testdb.testtable3");
         assertEquals(Assert.expectThrows(SQLException.class, () -> hetuServer.execute("CREATE TABLE carbondatacataloglocationdisabled.testdb.testtable3"
                 + "(a int, b int , c int , d int ) with (location='hdfs:///user/')")).getMessage().split(":")[1]," Setting location property is not allowed");
     }
@@ -1414,27 +487,26 @@ public class TestCarbonAllDataType
     @Test
     public void testDropTable() throws SQLException
     {
-        hetuServer.execute("drop table if exists testdb.testtabledrop");
-        hetuServer.execute("CREATE TABLE testdb.testtabledrop(a int, b int) with(format='CARBON') ");
-        hetuServer.execute("INSERT INTO testdb.testtabledrop VALUES (10, 11)");
+        hetuServer.execute("drop table if exists testdb.testtable2");
+        hetuServer.execute("CREATE TABLE testdb.testtable2(a int, b int) with(format='CARBON') ");
+        hetuServer.execute("INSERT INTO testdb.testtable2 VALUES (10, 11)");
 
         try {
-            assertEquals(FileFactory.isFileExist(storePath  + "/carbon.store/testdb/testtabledrop", false), true);
-            hetuServer.execute("drop table testdb.testtabledrop");
-            assertEquals(FileFactory.isFileExist(storePath  + "/carbon.store/testdb/testtabledrop", false), false);
+            assertEquals(FileFactory.isFileExist(storePath  + "/carbon.store/testdb/testtable2", false), true);
+            hetuServer.execute("drop table testdb.testtable2");
+            assertEquals(FileFactory.isFileExist(storePath  + "/carbon.store/testdb/testtable2", false), false);
 
         } catch (IOException e) {
-            logger.error(e.getMessage());
+            e.printStackTrace();
         }
     }
 
     @Test
     public void testCreateTableValidate() throws SQLException
     {
-        hetuServer.execute("drop table if exists testdb.testtablevalidate");
-        hetuServer.execute("CREATE TABLE testdb.testtablevalidate (a int, b int , c int , d int )");
+        hetuServer.execute("CREATE TABLE testdb.testtable2 (a int, b int , c int , d int )");
 
-        String schemaFilePath = CarbonTablePath.getSchemaFilePath( "file://" + storePath + "/carbon.store"+ "/testdb" + "/testtablevalidate");
+        String schemaFilePath = CarbonTablePath.getSchemaFilePath( "file://" + storePath + "/carbon.store"+ "/testdb" + "/testtable2");
         // If metadata folder exists, it is a transactional table
         CarbonFile schemaFile = FileFactory.getCarbonFile(schemaFilePath);
         boolean isTransactionalTable = schemaFile.exists();
@@ -1469,7 +541,7 @@ public class TestCarbonAllDataType
                     i++;
                 }
             } catch (IOException e) {
-                logger.error(e.getMessage());
+                e.printStackTrace();
             }
 
             // Step 3: convert format level TableInfo to code level TableInfo
@@ -1477,22 +549,22 @@ public class TestCarbonAllDataType
             // wrapperTableInfo is the code level information of a table in carbondata core,
             // different from the Thrift TableInfo.
             TableInfo wrapperTableInfo = schemaConverter
-                    .fromExternalToWrapperTableInfo(tableInfo, "testdb", "testtablevalidate","file://" + storePath + "/carbon.store"+ "/testdb");
+                    .fromExternalToWrapperTableInfo(tableInfo, "testdb", "testtable2","file://" + storePath + "/carbon.store"+ "/testdb");
 
         }
 
-        hetuServer.execute("drop table testdb.testtablevalidate");
+        hetuServer.execute("drop table testdb.testtable2");
     }
 
     @Test
     public void testReadWriteRealDatatype()
             throws SQLException
     {
-        hetuServer.execute("drop table if exists testdb.testtablerealdatatype");
-        hetuServer.execute("CREATE TABLE testdb.testtablerealdatatype(a int, b real)");
-        hetuServer.execute("INSERT INTO testdb.testtablerealdatatype VALUES (10, 2),(11, 3),(12, 4)");
+        hetuServer.execute("drop table if exists testdb.testtable4");
+        hetuServer.execute("CREATE TABLE testdb.testtable4(a int, b real)");
+        hetuServer.execute("INSERT INTO testdb.testtable4 VALUES (10, 2),(11, 3),(12, 4)");
 
-        List<Map<String, Object>> actualResult = hetuServer.executeQuery("Select b as RESULT from testdb.testtablerealdatatype where a = 11");
+        List<Map<String, Object>> actualResult = hetuServer.executeQuery("Select b as RESULT from testdb.testtable4 where a = 11");
 
         List<Map<String, Object>> expectedResult = new ArrayList<Map<String, Object>>()
         {{
@@ -1501,7 +573,7 @@ public class TestCarbonAllDataType
         }};
 
         assertEquals(actualResult.toString(), expectedResult.toString());
-        hetuServer.execute("drop table testdb.testtablerealdatatype");
+        hetuServer.execute("drop table testdb.testtable4");
     }
 
 
@@ -1509,11 +581,10 @@ public class TestCarbonAllDataType
     public void testReadWriteTinyintDatatype()
             throws SQLException
     {
-        hetuServer.execute("drop table if exists testdb.testtabletinydatatype");
-        hetuServer.execute("CREATE TABLE testdb.testtabletinydatatype(a int, b tinyint)");
-        hetuServer.execute("INSERT INTO testdb.testtabletinydatatype VALUES (10, tinyint '1'),(11, tinyint '2'),(12, tinyint '3')");
+        hetuServer.execute("CREATE TABLE testdb.testtable4(a int, b tinyint)");
+        hetuServer.execute("INSERT INTO testdb.testtable4 VALUES (10, tinyint '1'),(11, tinyint '2'),(12, tinyint '3')");
 
-        List<Map<String, Object>> actualResult = hetuServer.executeQuery("Select b as RESULT from testdb.testtabletinydatatype where a = 10");
+        List<Map<String, Object>> actualResult = hetuServer.executeQuery("Select b as RESULT from testdb.testtable4 where a = 10");
 
         List<Map<String, Object>> expectedResult = new ArrayList<Map<String, Object>>()
         {{
@@ -1522,7 +593,7 @@ public class TestCarbonAllDataType
         }};
 
         assertEquals(actualResult.toString(), expectedResult.toString());
-        hetuServer.execute("drop table if exists testdb.testtabletinydatatype");
+        hetuServer.execute("drop table if exists testdb.testtable4");
     }
 
     private String carbondatastorecreator(String data, int i, String[] dataTypes)
@@ -1550,7 +621,7 @@ public class TestCarbonAllDataType
                     try {
                         date = inputFormat.parse(data);
                     } catch (ParseException e) {
-                        logger.error(e.getMessage());
+                        e.printStackTrace();
                     }
                     String dateString = outuptformat.format(date);
                     dateString = "date '" + dateString + "'";
@@ -1564,7 +635,7 @@ public class TestCarbonAllDataType
                     try {
                         date = inputFormat.parse(data);
                     } catch (ParseException e) {
-                        logger.error(e.getMessage());
+                        e.printStackTrace();
                     }
                     String dateString = outuptformat.format(date);
                     dateString = "date '" + dateString + "'";
@@ -1573,7 +644,7 @@ public class TestCarbonAllDataType
                 return   "date '" + data + "'";
             }
             case "varchar":
-            {
+            {//'china'
                 return "'" + data + "'";
             }
             case "timestamp":
@@ -1587,7 +658,7 @@ public class TestCarbonAllDataType
                     try {
                         date = inputFormattime.parse(data);
                     } catch (ParseException e) {
-                        logger.error(e.getMessage());
+                        e.printStackTrace();
                     }
                     dateString = outuptformattime.format(date);
                 }
@@ -1598,7 +669,7 @@ public class TestCarbonAllDataType
                     try {
                         date = inputFormattime.parse(data);
                     } catch (ParseException e) {
-                        logger.error(e.getMessage());
+                        e.printStackTrace();
                     }
                     dateString = outuptformattime.format(date);
                 }
@@ -1609,7 +680,7 @@ public class TestCarbonAllDataType
                     try {
                         date = inputFormattime.parse(data);
                     } catch (ParseException e) {
-                        logger.error(e.getMessage());
+                        e.printStackTrace();
                     }
                     dateString = outuptformattime.format(date);
                 }
@@ -1620,7 +691,7 @@ public class TestCarbonAllDataType
                     try {
                         date = inputFormattime.parse(data);
                     } catch (ParseException e) {
-                        logger.error(e.getMessage());
+                        e.printStackTrace();
                     }
                     dateString = outuptformattime.format(date);
                 }
@@ -1632,10 +703,9 @@ public class TestCarbonAllDataType
                 return dateString;
             }
             case "smallint":  {
+                // smallint '12'
                 return "smallint '" + data + "'";
             }
-            default:
-                break;
         }
         return data;
     }
@@ -1693,7 +763,7 @@ public class TestCarbonAllDataType
             hetuServer.execute(inserData);
         }
         catch(Exception e) {
-            logger.error(e.getMessage());
+            e.printStackTrace();
         }
     }
 
@@ -1715,31 +785,30 @@ public class TestCarbonAllDataType
     public void testCreateTableValidateExistingPath() throws SQLException
     {
         try {
-            hetuServer.execute("drop table if exists testdb.testtablevalidateexistingpath");
-            FileFactory.createDirectoryAndSetPermission(storePath  + "/carbon.store/testdb/testtablevalidateexistingpath" , null);
+            hetuServer.execute("drop table if exists testdb.testtable4");
+            FileFactory.createDirectoryAndSetPermission(storePath  + "/carbon.store/testdb/testtable4" , null);
             try {
-                hetuServer.execute("CREATE TABLE testdb.testtablevalidateexistingpath(a int, b int) with(format='CARBON') ");
+                hetuServer.execute("CREATE TABLE testdb.testtable4(a int, b int) with(format='CARBON') ");
             }
             catch (Exception e) {
-                Boolean ret = e.getMessage().contains("Target directory for table 'testdb.testtablevalidateexistingpath' already exists:");
+                Boolean ret = e.getMessage().contains("Target directory for table 'testdb.testtable4' already exists:");
                 assertEquals("true", ret.toString());
-                CarbonUtil.deleteFoldersAndFiles(FileFactory.getCarbonFile(storePath  + "/carbon.store/testdb/testtablevalidateexistingpath"));
+                CarbonUtil.deleteFoldersAndFiles(FileFactory.getCarbonFile(storePath  + "/carbon.store/testdb/testtable4"));
                 return;
             }
-            hetuServer.execute("drop table if exists testdb.testtablevalidateexistingpath");
+            hetuServer.execute("drop table if exists testdb.testtable4");
             // in error case it will come here
-            assertEquals("CREATE TABLE testdb.testtablevalidateexistingpath should throw error", "CREATE TABLE testdb.testtablevalidateexistingpath success");
+            assertEquals("CREATE TABLE testdb.testtable4 should throw error", "CREATE TABLE testdb.testtable4 success");
 
         }
         catch (IOException | InterruptedException e) {
-            logger.error(e.getMessage());
+            e.printStackTrace();
         }
     }
 
     @Test
     public void testSegmentDelete() throws SQLException
     {
-        hetuServer.execute("drop table if exists testdb.segmentdelete");
         hetuServer.execute("CREATE TABLE testdb.segmentdelete(a int, b tinyint)");
         hetuServer.execute("INSERT INTO testdb.segmentdelete VALUES (10, tinyint '1'),(11, tinyint '2'),(12, tinyint '3')");
         hetuServer.execute("INSERT INTO testdb.segmentdelete VALUES (13, tinyint '1'),(14, tinyint '2'),(15, tinyint '3')");
@@ -1781,15 +850,14 @@ public class TestCarbonAllDataType
     */
     private boolean checkStatusFileForDeleteMarked(String tableName, int updateNumber, int segmentNumber) throws SQLException
     {
-        BufferedReader reader = null;
         try {
             File dir = new File(storePath + "/carbon.store/testdb/" + tableName + "/Metadata");
             File[] tableUpdateStatusFiles = dir.listFiles((d, name) -> name.startsWith("tableupdatestatus"));
             Arrays.sort(tableUpdateStatusFiles);
             Gson gson = new Gson();
-            reader = new BufferedReader(new FileReader(tableUpdateStatusFiles[updateNumber]));
+            BufferedReader reader = new BufferedReader(new FileReader(tableUpdateStatusFiles[updateNumber]));
             SegmentUpdateDetails[] segmentUpdateDetails = gson.fromJson(reader, SegmentUpdateDetails[].class);
-            File tableStatusFile = new File(dir.getCanonicalPath() + "/tablestatus");
+            File tableStatusFile = new File(dir.getAbsolutePath() + "/tablestatus");
             reader = new BufferedReader(new FileReader(tableStatusFile));
             LoadMetadataDetails loadMetadataDetails = gson.fromJson(reader, LoadMetadataDetails[].class)[segmentNumber];
             if ((segmentUpdateDetails[0].getSegmentStatus() != null && segmentUpdateDetails[0].getSegmentStatus().toString().equals("Marked for Delete")) &&
@@ -1800,23 +868,12 @@ public class TestCarbonAllDataType
             hetuServer.execute("drop table if exists testdb." + tableName);
             Assert.fail("Failed to read status files");
         }
-        finally {
-            if (reader != null) {
-                try {
-                    reader.close();
-                }
-                catch (IOException e) {
-                    logger.error(e.getMessage());
-                }
-            }
-        }
         return false;
     }
 
     @Test
     public void testVacuumNonPartitionedTable() throws SQLException
     {
-        hetuServer.execute("drop table if exists testdb.mytesttable");
         hetuServer.execute("CREATE TABLE testdb.mytesttable (a int, b int)");
         hetuServer.execute("INSERT INTO testdb.mytesttable VALUES (1, 2)");
         hetuServer.execute("INSERT INTO testdb.mytesttable VALUES (2, 4)");
@@ -1829,7 +886,7 @@ public class TestCarbonAllDataType
                     "/carbon.store/testdb/mytesttable/Fact/Part0/Segment_0.1", false), true);
         } catch (IOException e) {
             hetuServer.execute("DROP TABLE if exists testdb.mytesttable");
-            logger.error(e.getMessage());
+            e.printStackTrace();
         }
 
         hetuServer.execute("DROP TABLE if exists testdb.mytesttable");
@@ -1838,7 +895,6 @@ public class TestCarbonAllDataType
     @Test
     public void testDoubleVacuumNonPartitionedTable() throws SQLException
     {
-        hetuServer.execute("drop table if exists testdb.mytesttable2");
         hetuServer.execute("CREATE TABLE testdb.mytesttable2 (a int, b int)");
         hetuServer.execute("INSERT INTO testdb.mytesttable2 VALUES (1, 2)");
         hetuServer.execute("INSERT INTO testdb.mytesttable2 VALUES (2, 4)");
@@ -1853,7 +909,7 @@ public class TestCarbonAllDataType
         }
         catch (IOException e) {
             hetuServer.execute("DROP TABLE if exists testdb.mytesttable2");
-            logger.error(e.getMessage());
+            e.printStackTrace();
         }
 
         hetuServer.execute("DROP TABLE if exists testdb.mytesttable2");
@@ -1862,7 +918,6 @@ public class TestCarbonAllDataType
     @Test
     public void testVacuumRollback() throws SQLException
     {
-        hetuServer.execute("drop table if exists testdb.myectable");
         hetuServer.execute("CREATE TABLE testdb.myectable (a int, b int)");
         hetuServer.execute("INSERT INTO testdb.myectable VALUES (1, 2)");
         hetuServer.execute("INSERT INTO testdb.myectable VALUES (2, 4)");
@@ -1886,7 +941,7 @@ public class TestCarbonAllDataType
         }
         catch (IOException | InterruptedException e) {
             hetuServer.execute("DROP TABLE if exists testdb.myectable");
-            logger.error(e.getMessage());
+            e.printStackTrace();
         }
 
         hetuServer.execute("DROP TABLE if exists testdb.myectable");
@@ -1895,15 +950,14 @@ public class TestCarbonAllDataType
     @Test
     public void testCreateDropTableDifferentLocation() throws SQLException
     {
-        hetuServer.execute("drop table if exists testdb.testtablediffloc");
-        hetuServer.execute("CREATE TABLE testdb.testtablediffloc(a int, b int)");
-        hetuServer.execute("INSERT INTO testdb.testtablediffloc VALUES (10, 11)");
-        List<Map<String, Object>> actualResult = hetuServer.executeQuery("Select count (*) as RESULT from testdb.testtablediffloc");
+        hetuServer.execute("CREATE TABLE testdb.testtable2(a int, b int)");
+        hetuServer.execute("INSERT INTO testdb.testtable2 VALUES (10, 11)");
+        List<Map<String, Object>> actualResult = hetuServer.executeQuery("Select count (*) as RESULT from testdb.testtable2");
         List<Map<String, Object>> expectedResult = new ArrayList<Map<String, Object>>() {{
             add(new HashMap<String, Object>() {{    put("RESULT", 1); }});
         }};
         assertEquals(actualResult.toString(), expectedResult.toString());
-        hetuServer.execute("drop table testdb.testtablediffloc");
+        hetuServer.execute("drop table testdb.testtable2");
 
         // creating table with same name
         try {
@@ -1911,36 +965,35 @@ public class TestCarbonAllDataType
                 FileFactory.mkdirs( storePath + "/carbon.store/mytestDb");
             }
         } catch (IOException e) {
-            logger.error(e.getMessage());
+            e.printStackTrace();
         }
 
         String location = "'" + "file:///" + storePath + "/carbon.store/mytestDb" + "')" ;
-        hetuServer.execute("CREATE TABLE testdb.testtablediffloc(a int, b int) with(format='CARBON', location = " + location);
-        hetuServer.execute("INSERT INTO testdb.testtablediffloc VALUES (10, 11)");
-        actualResult = hetuServer.executeQuery("Select count (*) as RESULT from testdb.testtablediffloc");
+        hetuServer.execute("CREATE TABLE testdb.testtable2(a int, b int) with(format='CARBON', location = " + location);
+        hetuServer.execute("INSERT INTO testdb.testtable2 VALUES (10, 11)");
+        actualResult = hetuServer.executeQuery("Select count (*) as RESULT from testdb.testtable2");
 
         expectedResult = new ArrayList<Map<String, Object>>() {{
             add(new HashMap<String, Object>() {{    put("RESULT", 1); }});
         }};
 
         assertEquals(actualResult.toString(), expectedResult.toString());
-        hetuServer.execute("drop table testdb.testtablediffloc");
+        hetuServer.execute("drop table testdb.testtable2");
     }
 
     @Test
     public void testCheckingCarbonCacheUpdate() throws SQLException
     {
-        hetuServer.execute("drop table if exists testdb.testtablecacheupdate");
-        hetuServer.execute("CREATE TABLE testdb.testtablecacheupdate(a int, b int)");
-        List<Map<String, Object>> actualResult = hetuServer.executeQuery("Select count (*) as RESULT from testdb.testtablecacheupdate");
+        hetuServer.execute("CREATE TABLE testdb.testtable2(a int, b int)");
+        List<Map<String, Object>> actualResult = hetuServer.executeQuery("Select count (*) as RESULT from testdb.testtable2");
         List<Map<String, Object>> expectedResult = new ArrayList<Map<String, Object>>() {{
             add(new HashMap<String, Object>() {{    put("RESULT", 0); }});
         }};
         assertEquals(actualResult.toString(), expectedResult.toString());
 
-        File OriginalFile = new File(storePath + "/carbon.store/testdb/testtablecacheupdate/Metadata/schema");
+        File OriginalFile = new File(storePath + "/carbon.store/testdb/testtable2/Metadata/schema");
         // create the destination file object
-        File dest = new File(storePath + "/carbon.store/testdb/testtablecacheupdate/schema_backup");
+        File dest = new File(storePath + "/carbon.store/testdb/testtable2/schema_backup");
         // check if the file can be renamed
         // to the abstract path name
         if (OriginalFile.renameTo(dest)) {
@@ -1954,7 +1007,7 @@ public class TestCarbonAllDataType
             System.out.println("File cannot be renamed");
         }
         try {
-            hetuServer.executeQuery("Select count (*) as RESULT from testdb.testtablecacheupdate");
+            hetuServer.executeQuery("Select count (*) as RESULT from testdb.testtable2");
         }
         catch (SQLException s) {
             Boolean ret = s.getMessage().contains("Failed while reading metadata of the table");
@@ -1966,19 +1019,18 @@ public class TestCarbonAllDataType
         else {
             System.out.println("File cannot be renamed");
         }
-        actualResult = hetuServer.executeQuery("Select count (*) as RESULT from testdb.testtablecacheupdate");
+        actualResult = hetuServer.executeQuery("Select count (*) as RESULT from testdb.testtable2");
         expectedResult = new ArrayList<Map<String, Object>>() {{
             add(new HashMap<String, Object>() {{    put("RESULT", 0); }});
         }};
         assertEquals(actualResult.toString(), expectedResult.toString());
-        hetuServer.execute("drop table testdb.testtablecacheupdate");
+        hetuServer.execute("drop table testdb.testtable2");
     }
 
     @Test
     public void validateMetadataEntriesAfterInsert() throws SQLException, IOException
     {
         String tableName = "testtablestatus";
-        hetuServer.execute("drop table if exists testdb.testtablestatus");
         hetuServer.execute(String.format("CREATE TABLE testdb.%s (a int, b int)", tableName));
         hetuServer.execute(String.format("INSERT INTO testdb.%s VALUES(1, 2)", tableName));
 
@@ -1999,7 +1051,6 @@ public class TestCarbonAllDataType
     @Test
     public void testShowCreateTable() throws SQLException
     {
-        hetuServer.execute("drop table if exists testdb.showcreatetable");
         hetuServer.execute("CREATE TABLE testdb.showcreatetable (a int, b int)");
         try {
             hetuServer.execute("SHOW CREATE TABLE  testdb.showcreatetable");
@@ -2014,7 +1065,6 @@ public class TestCarbonAllDataType
     @Test
     public void testFilterUnboundedVarcharDatatype() throws SQLException
     {
-        hetuServer.execute("drop table if exists testdb.unboundedvarchar");
         hetuServer.execute("CREATE TABLE testdb.unboundedvarchar(name varchar)");
         hetuServer.execute("INSERT INTO testdb.unboundedvarchar VALUES('akash'),('anubhav'),('bhavya'),('amit  ')");
 
@@ -2057,7 +1107,6 @@ public class TestCarbonAllDataType
     @Test
     public void testFilterBoundedVarcharDatatype() throws SQLException
     {
-        hetuServer.execute("drop table if exists testdb.boundedvarchar");
         hetuServer.execute("CREATE TABLE testdb.boundedvarchar(name varchar(6))");
         hetuServer.execute("INSERT INTO testdb.boundedvarchar VALUES('akash'),('anubav'),('bhavya'), ('amit  ')");
 
@@ -2122,7 +1171,6 @@ public class TestCarbonAllDataType
     @Test
     public void testFilterUnboundedCharDatatype() throws SQLException
     {
-        hetuServer.execute("drop table if exists testdb.unboundedchar");
         hetuServer.execute("CREATE TABLE testdb.unboundedchar(name char)");
         hetuServer.execute("INSERT INTO testdb.unboundedchar VALUES('a'),('b'),('c'),('d')");
 
@@ -2167,7 +1215,6 @@ public class TestCarbonAllDataType
     @Test
     public void testFilterBoundedCharDatatype() throws SQLException
     {
-        hetuServer.execute("drop table if exists testdb.boundedchar");
         hetuServer.execute("CREATE TABLE testdb.boundedchar(name char(7))");
         hetuServer.execute("INSERT INTO testdb.boundedchar VALUES('akash'),('anubav'),('bhavya'),('amit   ')");
 
@@ -2220,7 +1267,6 @@ public class TestCarbonAllDataType
     @Test
     public void testFilterUnboundedVarcharDatatypeForLocalDic() throws SQLException, IOException
     {
-        hetuServer.execute("drop table if exists testdb.unboundedvarcharforlocaldic");
         hetuServer.execute("CREATE TABLE testdb.unboundedvarcharforlocaldic(name varchar)");
         writeSchemaFileForLocalDic("unboundedvarcharforlocaldic");
         hetuServer.execute("INSERT INTO testdb.unboundedvarcharforlocaldic VALUES('akash'),('anubhav'),('bhavya'),('amit  ')");
@@ -2264,7 +1310,6 @@ public class TestCarbonAllDataType
     @Test
     public void testFilterBoundedVarcharDatatypeForLocalDic() throws SQLException, IOException
     {
-        hetuServer.execute("drop table if exists testdb.boundedvarcharforlocaldic");
         hetuServer.execute("CREATE TABLE testdb.boundedvarcharforlocaldic(name varchar(6))");
         writeSchemaFileForLocalDic("boundedvarcharforlocaldic");
         hetuServer.execute("INSERT INTO testdb.boundedvarcharforlocaldic VALUES('akash'),('anubav'),('bhavya'), ('amit  ')");
@@ -2329,7 +1374,6 @@ public class TestCarbonAllDataType
     @Test
     public void testFilterUnboundedCharDatatypeForLocalDic() throws SQLException, IOException
     {
-        hetuServer.execute("drop table if exists testdb.unboundedcharforlocaldic");
         hetuServer.execute("CREATE TABLE testdb.unboundedcharforlocaldic(name char)");
         writeSchemaFileForLocalDic("unboundedcharforlocaldic");
         hetuServer.execute("INSERT INTO testdb.unboundedcharforlocaldic VALUES('a'),('b'),('c'),('d')");
@@ -2376,7 +1420,6 @@ public class TestCarbonAllDataType
 
     @Test
     public void testFilterBoundedCharDatatypeForLocalDic() throws SQLException, IOException {
-        hetuServer.execute("drop table if exists testdb.boundedcharlocaldic");
         hetuServer.execute("CREATE TABLE testdb.boundedcharlocaldic(id int, name char(7))");
         writeSchemaFileForLocalDic("boundedcharlocaldic");
         hetuServer.execute("INSERT INTO testdb.boundedcharlocaldic VALUES(1, 'akash'),(2, 'anubav'),(3, 'bhavya'),(4, 'amit   ')");
@@ -2457,7 +1500,6 @@ public class TestCarbonAllDataType
     public void testCheckCreateTablePartitionByNotSupported() throws SQLException
     {
         try {
-            hetuServer.execute("drop table if exists testdb.partitiontesttable");
             hetuServer.execute("CREATE TABLE testdb.partitiontesttable (a int, b int , c int , d int ) WITH (partitioned_by = ARRAY['c', 'd'])");
         }
         catch (Exception e) {
@@ -2474,8 +1516,6 @@ public class TestCarbonAllDataType
     public void testCheckCreateTableAsPartitionByNotSupported() throws SQLException
     {
         try {
-            hetuServer.execute("drop table if exists testdb.partitiontesttable1");
-            hetuServer.execute("drop table if exists testdb.partitiontesttable2");
             hetuServer.execute("CREATE TABLE testdb.partitiontesttable1 (a int, b int , c int , d int )");
             hetuServer.execute("CREATE TABLE testdb.partitiontesttable2 WITH (partitioned_by = ARRAY['c', 'd']) AS SELECT *  FROM  testdb.partitiontesttable1");
         }
@@ -2491,59 +1531,4 @@ public class TestCarbonAllDataType
         assertEquals("true", "false");
     }
 
-    @Test
-    public void test_writer_count() throws SQLException
-    {
-        hetuServer.execute("set session task_writer_count=32");
-
-        hetuServer.execute("CREATE TABLE testdb.testWriterCount_32(orderkey int, orderstatus STRING, totalprice double, orderdate date)");
-        hetuServer.execute("INSERT INTO testdb.testWriterCount_32 VALUES(10,'SUCCESS', 125.15, DATE'2919-05-17')");
-        hetuServer.execute("INSERT INTO testdb.testWriterCount_32 VALUES(20,'SUCCESS', 125.15, DATE'2919-05-17')");
-        hetuServer.execute("INSERT INTO testdb.testWriterCount_32 VALUES(30,'SUCCESS', 125.15, DATE'2919-05-17')");
-
-        hetuServer.execute("INSERT INTO testdb.testWriterCount_32 SELECT * FROM testdb.testWriterCount_32");
-        verifyRowCount("testdb.testWriterCount_32", 6);
-
-        hetuServer.execute("INSERT INTO testdb.testWriterCount_32 SELECT * FROM testdb.testWriterCount_32");
-        verifyRowCount("testdb.testWriterCount_32", 12);
-
-        hetuServer.execute("INSERT INTO testdb.testWriterCount_32 SELECT * FROM testdb.testWriterCount_32");
-        verifyRowCount("testdb.testWriterCount_32", 24);
-
-        String filePath = storePath + "/carbon.store/testdb/testwritercount_32";
-        try {
-            hetuServer.execute("VACUUM TABLE testdb.testWriterCount_32 AND WAIT");
-            assertTrue(FileFactory.isFileExist(filePath + "/Fact/Part0/Segment_0.1"));
-        }
-        catch (IOException e) {
-            assertTrue(false, "Unable to read file from table path");
-        }
-        finally {
-            hetuServer.execute("drop table if exists testdb.testWriterCount_32");
-            hetuServer.execute("set session task_writer_count=1");
-        }
-    }
-
-    private void verifyRowCount(String tableName, int rowCount) throws SQLException
-    {
-        String query = String.format("SELECT COUNT(*) AS result FROM %s", tableName);
-        List<Map<String, Object>>  actualResult = hetuServer.executeQuery(query);
-        List<Map<String, Object>>  expectedResult = new ArrayList<Map<String, Object>>() {{
-            add(new HashMap<String, Object>() {{    put("result", rowCount); }});
-        }};
-        Assert.assertEquals(actualResult.toString(), expectedResult.toString());
-    }
-
-    private TableInfo getTableInfoFromSchemaFile(String tableName)
-    {
-        AbsoluteTableIdentifier identifier = AbsoluteTableIdentifier.from(storePath + "/carbon.store/testdb/" + tableName, "testdb", tableName);
-        TableInfo tableInfo = null;
-        try {
-            tableInfo = SchemaReader.getTableInfo(identifier);
-        }
-        catch (IOException e) {
-            throw new PrestoException(GENERIC_INTERNAL_ERROR, "Unable to read schema file", e);
-        }
-        return tableInfo;
-    }
 }

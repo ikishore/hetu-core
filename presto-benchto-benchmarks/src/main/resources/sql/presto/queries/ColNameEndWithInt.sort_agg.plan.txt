@@ -1,6 +1,0 @@
-remote exchange (GATHER, SINGLE, [])
-    final hashaggregation over (data_1)
-        local exchange (GATHER, SINGLE, [])
-            remote exchange (REPARTITION, HASH, ["data_1"])
-                partial hashaggregation over (data_1)
-                    scan sortwithcolnameendwithint

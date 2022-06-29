@@ -23,6 +23,7 @@ import io.prestosql.type.TypeUtils;
 
 import java.util.List;
 import java.util.Optional;
+import java.util.Random;
 
 import static com.google.common.base.Preconditions.checkArgument;
 import static io.prestosql.RowPageBuilder.rowPageBuilder;
@@ -77,6 +78,51 @@ public class RowPagesBuilder
 
         pageBreak();
         Page page = SequencePageBuilder.createSequencePage(types, length, initialValues);
+        pages.add(page);
+        return this;
+    }
+
+    public RowPagesBuilder addSequencePageShared(int length, Random rnd, int... initialValues)
+    {
+        checkArgument(length > 0, "length must be at least 1");
+        requireNonNull(initialValues, "initialValues is null");
+        checkArgument(initialValues.length == types.size(), "Expected %s initialValues, but got %s", types.size(), initialValues.length);
+        checkArgument(initialValues[initialValues.length - 1] >= 1, "query set size must be at least 1");
+        checkArgument(initialValues[initialValues.length - 1] < 64, "query set size must be less than 64 currently");
+        checkArgument(types.get(initialValues.length - 1).equals(BigintType.BIGINT), "query set type needs to have 64 bits currently");
+
+        pageBreak();
+        Page page = SequencePageBuilder.createSequencePageShared(types, length, rnd, initialValues);
+        pages.add(page);
+        return this;
+    }
+
+    public RowPagesBuilder addSequenceUniformPageShared(int length, int initial, Random rnd, Long range, int numberOfQueries, boolean randomSet)
+    {
+        checkArgument(length > 0, "length must be at least 1");
+
+        pageBreak();
+        Page page = SequencePageBuilder.createSequenceUniformPageShared(types, length, initial, rnd, range, numberOfQueries, randomSet);
+        pages.add(page);
+        return this;
+    }
+
+    public RowPagesBuilder addSequenceProbablisticPageShared(int length, int initial, Random rnd, int numberOfQueries, double probability)
+    {
+        checkArgument(length > 0, "length must be at least 1");
+
+        pageBreak();
+        Page page = SequencePageBuilder.createSequenceProbabilisticPageShared(types, length, initial, rnd, numberOfQueries, probability);
+        pages.add(page);
+        return this;
+    }
+
+    public RowPagesBuilder addUniformPageShared(int length, Random rnd, Long range, int numberOfQueries, boolean randomSet)
+    {
+        checkArgument(length > 0, "length must be at least 1");
+
+        pageBreak();
+        Page page = SequencePageBuilder.createUniformPageShared(types, length, rnd, range, numberOfQueries, randomSet);
         pages.add(page);
         return this;
     }

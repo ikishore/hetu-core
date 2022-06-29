@@ -13,16 +13,10 @@
  */
 package io.prestosql.operator.aggregation.state;
 
-import io.airlift.slice.Slices;
 import io.airlift.stats.cardinality.HyperLogLog;
 import io.prestosql.array.ObjectBigArray;
 import io.prestosql.spi.function.AccumulatorStateFactory;
-import io.prestosql.spi.snapshot.BlockEncodingSerdeProvider;
-import io.prestosql.spi.snapshot.Restorable;
 import org.openjdk.jol.info.ClassLayout;
-
-import java.io.Serializable;
-import java.util.function.Function;
 
 import static java.util.Objects.requireNonNull;
 
@@ -91,39 +85,10 @@ public class HyperLogLogStateFactory
         {
             return INSTANCE_SIZE + size + hlls.sizeOf();
         }
-
-        @Override
-        public Object capture(BlockEncodingSerdeProvider serdeProvider)
-        {
-            GroupedHyperLogLogStateState myState = new GroupedHyperLogLogStateState();
-            Function<Object, Object> hllsCapture = content -> ((HyperLogLog) content).serialize().getBytes();
-            myState.hlls = hlls.capture(hllsCapture);
-            myState.baseState = super.capture(serdeProvider);
-            myState.size = size;
-            return myState;
-        }
-
-        @Override
-        public void restore(Object state, BlockEncodingSerdeProvider serdeProvider)
-        {
-            GroupedHyperLogLogStateState myState = (GroupedHyperLogLogStateState) state;
-            Function<Object, Object> hllsRestore = content -> HyperLogLog.newInstance(Slices.wrappedBuffer((byte[]) content));
-            this.hlls.restore(hllsRestore, myState.hlls);
-            this.size = myState.size;
-            super.restore(myState.baseState, serdeProvider);
-        }
-
-        private static class GroupedHyperLogLogStateState
-                implements Serializable
-        {
-            private Object hlls;
-            private long size;
-            private Object baseState;
-        }
     }
 
     public static class SingleHyperLogLogState
-            implements HyperLogLogState, Restorable
+            implements HyperLogLogState
     {
         private static final int INSTANCE_SIZE = ClassLayout.parseClass(SingleHyperLogLogState.class).instanceSize();
         private HyperLogLog hll;
@@ -154,26 +119,6 @@ public class HyperLogLogStateFactory
                 estimatedSize += hll.estimatedInMemorySize();
             }
             return estimatedSize;
-        }
-
-        @Override
-        public Object capture(BlockEncodingSerdeProvider serdeProvider)
-        {
-            if (this.hll != null) {
-                return this.hll.serialize().getBytes();
-            }
-            return null;
-        }
-
-        @Override
-        public void restore(Object state, BlockEncodingSerdeProvider serdeProvider)
-        {
-            if (state != null) {
-                this.hll = HyperLogLog.newInstance(Slices.wrappedBuffer((byte[]) state));
-            }
-            else {
-                this.hll = null;
-            }
         }
     }
 }

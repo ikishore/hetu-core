@@ -17,11 +17,9 @@ package io.hetu.core.eventlistener.listeners;
 import io.airlift.log.Logger;
 import io.hetu.core.eventlistener.HetuEventListenerConfig;
 import io.hetu.core.eventlistener.util.EventUtility;
-import io.hetu.core.eventlistener.util.HetuLogUtil;
 import io.hetu.core.eventlistener.util.ListenerErrorCode;
 import io.prestosql.spi.PrestoException;
 import io.prestosql.spi.eventlistener.QueryCompletedEvent;
-import io.prestosql.spi.eventlistener.QueryContext;
 import io.prestosql.spi.eventlistener.QueryCreatedEvent;
 import io.prestosql.spi.eventlistener.SplitCompletedEvent;
 
@@ -50,13 +48,13 @@ class QueryEventLogger
 
     private static java.util.logging.Logger createLogger(Path filePath, int limit, int count)
     {
-        java.util.logging.Logger localLogger = java.util.logging.Logger.getLogger(QueryEventLogger.class.getName());
+        java.util.logging.Logger logger = java.util.logging.Logger.getLogger(QueryEventLogger.class.getName());
         try {
             FileHandler fileHandler = new FileHandler(filePath.toAbsolutePath().toString(), limit, count, true);
             fileHandler.setFormatter(new SimpleFormatter());
-            localLogger.addHandler(fileHandler);
-            localLogger.setUseParentHandlers(false);
-            return localLogger;
+            logger.addHandler(fileHandler);
+            logger.setUseParentHandlers(false);
+            return logger;
         }
         catch (IOException ex) {
             throw new PrestoException(ListenerErrorCode.LOCAL_FILE_FILESYSTEM_ERROR,
@@ -67,18 +65,12 @@ class QueryEventLogger
     @Override
     protected void onQueryCreatedEvent(QueryCreatedEvent queryCreatedEvent)
     {
-        QueryContext queryContext = queryCreatedEvent.getContext();
-        java.util.logging.Logger log = HetuLogUtil.getLoggerByName(queryContext.getUser(), "INFO", HetuLogUtil.AuditType.Sql);
-        log.info(EventUtility.toString(queryCreatedEvent));
         logger.info(EventUtility.toString(queryCreatedEvent));
     }
 
     @Override
     protected void onQueryCompletedEvent(QueryCompletedEvent queryCompletedEvent)
     {
-        QueryContext queryContext = queryCompletedEvent.getContext();
-        java.util.logging.Logger log = HetuLogUtil.getLoggerByName(queryContext.getUser(), "INFO", HetuLogUtil.AuditType.Sql);
-        log.info(EventUtility.toString(queryCompletedEvent));
         logger.info(EventUtility.toString(queryCompletedEvent));
     }
 

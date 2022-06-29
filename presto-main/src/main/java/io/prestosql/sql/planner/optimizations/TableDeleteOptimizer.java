@@ -98,9 +98,8 @@ public class TableDeleteOptimizer
                     Iterables.getOnlyElement(node.getOutputSymbols()));
         }
 
-        private static <T> Optional<T> findNode(PlanNode inputSource, Class<T> clazz)
+        private static <T> Optional<T> findNode(PlanNode source, Class<T> clazz)
         {
-            PlanNode source = inputSource;
             while (true) {
                 // allow any chain of linear exchanges
                 if (source instanceof ExchangeNode) {

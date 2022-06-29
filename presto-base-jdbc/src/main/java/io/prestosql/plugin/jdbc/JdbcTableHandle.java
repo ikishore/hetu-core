@@ -21,11 +21,9 @@ import io.prestosql.spi.connector.ColumnHandle;
 import io.prestosql.spi.connector.ConnectorTableHandle;
 import io.prestosql.spi.connector.SchemaTableName;
 import io.prestosql.spi.predicate.TupleDomain;
-import io.prestosql.spi.type.Type;
 
 import javax.annotation.Nullable;
 
-import java.util.List;
 import java.util.Objects;
 import java.util.Optional;
 import java.util.OptionalLong;
@@ -45,8 +43,6 @@ public class JdbcTableHandle
     private final OptionalLong limit;
     // Hetu: If query is push down use pushDown sql to build sql and use columnHandles directly
     private final Optional<GeneratedSql> generatedSql;
-    private boolean deleteOrUpdate;
-    private List<Type> updatedColumnTypes;
 
     public JdbcTableHandle(SchemaTableName schemaTableName, @Nullable String catalogName, @Nullable String schemaName, String tableName)
     {
@@ -71,20 +67,7 @@ public class JdbcTableHandle
             TupleDomain<ColumnHandle> constraint,
             OptionalLong limit)
     {
-        this(schemaTableName, catalogName, schemaName, tableName, constraint, limit, Optional.empty(), false, null);
-    }
-
-    public JdbcTableHandle(
-            SchemaTableName schemaTableName,
-            @Nullable String catalogName,
-            @Nullable String schemaName,
-            String tableName,
-            TupleDomain<ColumnHandle> constraint,
-            OptionalLong limit,
-            Optional<GeneratedSql> generatedSql,
-            boolean deleteOrUpdate)
-    {
-        this(schemaTableName, catalogName, schemaName, tableName, constraint, limit, generatedSql, deleteOrUpdate, null);
+        this(schemaTableName, catalogName, schemaName, tableName, constraint, limit, Optional.empty());
     }
 
     @JsonCreator
@@ -95,9 +78,7 @@ public class JdbcTableHandle
             @JsonProperty("tableName") String tableName,
             @JsonProperty("constraint") TupleDomain<ColumnHandle> constraint,
             @JsonProperty("limit") OptionalLong limit,
-            @JsonProperty("sql") Optional<GeneratedSql> generatedSql,
-            @JsonProperty("deleteOrUpdate") boolean deleteOrUpdate,
-            @JsonProperty("updatedColumnTypes") @Nullable List<Type> updatedColumnTypes)
+            @JsonProperty("sql") Optional<GeneratedSql> generatedSql)
     {
         this.schemaTableName = requireNonNull(schemaTableName, "schemaTableName is null");
         this.catalogName = catalogName;
@@ -106,8 +87,6 @@ public class JdbcTableHandle
         this.constraint = requireNonNull(constraint, "constraint is null");
         this.limit = requireNonNull(limit, "limit is null");
         this.generatedSql = generatedSql;
-        this.deleteOrUpdate = deleteOrUpdate;
-        this.updatedColumnTypes = updatedColumnTypes;
     }
 
     @JsonProperty
@@ -154,29 +133,6 @@ public class JdbcTableHandle
         return limit;
     }
 
-    @JsonProperty
-    public Boolean getDeleteOrUpdate()
-    {
-        return deleteOrUpdate;
-    }
-
-    public void setDeleteOrUpdate(boolean deleteOrUpdate)
-    {
-        this.deleteOrUpdate = deleteOrUpdate;
-    }
-
-    @JsonProperty
-    @Nullable
-    public List<Type> getUpdatedColumnTypes()
-    {
-        return updatedColumnTypes;
-    }
-
-    public void setUpdatedColumnTypes(List<Type> updatedColumnTypes)
-    {
-        this.updatedColumnTypes = updatedColumnTypes;
-    }
-
     /**
      * Hetu DC Connector uses {@link JdbcTableHandle}.
      * Overriding this method makes all JdbcConnectors using {@link JdbcTableHandle}
@@ -208,8 +164,7 @@ public class JdbcTableHandle
     {
         JdbcTableHandle oldJdbcTableHandle = (JdbcTableHandle) oldConnectorTableHandle;
         return new JdbcTableHandle(schemaTableName, catalogName, schemaName, tableName, oldJdbcTableHandle.getConstraint(),
-                oldJdbcTableHandle.getLimit(), oldJdbcTableHandle.getGeneratedSql(),
-                oldJdbcTableHandle.getDeleteOrUpdate(), oldJdbcTableHandle.getUpdatedColumnTypes());
+                oldJdbcTableHandle.getLimit(), oldJdbcTableHandle.getGeneratedSql());
     }
 
     @Override

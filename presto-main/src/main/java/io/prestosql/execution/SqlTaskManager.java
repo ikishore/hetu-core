@@ -18,7 +18,6 @@ import com.google.common.cache.CacheBuilder;
 import com.google.common.cache.CacheLoader;
 import com.google.common.cache.LoadingCache;
 import com.google.common.collect.ImmutableList;
-import com.google.common.collect.Sets;
 import com.google.common.util.concurrent.ListenableFuture;
 import io.airlift.concurrent.ThreadPoolExecutorMBean;
 import io.airlift.log.Logger;
@@ -42,7 +41,7 @@ import io.prestosql.memory.NodeMemoryConfig;
 import io.prestosql.memory.QueryContext;
 import io.prestosql.metadata.Metadata;
 import io.prestosql.operator.CommonTableExecutionContext;
-import io.prestosql.snapshot.RecoveryUtils;
+import io.prestosql.operator.RouterContext;
 import io.prestosql.spi.PrestoException;
 import io.prestosql.spi.QueryId;
 import io.prestosql.spi.plan.PlanNodeId;
@@ -65,15 +64,15 @@ import java.util.List;
 import java.util.Map;
 import java.util.Optional;
 import java.util.OptionalInt;
-import java.util.Set;
 import java.util.concurrent.ConcurrentHashMap;
-import java.util.concurrent.ExecutionException;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.ScheduledExecutorService;
 import java.util.concurrent.ThreadPoolExecutor;
 import java.util.concurrent.TimeUnit;
 
 import static com.google.common.base.Preconditions.checkArgument;
+import static com.google.common.base.Predicates.notNull;
+import static com.google.common.collect.Iterables.filter;
 import static com.google.common.collect.Iterables.transform;
 import static io.airlift.concurrent.Threads.threadsNamed;
 import static io.prestosql.SystemSessionProperties.resourceOvercommit;
@@ -103,20 +102,10 @@ public class SqlTaskManager
 
     private final LocalMemoryManager localMemoryManager;
     private final LoadingCache<QueryId, QueryContext> queryContexts;
-    // Snapshot: Keep track of which task instances are available.
-    // Only requests with an available instance id are answered.
-    // Can't rely on task-id only, because tasks with the same id may be scheduled multiple times.
-    private final Map<String, SqlTask> currentTaskInstanceIds = new ConcurrentHashMap<>();
-    // since seen is only used inside .compute(), it doesn't need any multi-thread protection
-    private final Set<String> seenInstanceIds = Sets.newConcurrentHashSet();
-    // updated alongside currentTaskInstanceIds. Used mainly for external API calls where the instanceId
-    //  will be null.
-    private final Map<TaskId, SqlTask> currentTaskIds = new ConcurrentHashMap<>();
+    private final LoadingCache<TaskId, SqlTask> tasks;
 
     private final SqlTaskIoStats cachedStats = new SqlTaskIoStats();
     private final SqlTaskIoStats finishedTaskStats = new SqlTaskIoStats();
-
-    private final RecoveryUtils recoveryUtils;
 
     @GuardedBy("this")
     private long currentMemoryPoolAssignmentVersion;
@@ -125,14 +114,8 @@ public class SqlTaskManager
 
     private final CounterStat failedTasks = new CounterStat();
 
-    private static final Map<String, CommonTableExecutionContext> cteCtx = new ConcurrentHashMap<>();
-
-    // fields only used in creation of new empty tasks
-    private final LocationFactory locationFactory;
-    private final NodeInfo nodeInfo;
-    private final SqlTaskExecutionFactory sqlTaskExecutionFactory;
-    private final DataSize maxBufferSize;
-    private final Metadata metadata;
+    private static Map<String, CommonTableExecutionContext> cteCtx = new ConcurrentHashMap<>();
+    private static Map<String, RouterContext> routerCtx = new ConcurrentHashMap<>();
 
     @Inject
     public SqlTaskManager(
@@ -148,15 +131,14 @@ public class SqlTaskManager
             LocalSpillManager localSpillManager,
             NodeSpillConfig nodeSpillConfig,
             GcMonitor gcMonitor,
-            Metadata metadata,
-            RecoveryUtils recoveryUtils)
+            Metadata metadata)
     {
         requireNonNull(nodeInfo, "nodeInfo is null");
         requireNonNull(config, "config is null");
         infoCacheTime = config.getInfoMaxAge();
         clientTimeout = config.getClientTimeout();
 
-        DataSize localMaxBufferSize = config.getSinkMaxBufferSize();
+        DataSize maxBufferSize = config.getSinkMaxBufferSize();
 
         taskNotificationExecutor = newFixedThreadPool(config.getTaskNotificationThreads(), threadsNamed("task-notification-%s"));
         taskNotificationExecutorMBean = new ThreadPoolExecutorMBean((ThreadPoolExecutor) taskNotificationExecutor);
@@ -164,76 +146,31 @@ public class SqlTaskManager
         this.taskManagementExecutor = requireNonNull(taskManagementExecutor, "taskManagementExecutor cannot be null").getExecutor();
         this.driverYieldExecutor = newScheduledThreadPool(config.getTaskYieldThreads(), threadsNamed("task-yield-%s"));
 
-        SqlTaskExecutionFactory localSqlTaskExecutionFactory = new SqlTaskExecutionFactory(taskNotificationExecutor, taskExecutor, planner, splitMonitor, config, metadata);
+        SqlTaskExecutionFactory sqlTaskExecutionFactory = new SqlTaskExecutionFactory(taskNotificationExecutor, taskExecutor, planner, splitMonitor, config);
 
         this.localMemoryManager = requireNonNull(localMemoryManager, "localMemoryManager is null");
         DataSize maxQueryUserMemoryPerNode = nodeMemoryConfig.getMaxQueryMemoryPerNode();
         DataSize maxQueryTotalMemoryPerNode = nodeMemoryConfig.getMaxQueryTotalMemoryPerNode();
         DataSize maxQuerySpillPerNode = nodeSpillConfig.getQueryMaxSpillPerNode();
 
-        this.recoveryUtils = requireNonNull(recoveryUtils, "recoveryUtils cannot be null");
         queryContexts = CacheBuilder.newBuilder().weakValues().build(CacheLoader.from(
-                queryId -> createQueryContext(queryId, localMemoryManager, nodeMemoryConfig, localSpillManager, gcMonitor, maxQueryUserMemoryPerNode, maxQueryTotalMemoryPerNode, maxQuerySpillPerNode, recoveryUtils)));
+                queryId -> createQueryContext(queryId, localMemoryManager, nodeMemoryConfig, localSpillManager, gcMonitor, maxQueryUserMemoryPerNode, maxQueryTotalMemoryPerNode, maxQuerySpillPerNode)));
 
-        this.locationFactory = locationFactory;
-        this.nodeInfo = nodeInfo;
-        this.sqlTaskExecutionFactory = localSqlTaskExecutionFactory;
-        this.maxBufferSize = localMaxBufferSize;
-        this.metadata = metadata;
-        // currentTaskInstanceIds and seenInstanceIds are already initialized
-    }
-
-    private SqlTask getTaskOrCreate(String expectedTaskInstanceId, TaskId taskId)
-    {
-        // if the instanceid is null, then we know the call is external
-        if (expectedTaskInstanceId == null) {
-            return currentTaskIds.get(taskId);
-        }
-        // using compute is more safe than a "traditional" approach in case multiple threads are on this line
-        return currentTaskInstanceIds.compute(expectedTaskInstanceId, (id, task) -> {
-            if (task != null) {
-                return task;
-            }
-            if (seenInstanceIds.contains(id)) {
-                // case where task does not exist, but we've seen it before. Then, don't revive
-                return null;
-            }
-            // task does not exist, and it is the first time we've seen it. So, we want to create.
-            seenInstanceIds.add(id);
-            SqlTask ret = createSqlTask(
-                    taskId,
-                    id,
-                    locationFactory.createLocalTaskLocation(taskId),
-                    nodeInfo.getNodeId(),
-                    queryContexts.getUnchecked(taskId.getQueryId()),
-                    sqlTaskExecutionFactory,
-                    taskNotificationExecutor,
-                    sqlTask -> {
-                        finishedTaskStats.merge(sqlTask.getIoStats());
-                        return null;
-                    },
-                    maxBufferSize,
-                    failedTasks,
-                    metadata);
-            currentTaskIds.compute(taskId, (dummy, existingTask) -> {
-                if (existingTask == null) {
-                    return ret;
-                }
-                // this has to be the same type (long) as retryCount in QuerySnapshotManager.java
-                long oldCount = Long.parseLong(existingTask.getTaskInstanceId().split("-")[0]);
-                long newCount = Long.parseLong(id.split("-")[0]);
-                // we may have two threads trying to add to currentTaskIds at the same time. If we receive the
-                //  request to add an older task after a newer task, we want to ignore it because we only care about
-                //  the newest version of the task. The version is obtained from the instance id, before the "-"
-                if (oldCount < newCount) {
-                    return ret;
-                }
-                else {
-                    return existingTask;
-                }
-            });
-            return ret;
-        });
+        tasks = CacheBuilder.newBuilder().build(CacheLoader.from(
+                taskId -> createSqlTask(
+                        taskId,
+                        locationFactory.createLocalTaskLocation(taskId),
+                        nodeInfo.getNodeId(),
+                        queryContexts.getUnchecked(taskId.getQueryId()),
+                        sqlTaskExecutionFactory,
+                        taskNotificationExecutor,
+                        sqlTask -> {
+                            finishedTaskStats.merge(sqlTask.getIoStats());
+                            return null;
+                        },
+                        maxBufferSize,
+                        failedTasks,
+                        metadata)));
     }
 
     private QueryContext createQueryContext(
@@ -244,8 +181,7 @@ public class SqlTaskManager
             GcMonitor gcMonitor,
             DataSize maxQueryUserMemoryPerNode,
             DataSize maxQueryTotalMemoryPerNode,
-            DataSize maxQuerySpillPerNode,
-            RecoveryUtils recoveryUtils)
+            DataSize maxQuerySpillPerNode)
     {
         return new QueryContext(
                 queryId,
@@ -256,8 +192,7 @@ public class SqlTaskManager
                 taskNotificationExecutor,
                 driverYieldExecutor,
                 maxQuerySpillPerNode,
-                localSpillManager.getSpillSpaceTracker(),
-                recoveryUtils);
+                localSpillManager.getSpillSpaceTracker());
     }
 
     @Override
@@ -320,7 +255,7 @@ public class SqlTaskManager
     public void close()
     {
         boolean taskCanceled = false;
-        for (SqlTask task : currentTaskInstanceIds.values()) {
+        for (SqlTask task : tasks.asMap().values()) {
             if (task.getTaskStatus().getState().isDone()) {
                 continue;
             }
@@ -359,78 +294,69 @@ public class SqlTaskManager
         return failedTasks;
     }
 
-    @Override
     public List<SqlTask> getAllTasks()
     {
-        return ImmutableList.copyOf(currentTaskIds.values());
+        return ImmutableList.copyOf(tasks.asMap().values());
     }
 
     @Override
     public List<TaskInfo> getAllTaskInfo()
     {
-        return ImmutableList.copyOf(transform(currentTaskIds.values(), SqlTask::getTaskInfo));
+        return ImmutableList.copyOf(transform(tasks.asMap().values(), SqlTask::getTaskInfo));
     }
 
     @Override
-    public TaskInfo getTaskInfo(TaskId taskId, String expectedTaskInstanceId)
+    public TaskInfo getTaskInfo(TaskId taskId)
     {
         requireNonNull(taskId, "taskId is null");
 
-        SqlTask sqlTask = getTaskOrCreate(expectedTaskInstanceId, taskId);
-        if (sqlTask == null) {
-            return null;
-        }
-
+        SqlTask sqlTask = tasks.getUnchecked(taskId);
         sqlTask.recordHeartbeat();
         return sqlTask.getTaskInfo();
     }
 
     @Override
-    public TaskStatus getTaskStatus(TaskId taskId, String expectedTaskInstanceId)
+    public TaskStatus getTaskStatus(TaskId taskId)
     {
         requireNonNull(taskId, "taskId is null");
 
-        SqlTask sqlTask = getTaskOrCreate(expectedTaskInstanceId, taskId);
-        if (sqlTask == null) {
-            return null;
-        }
-
+        SqlTask sqlTask = tasks.getUnchecked(taskId);
         sqlTask.recordHeartbeat();
         return sqlTask.getTaskStatus();
     }
 
     @Override
-    public ListenableFuture<TaskInfo> getTaskInfo(TaskId taskId, TaskState currentState, String expectedTaskInstanceId)
+    public ListenableFuture<TaskInfo> getTaskInfo(TaskId taskId, TaskState currentState)
     {
         requireNonNull(taskId, "taskId is null");
         requireNonNull(currentState, "currentState is null");
 
-        SqlTask sqlTask = getTaskOrCreate(expectedTaskInstanceId, taskId);
-        if (sqlTask == null) {
-            return null;
-        }
-
+        SqlTask sqlTask = tasks.getUnchecked(taskId);
         sqlTask.recordHeartbeat();
         return sqlTask.getTaskInfo(currentState);
     }
 
     @Override
-    public ListenableFuture<TaskStatus> getTaskStatus(TaskId taskId, TaskState currentState, String expectedTaskInstanceId)
+    public String getTaskInstanceId(TaskId taskId)
+    {
+        SqlTask sqlTask = tasks.getUnchecked(taskId);
+        sqlTask.recordHeartbeat();
+        return sqlTask.getTaskInstanceId();
+    }
+
+    @Override
+    public ListenableFuture<TaskStatus> getTaskStatus(TaskId taskId, TaskState currentState)
     {
         requireNonNull(taskId, "taskId is null");
         requireNonNull(currentState, "currentState is null");
 
-        SqlTask sqlTask = getTaskOrCreate(expectedTaskInstanceId, taskId);
-        if (sqlTask == null) {
-            return null;
-        }
-
+        SqlTask sqlTask = tasks.getUnchecked(taskId);
         sqlTask.recordHeartbeat();
         return sqlTask.getTaskStatus(currentState);
     }
 
     @Override
-    public TaskInfo updateTask(Session session, TaskId taskId, Optional<PlanFragment> fragment, List<TaskSource> sources, OutputBuffers outputBuffers, OptionalInt totalPartitions, Optional<PlanNodeId> consumer, String expectedTaskInstanceId)
+    public TaskInfo updateTask(Session session, TaskId taskId, Optional<PlanFragment> fragment, List<TaskSource> sources, OutputBuffers outputBuffers, OptionalInt totalPartitions, Optional<PlanNodeId> consumer)
     {
         requireNonNull(session, "session is null");
         requireNonNull(taskId, "taskId is null");
@@ -438,155 +364,77 @@ public class SqlTaskManager
         requireNonNull(sources, "sources is null");
         requireNonNull(outputBuffers, "outputBuffers is null");
 
-        SqlTask sqlTask = getTaskOrCreate(expectedTaskInstanceId, taskId);
-        if (sqlTask == null) {
-            return null;
-        }
-
         if (resourceOvercommit(session)) {
             // TODO: This should have been done when the QueryContext was created. However, the session isn't available at that point.
             queryContexts.getUnchecked(taskId.getQueryId()).setResourceOvercommit();
         }
+
+        //System.out.println("TaskManager:" + this);
+
+        SqlTask sqlTask = tasks.getUnchecked(taskId);
         sqlTask.recordHeartbeat();
-        return sqlTask.updateTask(session, fragment, sources, outputBuffers, totalPartitions, consumer, cteCtx);
+        return sqlTask.updateTask(session, fragment, sources, outputBuffers, totalPartitions, consumer, cteCtx, routerCtx);
     }
 
     @Override
-    public ListenableFuture<BufferResult> getTaskResults(TaskId taskId, OutputBufferId bufferId, long startingSequenceId, DataSize maxSize, String expectedTaskInstanceId)
+    public ListenableFuture<BufferResult> getTaskResults(TaskId taskId, OutputBufferId bufferId, long startingSequenceId, DataSize maxSize)
     {
         requireNonNull(taskId, "taskId is null");
         requireNonNull(bufferId, "bufferId is null");
         checkArgument(startingSequenceId >= 0, "startingSequenceId is negative");
         requireNonNull(maxSize, "maxSize is null");
 
-        SqlTask sqlTask = getTaskOrCreate(expectedTaskInstanceId, taskId);
-        if (sqlTask == null) {
-            return null;
-        }
-
-        return sqlTask.getTaskResults(bufferId, startingSequenceId, maxSize);
+        return tasks.getUnchecked(taskId).getTaskResults(bufferId, startingSequenceId, maxSize);
     }
 
     @Override
-    public void acknowledgeTaskResults(TaskId taskId, OutputBufferId bufferId, long sequenceId, String expectedTaskInstanceId)
+    public void acknowledgeTaskResults(TaskId taskId, OutputBufferId bufferId, long sequenceId)
     {
         requireNonNull(taskId, "taskId is null");
         requireNonNull(bufferId, "bufferId is null");
         checkArgument(sequenceId >= 0, "sequenceId is negative");
 
-        SqlTask sqlTask = getTaskOrCreate(expectedTaskInstanceId, taskId);
-        if (sqlTask == null) {
-            return;
-        }
-
-        sqlTask.acknowledgeTaskResults(bufferId, sequenceId);
+        tasks.getUnchecked(taskId).acknowledgeTaskResults(bufferId, sequenceId);
     }
 
     @Override
-    public TaskInfo abortTaskResults(TaskId taskId, OutputBufferId bufferId, String expectedTaskInstanceId)
+    public TaskInfo abortTaskResults(TaskId taskId, OutputBufferId bufferId)
     {
         requireNonNull(taskId, "taskId is null");
         requireNonNull(bufferId, "bufferId is null");
 
-        SqlTask sqlTask = getTaskOrCreate(expectedTaskInstanceId, taskId);
-        if (sqlTask == null) {
-            return null;
-        }
-
-        return sqlTask.abortTaskResults(bufferId);
+        return tasks.getUnchecked(taskId).abortTaskResults(bufferId);
     }
 
     @Override
-    public TaskInfo suspendTask(TaskId taskId, TaskState targetState, String expectedTaskInstanceId)
+    public TaskInfo cancelTask(TaskId taskId)
     {
         requireNonNull(taskId, "taskId is null");
-        requireNonNull(targetState, "targetState is null");
 
-        SqlTask sqlTask = getTaskOrCreate(expectedTaskInstanceId, taskId);
-        if (sqlTask == null) {
-            return null;
-        }
-
-        TaskState oldState = sqlTask.getTaskStatus().getState();
-        TaskInfo result = sqlTask.suspend(targetState);
-
-        log.debug("Suspending task %s (instanceId %s). Old state: %s; new state: %s", taskId, expectedTaskInstanceId, oldState, targetState);
-        return result;
+        return tasks.getUnchecked(taskId).cancel();
     }
 
     @Override
-    public TaskInfo resumeTask(TaskId taskId, TaskState targetState, String expectedTaskInstanceId)
+    public TaskInfo abortTask(TaskId taskId)
     {
         requireNonNull(taskId, "taskId is null");
-        requireNonNull(targetState, "targetState is null");
 
-        SqlTask sqlTask = getTaskOrCreate(expectedTaskInstanceId, taskId);
-        if (sqlTask == null) {
-            return null;
-        }
-
-        TaskState oldState = sqlTask.getTaskStatus().getState();
-        TaskInfo result = sqlTask.resume(targetState);
-
-        log.debug("Resuming task %s (instanceId %s). Old state: %s; new state: %s", taskId, expectedTaskInstanceId, oldState, targetState);
-        return result;
-    }
-
-    @Override
-    public TaskInfo cancelTask(TaskId taskId, TaskState targetState, String expectedTaskInstanceId)
-    {
-        requireNonNull(taskId, "taskId is null");
-        requireNonNull(targetState, "targetState is null");
-
-        SqlTask sqlTask = getTaskOrCreate(expectedTaskInstanceId, taskId);
-        if (sqlTask == null) {
-            return null;
-        }
-
-        TaskState oldState = sqlTask.getTaskStatus().getState();
-        TaskInfo result = sqlTask.cancel(targetState);
-
-        log.debug("Cancelling task %s (instanceId %s). Old state: %s; new state: %s", taskId, expectedTaskInstanceId, oldState, targetState);
-        if (targetState == TaskState.CANCELED_TO_RESUME) {
-            cleanupTaskToResume(taskId, sqlTask.getTaskInstanceId());
-        }
-        return result;
-    }
-
-    private void cleanupTaskToResume(TaskId taskId, String taskInstanceId)
-    {
-        try {
-            // Remove old task context, so that memory-context is not reused by newly scheduled tasks
-            queryContexts.get(taskId.getQueryId()).removeTaskContext(taskInstanceId);
-            // So new SqlTask object is created with new everything
-            SqlTask task = currentTaskInstanceIds.remove(taskInstanceId);
-            if (task != null) {
-                // only remove if it's the same task (not different instanceId or anything)
-                currentTaskIds.remove(task.getTaskId(), task);
-            }
-        }
-        catch (ExecutionException e) {
-            throw new RuntimeException(e);
-        }
+        return tasks.getUnchecked(taskId).abort();
     }
 
     public void removeOldTasks()
     {
         DateTime oldestAllowedTask = DateTime.now().minus(infoCacheTime.toMillis());
-        for (Map.Entry<String, SqlTask> entry : currentTaskInstanceIds.entrySet()) {
-            String instanceId = entry.getKey();
-            SqlTask task = entry.getValue();
-            TaskInfo taskInfo = task.getTaskInfo();
+        for (TaskInfo taskInfo : filter(transform(tasks.asMap().values(), SqlTask::getTaskInfo), notNull())) {
+            TaskId taskId = taskInfo.getTaskStatus().getTaskId();
             try {
                 DateTime endTime = taskInfo.getStats().getEndTime();
                 if (endTime != null && endTime.isBefore(oldestAllowedTask)) {
-                    currentTaskInstanceIds.remove(instanceId);
-                    // only remove if it's the same task (not different instanceId or anything)
-                    currentTaskIds.remove(task.getTaskId(), task);
+                    tasks.asMap().remove(taskId);
                 }
             }
             catch (RuntimeException e) {
-                log.warn(e, "Error while inspecting age of complete task with instanceId %s and taskId %s", instanceId, task.getTaskId());
+                log.warn(e, "Error while inspecting age of complete task %s", taskId);
             }
         }
     }
@@ -595,7 +443,7 @@ public class SqlTaskManager
     {
         DateTime now = DateTime.now();
         DateTime oldestAllowedHeartbeat = now.minus(clientTimeout.toMillis());
-        for (SqlTask sqlTask : currentTaskInstanceIds.values()) {
+        for (SqlTask sqlTask : tasks.asMap().values()) {
             try {
                 TaskInfo taskInfo = sqlTask.getTaskInfo();
                 TaskStatus taskStatus = taskInfo.getTaskStatus();
@@ -604,18 +452,12 @@ public class SqlTaskManager
                 }
                 DateTime lastHeartbeat = taskInfo.getLastHeartbeat();
                 if (lastHeartbeat != null && lastHeartbeat.isBefore(oldestAllowedHeartbeat)) {
-                    log.info("Failing abandoned task %s (instanceId %s)", taskStatus.getTaskId(), sqlTask.getTaskInstanceId());
-                    if (sqlTask.isRecoveryEnabled()) {
-                        // When a task is abandoned, to be safe, we cancel it and allow recovery.
-                        sqlTask.cancel(TaskState.CANCELED_TO_RESUME);
-                    }
-                    else {
-                        sqlTask.failed(new PrestoException(ABANDONED_TASK, format("Task %s has not been accessed since %s: currentTime %s", taskStatus.getTaskId(), lastHeartbeat, now)));
-                    }
+                    log.info("Failing abandoned task %s", taskStatus.getTaskId());
+                    sqlTask.failed(new PrestoException(ABANDONED_TASK, format("Task %s has not been accessed since %s: currentTime %s", taskStatus.getTaskId(), lastHeartbeat, now)));
                 }
             }
             catch (RuntimeException e) {
-                log.warn(e, "Error while inspecting age of task with instanceId %s and taskId %s", sqlTask.getTaskInstanceId(), sqlTask.getTaskId());
+                log.warn(e, "Error while inspecting age of task %s", sqlTask.getTaskId());
             }
         }
     }
@@ -633,7 +475,7 @@ public class SqlTaskManager
         // finishedTaskStats, and getting the stats from the task.  Since we have
         // already merged the final stats, we could miss the stats from this task
         // which would result in an under-count, but we will not get an over-count.
-        currentTaskInstanceIds.values().stream()
+        tasks.asMap().values().stream()
                 .filter(task -> !task.getTaskStatus().getState().isDone())
                 .forEach(task -> tempIoStats.merge(task.getIoStats()));
 
@@ -641,10 +483,10 @@ public class SqlTaskManager
     }
 
     @Override
-    public void addStateChangeListener(String instanceId, StateChangeListener<TaskState> stateChangeListener)
+    public void addStateChangeListener(TaskId taskId, StateChangeListener<TaskState> stateChangeListener)
     {
-        requireNonNull(instanceId, "instanceId is null");
-        currentTaskInstanceIds.get(instanceId).addStateChangeListener(stateChangeListener);
+        requireNonNull(taskId, "taskId is null");
+        tasks.getUnchecked(taskId).addStateChangeListener(stateChangeListener);
     }
 
     @VisibleForTesting

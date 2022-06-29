@@ -1,5 +1,5 @@
 /*
- * Copyright (C) 2018-2021. Huawei Technologies Co., Ltd. All rights reserved.
+ * Copyright (C) 2018-2020. Huawei Technologies Co., Ltd. All rights reserved.
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
  * You may obtain a copy of the License at
@@ -25,32 +25,22 @@ public class InsertCube
         extends Statement
 {
     private final QualifiedName cubeName;
-    private final Optional<Expression> where;
+    private final Expression where;
     private final List<Identifier> columns;
     private final Query query;
     private final boolean overwrite;
 
-    public InsertCube(QualifiedName cubeName, Optional<Expression> where, boolean overwrite)
-    {
-        this(cubeName, where, null, overwrite);
-    }
-
-    public InsertCube(NodeLocation location, QualifiedName cubeName, Optional<Expression> where, boolean overwrite)
-    {
-        this(location, cubeName, where, null, overwrite);
-    }
-
-    public InsertCube(QualifiedName cubeName, Optional<Expression> where, List<Identifier> columns, boolean overwrite)
+    public InsertCube(QualifiedName cubeName, Expression where, List<Identifier> columns, boolean overwrite)
     {
         this(cubeName, where, columns, overwrite, null);
     }
 
-    public InsertCube(NodeLocation location, QualifiedName cubeName, Optional<Expression> where, List<Identifier> columns, boolean overwrite)
+    public InsertCube(NodeLocation location, QualifiedName cubeName, Expression where, List<Identifier> columns, boolean overwrite)
     {
         this(location, cubeName, where, columns, overwrite, null);
     }
 
-    public InsertCube(QualifiedName cubeName, Optional<Expression> where, List<Identifier> columns, boolean overwrite, Query query)
+    public InsertCube(QualifiedName cubeName, Expression where, List<Identifier> columns, boolean overwrite, Query query)
     {
         super(Optional.empty());
         this.cubeName = cubeName;
@@ -60,7 +50,7 @@ public class InsertCube
         this.query = query;
     }
 
-    public InsertCube(NodeLocation location, QualifiedName cubeName, Optional<Expression> where, List<Identifier> columns, boolean overwrite, Query query)
+    public InsertCube(NodeLocation location, QualifiedName cubeName, Expression where, List<Identifier> columns, boolean overwrite, Query query)
     {
         super(Optional.of(location));
         this.cubeName = cubeName;
@@ -75,7 +65,7 @@ public class InsertCube
         return cubeName;
     }
 
-    public Optional<Expression> getWhere()
+    public Expression getWhere()
     {
         return where;
     }
@@ -136,7 +126,6 @@ public class InsertCube
         }
         InsertCube o = (InsertCube) obj;
         return Objects.equals(cubeName, o.cubeName) &&
-                Objects.equals(where, o.where) &&
-                Objects.equals(overwrite, o.overwrite);
+                Objects.equals(where, o.where);
     }
 }

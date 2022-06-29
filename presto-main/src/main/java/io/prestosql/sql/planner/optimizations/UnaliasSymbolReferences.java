@@ -24,6 +24,7 @@ import io.prestosql.Session;
 import io.prestosql.execution.warnings.WarningCollector;
 import io.prestosql.metadata.Metadata;
 import io.prestosql.spi.block.SortOrder;
+import io.prestosql.spi.function.Signature;
 import io.prestosql.spi.plan.AggregationNode;
 import io.prestosql.spi.plan.Assignments;
 import io.prestosql.spi.plan.CTEScanNode;
@@ -38,6 +39,7 @@ import io.prestosql.spi.plan.OrderingScheme;
 import io.prestosql.spi.plan.PlanNode;
 import io.prestosql.spi.plan.PlanNodeIdAllocator;
 import io.prestosql.spi.plan.ProjectNode;
+import io.prestosql.spi.plan.RouterNode;
 import io.prestosql.spi.plan.SetOperationNode;
 import io.prestosql.spi.plan.Symbol;
 import io.prestosql.spi.plan.TableScanNode;
@@ -45,7 +47,6 @@ import io.prestosql.spi.plan.TopNNode;
 import io.prestosql.spi.plan.UnionNode;
 import io.prestosql.spi.plan.ValuesNode;
 import io.prestosql.spi.plan.WindowNode;
-import io.prestosql.spi.relation.CallExpression;
 import io.prestosql.spi.relation.RowExpression;
 import io.prestosql.spi.relation.VariableReferenceExpression;
 import io.prestosql.sql.planner.ExpressionDeterminismEvaluator;
@@ -79,12 +80,9 @@ import io.prestosql.sql.planner.plan.SpatialJoinNode;
 import io.prestosql.sql.planner.plan.StatisticsWriterNode;
 import io.prestosql.sql.planner.plan.TableDeleteNode;
 import io.prestosql.sql.planner.plan.TableFinishNode;
-import io.prestosql.sql.planner.plan.TableUpdateNode;
 import io.prestosql.sql.planner.plan.TableWriterNode;
 import io.prestosql.sql.planner.plan.TopNRankingNumberNode;
 import io.prestosql.sql.planner.plan.UnnestNode;
-import io.prestosql.sql.planner.plan.UpdateIndexNode;
-import io.prestosql.sql.planner.plan.UpdateNode;
 import io.prestosql.sql.planner.plan.VacuumTableNode;
 import io.prestosql.sql.relational.Expressions;
 import io.prestosql.sql.relational.RowExpressionDeterminismEvaluator;
@@ -108,7 +106,6 @@ import static com.google.common.collect.ImmutableList.toImmutableList;
 import static com.google.common.collect.ImmutableSet.toImmutableSet;
 import static io.prestosql.spi.plan.JoinNode.Type.INNER;
 import static io.prestosql.sql.planner.SymbolUtils.toSymbolReference;
-import static io.prestosql.sql.relational.Expressions.call;
 import static io.prestosql.sql.relational.OriginalExpressionUtils.castToExpression;
 import static io.prestosql.sql.relational.OriginalExpressionUtils.castToRowExpression;
 import static io.prestosql.sql.relational.OriginalExpressionUtils.isExpression;
@@ -224,19 +221,11 @@ public class UnaliasSymbolReferences
             for (Map.Entry<Symbol, WindowNode.Function> entry : node.getWindowFunctions().entrySet()) {
                 Symbol symbol = entry.getKey();
 
-                CallExpression callExpression = entry.getValue().getFunctionCall();
+                Signature signature = entry.getValue().getSignature();
                 List<RowExpression> arguments = canonicalize(entry.getValue().getArguments());
                 WindowNode.Frame canonicalFrame = canonicalize(entry.getValue().getFrame());
 
-                functions.put(canonicalize(symbol),
-                        new WindowNode.Function(
-                                call(
-                                        callExpression.getDisplayName(),
-                                        callExpression.getFunctionHandle(),
-                                        callExpression.getType(),
-                                        arguments),
-                                arguments,
-                                canonicalFrame));
+                functions.put(canonicalize(symbol), new WindowNode.Function(signature, arguments, canonicalFrame));
             }
 
             return new WindowNode(
@@ -272,13 +261,6 @@ public class UnaliasSymbolReferences
         {
             return new CreateIndexNode(node.getId(), context.rewrite(node.getSource()),
                     node.getCreateIndexMetadata());
-        }
-
-        @Override
-        public PlanNode visitUpdateIndex(UpdateIndexNode node, RewriteContext<Void> context)
-        {
-            return new UpdateIndexNode(node.getId(), context.rewrite(node.getSource()),
-                    node.getUpdateIndexMetadata());
         }
 
         @Override
@@ -322,8 +304,7 @@ public class UnaliasSymbolReferences
 
             Optional<OrderingScheme> orderingScheme = node.getOrderingScheme().map(this::canonicalizeAndDistinct);
 
-            return new ExchangeNode(node.getId(), node.getType(), node.getScope(), partitioningScheme, sources, inputs, orderingScheme,
-                    node.getAggregationType());
+            return new ExchangeNode(node.getId(), node.getType(), node.getScope(), partitioningScheme, sources, inputs, orderingScheme);
         }
 
         private void mapExchangeNodeSymbols(ExchangeNode node)
@@ -432,22 +413,9 @@ public class UnaliasSymbolReferences
         }
 
         @Override
-        public PlanNode visitTableUpdate(TableUpdateNode node, RewriteContext<Void> context)
-        {
-            return node;
-        }
-
-        @Override
         public PlanNode visitDelete(DeleteNode node, RewriteContext<Void> context)
         {
             return new DeleteNode(node.getId(), context.rewrite(node.getSource()), node.getTarget(), canonicalize(node.getRowId()), node.getOutputSymbols());
-        }
-
-        @Override
-        public PlanNode visitUpdate(UpdateNode node, RewriteContext<Void> context)
-        {
-            // Update keeps the symbol of update columns and rowId column, can't unalias symbol
-            return node;
         }
 
         @Override
@@ -597,7 +565,8 @@ public class UnaliasSymbolReferences
                     left,
                     right,
                     canonicalCriteria,
-                    canonicalizeAndDistinct(node.getOutputSymbols()),
+                    //canonicalizeAndDistinct(node.getOutputSymbols()), //original
+                    node.getOutputSymbols(), //BQO
                     canonicalFilter,
                     canonicalLeftHashSymbol,
                     canonicalRightHashSymbol,
@@ -690,6 +659,13 @@ public class UnaliasSymbolReferences
             PlanNode source = context.rewrite(node.getSource());
             return new CTEScanNode(node.getId(), source, source.getOutputSymbols(), node.getPredicate(), node.getCteRefName(),
                     node.getConsumerPlans(), node.getCommonCTERefNum());
+        }
+
+        @Override
+        public PlanNode visitRouter(RouterNode node, RewriteContext<Void> context)
+        {
+            PlanNode source = context.rewrite(node.getSource());
+            return new RouterNode(node.getId(), source, source.getOutputSymbols(), node.getConsumerPlans(), node.getBranches(), node.getQueries(), node.getCommonCTERefNum());
         }
 
         @Override
@@ -828,6 +804,7 @@ public class UnaliasSymbolReferences
                     builder.add(canonical);
                 }
             }
+            //return outputs;
             return builder.build();
         }
 

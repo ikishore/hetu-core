@@ -33,7 +33,6 @@ public class InformationSchemaColumnHandle
     }
 
     @JsonProperty
-    @Override
     public String getColumnName()
     {
         return columnName;

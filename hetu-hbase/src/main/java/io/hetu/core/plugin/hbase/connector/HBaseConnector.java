@@ -150,6 +150,6 @@ public class HBaseConnector
     @Override
     public List<PropertyMetadata<?>> getColumnProperties()
     {
-        return HBaseColumnProperties.getColumnProperties();
+        return hBaseColumnProperties.getColumnProperties();
     }
 }

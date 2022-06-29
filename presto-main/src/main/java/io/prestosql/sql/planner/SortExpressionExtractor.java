@@ -14,11 +14,9 @@
 package io.prestosql.sql.planner;
 
 import com.google.common.collect.ImmutableList;
-import io.prestosql.metadata.FunctionAndTypeManager;
 import io.prestosql.metadata.Metadata;
-import io.prestosql.spi.function.FunctionHandle;
-import io.prestosql.spi.function.FunctionMetadata;
 import io.prestosql.spi.function.OperatorType;
+import io.prestosql.spi.function.Signature;
 import io.prestosql.spi.plan.Symbol;
 import io.prestosql.spi.relation.CallExpression;
 import io.prestosql.spi.relation.ConstantExpression;
@@ -28,6 +26,7 @@ import io.prestosql.spi.relation.RowExpression;
 import io.prestosql.spi.relation.RowExpressionVisitor;
 import io.prestosql.spi.relation.SpecialForm;
 import io.prestosql.spi.relation.VariableReferenceExpression;
+import io.prestosql.spi.sql.RowExpressionUtils;
 import io.prestosql.sql.relational.RowExpressionDeterminismEvaluator;
 
 import java.util.List;
@@ -37,11 +36,9 @@ import java.util.Set;
 import static com.google.common.base.Preconditions.checkArgument;
 import static com.google.common.collect.ImmutableList.toImmutableList;
 import static com.google.common.collect.ImmutableSet.toImmutableSet;
-import static io.prestosql.expressions.LogicalRowExpressions.extractConjuncts;
 import static io.prestosql.spi.function.OperatorType.GREATER_THAN_OR_EQUAL;
 import static io.prestosql.spi.function.OperatorType.LESS_THAN_OR_EQUAL;
 import static io.prestosql.spi.type.BooleanType.BOOLEAN;
-import static io.prestosql.sql.analyzer.TypeSignatureProvider.fromTypes;
 import static java.util.Collections.singletonList;
 import static java.util.Comparator.comparing;
 import static java.util.Objects.requireNonNull;
@@ -73,8 +70,8 @@ public final class SortExpressionExtractor
 
     public static Optional<SortExpressionContext> extractSortExpression(Metadata metadata, Set<Symbol> buildSymbols, RowExpression filter)
     {
-        List<RowExpression> filterConjuncts = extractConjuncts(filter);
-        SortExpressionVisitor visitor = new SortExpressionVisitor(buildSymbols, metadata.getFunctionAndTypeManager());
+        List<RowExpression> filterConjuncts = RowExpressionUtils.extractConjuncts(filter);
+        SortExpressionVisitor visitor = new SortExpressionVisitor(buildSymbols);
 
         RowExpressionDeterminismEvaluator determinismEvaluator = new RowExpressionDeterminismEvaluator(metadata);
         List<SortExpressionContext> sortExpressionCandidates = filterConjuncts.stream()
@@ -107,23 +104,25 @@ public final class SortExpressionExtractor
             implements RowExpressionVisitor<Optional<SortExpressionContext>, Void>
     {
         private final Set<Symbol> buildSymbols;
-        private final FunctionAndTypeManager functionAndTypeManager;
 
-        public SortExpressionVisitor(Set<Symbol> buildSymbols, FunctionAndTypeManager functionAndTypeManager)
+        public SortExpressionVisitor(Set<Symbol> buildSymbols)
         {
             this.buildSymbols = buildSymbols;
-            this.functionAndTypeManager = functionAndTypeManager;
         }
 
         @Override
         public Optional<SortExpressionContext> visitCall(CallExpression call, Void context)
         {
-            FunctionMetadata functionMetadata = functionAndTypeManager.getFunctionMetadata(call.getFunctionHandle());
-            if (!functionMetadata.getOperatorType().map(OperatorType::isComparisonOperator).orElse(false)) {
+            if (!Signature.isMangleOperator(call.getSignature().getName())) {
                 return Optional.empty();
             }
 
-            switch (functionMetadata.getOperatorType().get()) {
+            OperatorType operatorType = Signature.unmangleOperator(call.getSignature().getName());
+            if (!operatorType.isComparisonOperator()) {
+                return Optional.empty();
+            }
+
+            switch (operatorType) {
                 case GREATER_THAN:
                 case GREATER_THAN_OR_EQUAL:
                 case LESS_THAN:
@@ -149,16 +148,20 @@ public final class SortExpressionExtractor
         public Optional<SortExpressionContext> visitSpecialForm(SpecialForm specialForm, Void context)
         {
             if (specialForm.getForm().equals(SpecialForm.Form.BETWEEN)) {
-                FunctionHandle gtoefunctionHandle = functionAndTypeManager.resolveOperatorFunctionHandle(GREATER_THAN_OR_EQUAL,
-                        fromTypes(specialForm.getArguments().get(0).getType(), specialForm.getArguments().get(1).getType()));
-                Optional<SortExpressionContext> left = visitCall(new CallExpression(GREATER_THAN_OR_EQUAL.name(), gtoefunctionHandle,
+                Signature signatureLeft = Signature.internalOperator(GREATER_THAN_OR_EQUAL,
+                        BOOLEAN.getTypeSignature(),
+                        specialForm.getArguments().get(0).getType().getTypeSignature(),
+                        specialForm.getArguments().get(1).getType().getTypeSignature());
+                Optional<SortExpressionContext> left = visitCall(new CallExpression(signatureLeft,
                         BOOLEAN, ImmutableList.of(specialForm.getArguments().get(0), specialForm.getArguments().get(1)), Optional.empty()), context);
                 if (left.isPresent()) {
                     return left;
                 }
-                FunctionHandle ltoefunctionHandle = functionAndTypeManager.resolveOperatorFunctionHandle(LESS_THAN_OR_EQUAL,
-                        fromTypes(specialForm.getArguments().get(0).getType(), specialForm.getArguments().get(2).getType()));
-                Optional<SortExpressionContext> right = visitCall(new CallExpression(LESS_THAN_OR_EQUAL.name(), ltoefunctionHandle,
+                Signature signatureRight = Signature.internalOperator(LESS_THAN_OR_EQUAL,
+                        BOOLEAN.getTypeSignature(),
+                        specialForm.getArguments().get(0).getType().getTypeSignature(),
+                        specialForm.getArguments().get(2).getType().getTypeSignature());
+                Optional<SortExpressionContext> right = visitCall(new CallExpression(signatureRight,
                         BOOLEAN, ImmutableList.of(specialForm.getArguments().get(0), specialForm.getArguments().get(2)), Optional.empty()), context);
                 return right;
             }

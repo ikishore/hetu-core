@@ -27,7 +27,7 @@ import it.unimi.dsi.fastutil.ints.IntList;
 
 import java.util.List;
 import java.util.Optional;
-import java.util.function.BiConsumer;
+import java.util.function.Consumer;
 
 import static com.google.common.collect.ImmutableList.toImmutableList;
 import static java.util.Objects.requireNonNull;
@@ -35,13 +35,13 @@ import static java.util.Objects.requireNonNull;
 class PartitioningExchanger
         implements LocalExchanger
 {
-    protected final List<BiConsumer<PageReference, String>> buffers;
-    protected final LocalExchangeMemoryManager memoryManager;
+    private final List<Consumer<PageReference>> buffers;
+    private final LocalExchangeMemoryManager memoryManager;
     private final LocalPartitionGenerator partitionGenerator;
-    protected final IntArrayList[] partitionAssignments;
+    private final IntArrayList[] partitionAssignments;
 
     public PartitioningExchanger(
-            List<BiConsumer<PageReference, String>> partitions,
+            List<Consumer<PageReference>> partitions,
             LocalExchangeMemoryManager memoryManager,
             List<? extends Type> types,
             List<Integer> partitionChannels,
@@ -69,7 +69,7 @@ class PartitioningExchanger
     }
 
     @Override
-    public synchronized void accept(Page page, String origin)
+    public synchronized void accept(Page page)
     {
         // reset the assignment lists
         for (IntList partitionAssignment : partitionAssignments) {
@@ -93,7 +93,7 @@ class PartitioningExchanger
 
                 Page pageSplit = new Page(positions.size(), outputBlocks);
                 memoryManager.updateMemoryUsage(pageSplit.getRetainedSizeInBytes());
-                buffers.get(partition).accept(new PageReference(pageSplit, 1, () -> memoryManager.updateMemoryUsage(-pageSplit.getRetainedSizeInBytes())), origin);
+                buffers.get(partition).accept(new PageReference(pageSplit, 1, () -> memoryManager.updateMemoryUsage(-pageSplit.getRetainedSizeInBytes())));
             }
         }
     }

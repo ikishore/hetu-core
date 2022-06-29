@@ -232,15 +232,15 @@ public class CarbondataPageSource
             nanoStart = System.nanoTime();
         }
         CarbondataVectorBatch columnarBatch = null;
-        int columnBatchSize = 0;
+        int batchSize = 0;
         try {
             batchId++;
             if (vectorReader.nextKeyValue()) {
                 Object vectorBatch = vectorReader.getCurrentValue();
                 if (vectorBatch instanceof CarbondataVectorBatch) {
                     columnarBatch = (CarbondataVectorBatch) vectorBatch;
-                    columnBatchSize = columnarBatch.numRows();
-                    if (columnBatchSize == 0) {
+                    batchSize = columnarBatch.numRows();
+                    if (batchSize == 0) {
                         close();
                         return null;
                     }
@@ -256,9 +256,9 @@ public class CarbondataPageSource
 
             Block[] blocks = new Block[columnHandles.size()];
             for (int column = 0; column < blocks.length; column++) {
-                blocks[column] = new LazyBlock(columnBatchSize, new CarbondataBlockLoader(column));
+                blocks[column] = new LazyBlock(batchSize, new CarbondataBlockLoader(column));
             }
-            Page page = new Page(columnBatchSize, blocks);
+            Page page = new Page(batchSize, blocks);
             return page;
         }
         catch (PrestoException e) {

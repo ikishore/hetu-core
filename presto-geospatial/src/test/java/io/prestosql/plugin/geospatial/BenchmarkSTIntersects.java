@@ -139,6 +139,7 @@ public class BenchmarkSTIntersects
         {
             Slice envelope = stEnvelope(geometry);
 
+            // innerLine
             verify(stIntersects(geometry, innerLine));
             verify(stContains(geometry, innerLine));
 

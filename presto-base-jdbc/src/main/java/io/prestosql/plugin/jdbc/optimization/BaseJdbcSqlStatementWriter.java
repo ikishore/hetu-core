@@ -1,5 +1,5 @@
 /*
- * Copyright (C) 2018-2021. Huawei Technologies Co., Ltd. All rights reserved.
+ * Copyright (C) 2018-2020. Huawei Technologies Co., Ltd. All rights reserved.
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
  * You may obtain a copy of the License at
@@ -18,6 +18,7 @@ import com.google.common.base.Joiner;
 import com.google.common.collect.ImmutableList;
 import io.prestosql.spi.block.SortOrder;
 import io.prestosql.spi.function.OperatorType;
+import io.prestosql.spi.function.Signature;
 import io.prestosql.spi.relation.CallExpression;
 import io.prestosql.spi.relation.VariableReferenceExpression;
 import io.prestosql.spi.sql.RowExpressionConverter;
@@ -43,12 +44,10 @@ public class BaseJdbcSqlStatementWriter
 {
     private static final String COUNT_FUNCTION_NAME = "count";
     private final boolean nameCaseInsensitive;
-    private final JdbcPushDownParameter jdbcPushDownParameter;
 
     public BaseJdbcSqlStatementWriter(JdbcPushDownParameter pushDownParameter)
     {
         this.nameCaseInsensitive = pushDownParameter.getCaseInsensitiveParameter();
-        this.jdbcPushDownParameter = pushDownParameter;
     }
 
     @Override
@@ -61,7 +60,7 @@ public class BaseJdbcSqlStatementWriter
         else {
             StringJoiner joiner = new StringJoiner(", ");
             for (Selection selection : selections) {
-                if (selection.isAliased(!nameCaseInsensitive)) {
+                if (selection.isAliased(nameCaseInsensitive)) {
                     joiner.add(selection.getExpression() + " AS " + selection.getAlias());
                 }
                 else {
@@ -165,7 +164,8 @@ public class BaseJdbcSqlStatementWriter
     public String castAggregationType(String aggregationExpression, RowExpressionConverter converter, Type returnType)
     {
         VariableReferenceExpression aggVariable = new VariableReferenceExpression(aggregationExpression, returnType);
-        return converter.visitCall(new CallExpression(OperatorType.CAST.name(), jdbcPushDownParameter.getFunctionResolution().castFunction(returnType.getTypeSignature(), returnType.getTypeSignature()), returnType, ImmutableList.of(aggVariable), Optional.empty()), new JdbcConverterContext());
+        Signature castSignature = Signature.internalOperator(OperatorType.CAST, returnType.getTypeSignature(), returnType.getTypeSignature());
+        return converter.visitCall(new CallExpression(castSignature, returnType, ImmutableList.of(aggVariable), Optional.empty()), null);
     }
 
     @Override

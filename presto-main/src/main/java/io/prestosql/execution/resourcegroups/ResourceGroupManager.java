@@ -44,19 +44,4 @@ public interface ResourceGroupManager<C>
 
     void loadConfigurationManager()
             throws Exception;
-
-    default long getCachedMemoryUsage(ResourceGroupId resourceGroupId)
-    {
-        return 0;
-    }
-
-    default long getSoftReservedMemory(ResourceGroupId resourceGroupId)
-    {
-        return Long.MAX_VALUE;
-    }
-
-    default boolean isGroupRegistered(ResourceGroupId resourceGroupId)
-    {
-        return false;
-    }
 }

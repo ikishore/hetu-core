@@ -36,13 +36,13 @@ public class MongoIndex
         for (Document index : indexes) {
             // TODO: v, ns, sparse fields
             Document key = (Document) index.get("key");
-            String localName = index.getString("name");
-            boolean localUnique = index.getBoolean("unique", false);
+            String name = index.getString("name");
+            boolean unique = index.getBoolean("unique", false);
 
             if (key.containsKey("_fts")) { // Full Text Search
                 continue;
             }
-            builder.add(new MongoIndex(localName, parseKey(key), localUnique));
+            builder.add(new MongoIndex(name, parseKey(key), unique));
         }
 
         return builder.build();

@@ -24,9 +24,7 @@ import io.prestosql.orc.OrcCacheStore;
 import io.prestosql.orc.OrcColumn;
 import io.prestosql.orc.OrcDataSource;
 import io.prestosql.orc.OrcDataSourceId;
-import io.prestosql.orc.OrcDataSourceIdWithTimeStamp;
 import io.prestosql.orc.OrcFileTail;
-import io.prestosql.orc.OrcFileTailCacheKey;
 import io.prestosql.orc.OrcReader;
 import io.prestosql.orc.OrcSelectiveRecordReader;
 import io.prestosql.orc.TupleDomainFilter;
@@ -137,7 +135,6 @@ public class OrcSelectivePageSourceFactory
     private final HdfsEnvironment hdfsEnvironment;
     private final FileFormatDataSourceStats stats;
     private final OrcCacheStore orcCacheStore;
-    private final DateTimeZone legacyTimeZone;
 
     @Inject
     public OrcSelectivePageSourceFactory(TypeManager typeManager, HiveConfig config, HdfsEnvironment hdfsEnvironment, FileFormatDataSourceStats stats, OrcCacheStore orcCacheStore)
@@ -148,7 +145,6 @@ public class OrcSelectivePageSourceFactory
         this.hdfsEnvironment = requireNonNull(hdfsEnvironment, "hdfsEnvironment is null");
         this.stats = requireNonNull(stats, "stats is null");
         this.orcCacheStore = orcCacheStore;
-        this.legacyTimeZone = requireNonNull(config, "hiveConfig is null").getOrcLegacyDateTimeZone();
     }
 
     @Override
@@ -165,13 +161,13 @@ public class OrcSelectivePageSourceFactory
             List<Integer> outputColumns,
             TupleDomain<HiveColumnHandle> domainPredicate,
             Optional<List<TupleDomain<HiveColumnHandle>>> additionPredicates,
+            DateTimeZone hiveStorageTimeZone,
             Optional<DeleteDeltaLocations> deleteDeltaLocations,
             Optional<Long> startRowOffsetOfFile,
             Optional<List<IndexMetadata>> indexes,
             boolean splitCacheable,
             List<HivePageSourceProvider.ColumnMapping> columnMappings,
-            Map<Integer, HiveCoercer> coercers,
-            long dataSourceLastModifiedTime)
+            Map<Integer, HiveCoercer> coercers)
     {
         if (!HiveUtil.isDeserializerClass(schema, OrcSerde.class)) {
             return Optional.empty();
@@ -191,6 +187,7 @@ public class OrcSelectivePageSourceFactory
                 && additionPredicates.get().size() > 0
                 && !additionPredicates.get().get(0).isAll()
                 && !additionPredicates.get().get(0).isNone()) {
+            List<ConnectorPageSource> pageSources = new ArrayList<>();
             List<Integer> positions = new ArrayList<>(10);
 
             return Optional.of(createOrcPageSource(
@@ -207,7 +204,7 @@ public class OrcSelectivePageSourceFactory
                     prefilledValues,
                     outputColumns,
                     domainPredicate,
-                    legacyTimeZone,
+                    hiveStorageTimeZone,
                     typeManager,
                     getOrcMaxMergeDistance(session),
                     getOrcMaxBufferSize(session),
@@ -225,10 +222,44 @@ public class OrcSelectivePageSourceFactory
                     additionPredicates.orElseGet(() -> ImmutableList.of()),
                     positions,
                     columnMappings,
-                    coercers,
-                    dataSourceLastModifiedTime));
+                    coercers));
 
             /* Todo(Nitin): For Append Pattern
+            appendPredicates.get().stream().forEach(newDomainPredicate ->
+                    pageSources.add(createOrcPageSource(
+                            hdfsEnvironment,
+                            session.getUser(),
+                            configuration,
+                            path,
+                            start,
+                            length,
+                            fileSize,
+                            columns,
+                            useOrcColumnNames,
+                            isFullAcidTable(Maps.fromProperties(schema)),
+                            prefilledValues,
+                            outputColumns,
+                            newDomainPredicate,
+                            hiveStorageTimeZone,
+                            typeManager,
+                            getOrcMaxMergeDistance(session),
+                            getOrcMaxBufferSize(session),
+                            getOrcStreamBufferSize(session),
+                            getOrcTinyStripeThreshold(session),
+                            getOrcMaxReadBlockSize(session),
+                            getOrcLazyReadSmallRanges(session),
+                            isOrcBloomFiltersEnabled(session),
+                            stats,
+                            deleteDeltaLocations,
+                            startRowOffsetOfFile,
+                            indexes,
+                            orcCacheStore,
+                            orcCacheProperties,
+                            additionPredicates.orElseGet(() -> ImmutableList.of()),
+                            positions)));
+
+            // Create a Concatenating Page Source
+            return Optional.of(new OrcConcatPageSource(pageSources));
             */
         }
 
@@ -246,7 +277,7 @@ public class OrcSelectivePageSourceFactory
                 prefilledValues,
                 outputColumns,
                 domainPredicate,
-                legacyTimeZone,
+                hiveStorageTimeZone,
                 typeManager,
                 getOrcMaxMergeDistance(session),
                 getOrcMaxBufferSize(session),
@@ -264,8 +295,7 @@ public class OrcSelectivePageSourceFactory
                 ImmutableList.of(),
                 null,
                 columnMappings,
-                coercers,
-                dataSourceLastModifiedTime));
+                coercers));
     }
 
     public static OrcSelectivePageSource createOrcPageSource(
@@ -300,8 +330,7 @@ public class OrcSelectivePageSourceFactory
             List<TupleDomain<HiveColumnHandle>> disjunctDomains,
             List<Integer> positions,
             List<HivePageSourceProvider.ColumnMapping> columnMappings,
-            Map<Integer, HiveCoercer> coercers,
-            long dataSourceLastModifiedTime)
+            Map<Integer, HiveCoercer> coercers)
     {
         checkArgument(!domainPredicate.isNone(), "Unexpected NONE domain");
         String sessionUser = session.getUser();
@@ -320,8 +349,7 @@ public class OrcSelectivePageSourceFactory
                     streamBufferSize,
                     lazyReadSmallRanges,
                     inputStream,
-                    stats,
-                    dataSourceLastModifiedTime);
+                    stats);
         }
         catch (Exception e) {
             if (nullToEmpty(e.getMessage()).trim().equals("Filesystem closed") ||
@@ -336,8 +364,7 @@ public class OrcSelectivePageSourceFactory
             OrcDataSource readerLocalDataSource = OrcReader.wrapWithCacheIfTiny(orcDataSource, tinyStripeThreshold);
             OrcFileTail fileTail;
             if (orcCacheProperties.isFileTailCacheEnabled()) {
-                OrcDataSourceIdWithTimeStamp orcDataSourceIdWithTimeStamp = new OrcDataSourceIdWithTimeStamp(readerLocalDataSource.getId(), readerLocalDataSource.getLastModifiedTime());
-                fileTail = orcCacheStore.getFileTailCache().get(new OrcFileTailCacheKey(orcDataSourceIdWithTimeStamp), () -> OrcSelectivePageSourceFactory.createFileTail(orcDataSource));
+                fileTail = orcCacheStore.getFileTailCache().get(readerLocalDataSource.getId(), () -> OrcSelectivePageSourceFactory.createFileTail(orcDataSource));
             }
             else {
                 fileTail = OrcSelectivePageSourceFactory.createFileTail(orcDataSource);
@@ -422,6 +449,7 @@ public class OrcSelectivePageSourceFactory
                 else if (isFullAcid && readType instanceof RowType && column.getName().equalsIgnoreCase("row__id")) {
                     HiveType hiveType = column.getHiveType();
                     StructTypeInfo structTypeInfo = (StructTypeInfo) hiveType.getTypeInfo();
+                    ImmutableList.Builder<ColumnAdaptation> builder = new ImmutableList.Builder<>();
                     ArrayList<String> fieldNames = structTypeInfo.getAllStructFieldNames();
                     List<ColumnAdaptation> adaptations = fieldNames.stream()
                             .map(acidColumnNames::indexOf)
@@ -449,7 +477,7 @@ public class OrcSelectivePageSourceFactory
             Map<Integer, Object> typedPrefilledValues = new HashMap<>();
             for (Map.Entry prefilledValue : prefilledValues.entrySet()) {
                 typedPrefilledValues.put(Integer.valueOf(prefilledValue.getKey().toString()),
-                        typedPartitionKey(prefilledValue.getValue().toString(), columnTypes.get(prefilledValue.getKey()), columnNames.get(prefilledValue.getKey())));
+                        typedPartitionKey(prefilledValue.getValue().toString(), columnTypes.get(prefilledValue.getKey()), columnNames.get(prefilledValue.getKey()), hiveStorageTimeZone));
             }
 
             // Convert the predicate to each column id wise. Will be used to associate as filter with each column reader
@@ -505,9 +533,12 @@ public class OrcSelectivePageSourceFactory
 
             return new OrcSelectivePageSource(
                     recordReader,
-                    orcDataSource,
+                    orcDataSource,      //TODO- Rajeev: Do we need to pass deleted rows here?
+//                    deletedRows,
+//                    isFullAcid && indexes.isPresent(),
                     systemMemoryUsage,
                     stats,
+                    session,
                     columnMappings,
                     typeManager);
         }

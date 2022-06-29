@@ -25,7 +25,9 @@ import io.prestosql.operator.project.CursorProcessor;
 import io.prestosql.operator.project.PageFilter;
 import io.prestosql.operator.project.PageProcessor;
 import io.prestosql.operator.project.PageProjection;
+import io.prestosql.operator.project.SharedFilterProcessor;
 import io.prestosql.spi.PrestoException;
+import io.prestosql.spi.function.OperatorType;
 import io.prestosql.spi.relation.RowExpression;
 import org.weakref.jmx.Managed;
 import org.weakref.jmx.Nested;
@@ -164,6 +166,39 @@ public class ExpressionCompiler
                         .toString());
 
         return defineClass(classDefinition, superType, callSiteBinder.getBindings(), getClass().getClassLoader());
+    }
+
+    public Supplier<SharedFilterProcessor> compilePageSharedProcessor(List<OperatorType> types, List<Long> values, List<Long> queryIds, List<? extends RowExpression> projections, Long allQuerySet, int argumentChannel, int querySetChannel)
+    {
+        return compilePageSharedProcessor(types, values, queryIds, projections, Optional.empty(), allQuerySet, argumentChannel, querySetChannel);
+    }
+
+    public Supplier<SharedFilterProcessor> compilePageSharedProcessor(List<OperatorType> types, List<Long> values, List<Long> queryIds, List<? extends RowExpression> projections, Optional<String> classNameSuffix, Long allQuerySet, int argumentChannel, int querySetChannel)
+    {
+        return compilePageSharedProcessor(types, values, queryIds, projections, classNameSuffix, OptionalInt.empty(), allQuerySet, argumentChannel, querySetChannel);
+    }
+
+    private Supplier<SharedFilterProcessor> compilePageSharedProcessor(
+            List<OperatorType> types,
+            List<Long> values,
+            List<Long> queryIds,
+            List<? extends RowExpression> projections,
+            Optional<String> classNameSuffix,
+            OptionalInt initialBatchSize,
+            Long allQuerySet,
+            int argumentChannel,
+            int querySetChannel)
+    {
+        List<Supplier<PageProjection>> pageProjectionSuppliers = projections.stream()
+                .map(projection -> pageFunctionCompiler.compileProjection(projection, classNameSuffix))
+                .collect(toImmutableList());
+
+        return () -> {
+            List<PageProjection> pageProjections = pageProjectionSuppliers.stream()
+                    .map(Supplier::get)
+                    .collect(toImmutableList());
+            return new SharedFilterProcessor(pageProjections, initialBatchSize, types, values, queryIds, allQuerySet, argumentChannel, querySetChannel);
+        };
     }
 
     private static void generateToString(ClassDefinition classDefinition, CallSiteBinder callSiteBinder, String string)

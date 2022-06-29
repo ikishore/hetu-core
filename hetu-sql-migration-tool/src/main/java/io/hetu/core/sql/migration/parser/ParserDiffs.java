@@ -31,7 +31,12 @@ public class ParserDiffs
 
     public ParserDiffs(DiffType diffType, Optional<String> source, Optional<String> target, Optional<String> message)
     {
-        this(diffType, source, Optional.empty(), target, Optional.empty(), message);
+        this.diffType = diffType;
+        this.source = source;
+        this.sourcePosition = Optional.empty();
+        this.target = target;
+        this.targetPosition = Optional.empty();
+        this.message = message;
     }
 
     public ParserDiffs(DiffType diffType, Optional<String> source, Optional<String> sourcePosition, Optional<String> target, Optional<String> targetPosition, Optional<String> message)

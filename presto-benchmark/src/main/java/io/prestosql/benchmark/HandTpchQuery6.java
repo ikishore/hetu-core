@@ -27,7 +27,6 @@ import io.prestosql.operator.project.SelectedPositions;
 import io.prestosql.spi.Page;
 import io.prestosql.spi.block.Block;
 import io.prestosql.spi.connector.ConnectorSession;
-import io.prestosql.spi.connector.QualifiedObjectName;
 import io.prestosql.spi.function.Signature;
 import io.prestosql.spi.plan.AggregationNode.Step;
 import io.prestosql.spi.plan.PlanNodeId;
@@ -56,8 +55,8 @@ public class HandTpchQuery6
     {
         super(localQueryRunner, "hand_tpch_query_6", 10, 100);
 
-        doubleSum = localQueryRunner.getMetadata().getFunctionAndTypeManager().getAggregateFunctionImplementation(
-                new Signature(QualifiedObjectName.valueOfDefaultFunction("sum"), AGGREGATE, DOUBLE.getTypeSignature(), DOUBLE.getTypeSignature()));
+        doubleSum = localQueryRunner.getMetadata().getAggregateFunctionImplementation(
+                new Signature("sum", AGGREGATE, DOUBLE.getTypeSignature(), DOUBLE.getTypeSignature()));
     }
 
     @Override

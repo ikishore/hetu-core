@@ -14,14 +14,11 @@
 import xhr from './xhr';
 
 const ResultsPreviewApiUtils = {
-  loadResultsPreview(file, pageNum, pageSize) {
+  loadResultsPreview(file, pageNum) {
     if (!Number.isInteger(pageNum)) {
       pageNum = 1;
     }
-    if (!Number.isInteger(pageSize)) {
-      pageSize = 10;
-    }
-    return xhr(`../api/preview?fileURI=${encodeURIComponent(file)}&pageSize=${pageSize}&pageNum=${pageNum}`, {
+    return xhr(`../api/preview?fileURI=${encodeURIComponent(file)}&pageSize=10&pageNum=${pageNum}`, {
       method: 'get'
     });
   }

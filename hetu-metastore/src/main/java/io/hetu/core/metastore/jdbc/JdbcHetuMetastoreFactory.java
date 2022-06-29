@@ -1,5 +1,5 @@
 /*
- * Copyright (C) 2018-2021. Huawei Technologies Co., Ltd. All rights reserved.
+ * Copyright (C) 2018-2020. Huawei Technologies Co., Ltd. All rights reserved.
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
  * You may obtain a copy of the License at
@@ -20,7 +20,6 @@ import io.prestosql.spi.classloader.ThreadContextClassLoader;
 import io.prestosql.spi.filesystem.HetuFileSystemClient;
 import io.prestosql.spi.metastore.HetuMetaStoreFactory;
 import io.prestosql.spi.metastore.HetuMetastore;
-import io.prestosql.spi.statestore.StateStore;
 
 import java.util.Map;
 
@@ -31,7 +30,6 @@ public class JdbcHetuMetastoreFactory
         implements HetuMetaStoreFactory
 {
     private static final String FACTORY_TYPE = "jdbc";
-    private static final String HETU_METASTORE_CACHE_TYPE_DEFAULT = "local";
     private ClassLoader classLoader;
 
     public JdbcHetuMetastoreFactory(ClassLoader classLoader)
@@ -40,21 +38,11 @@ public class JdbcHetuMetastoreFactory
     }
 
     @Override
-    public HetuMetastore create(String name, Map<String, String> config, HetuFileSystemClient client,
-            StateStore stateStore, String inputType)
+    public HetuMetastore create(String name, Map<String, String> config, HetuFileSystemClient client)
     {
-        String type = inputType;
         requireNonNull(config, "config is null");
-        Bootstrap app;
         try (ThreadContextClassLoader ignored = new ThreadContextClassLoader(classLoader)) {
-            if (stateStore == null) {
-                type = HETU_METASTORE_CACHE_TYPE_DEFAULT;
-                app = new Bootstrap(new JdbcMetastoreModule(type));
-            }
-            else {
-                app = new Bootstrap(new JdbcMetastoreModule(stateStore, type));
-            }
-
+            Bootstrap app = new Bootstrap(new JdbcMetastoreModule());
             Injector injector =
                     app.strictConfig().doNotInitializeLogging().setRequiredConfigurationProperties(config).initialize();
 

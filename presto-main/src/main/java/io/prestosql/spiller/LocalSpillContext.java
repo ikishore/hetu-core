@@ -17,8 +17,6 @@ import io.prestosql.operator.SpillContext;
 
 import javax.annotation.concurrent.ThreadSafe;
 
-import java.util.concurrent.atomic.AtomicLong;
-
 import static com.google.common.base.Preconditions.checkState;
 
 @ThreadSafe
@@ -28,8 +26,6 @@ public final class LocalSpillContext
     private final SpillContext parentSpillContext;
     private long spilledBytes;
     private boolean closed;
-    private final AtomicLong spillWriteTime = new AtomicLong();
-    private final AtomicLong spillReadTime = new AtomicLong();
 
     public LocalSpillContext(SpillContext parentSpillContext)
     {
@@ -45,22 +41,6 @@ public final class LocalSpillContext
     }
 
     @Override
-    public void updateWriteTime(long millis)
-    {
-        if (millis > 0) {
-            spillWriteTime.addAndGet(millis);
-        }
-    }
-
-    @Override
-    public void updateReadTime(long millis)
-    {
-        if (millis > 0) {
-            spillReadTime.addAndGet(millis);
-        }
-    }
-
-    @Override
     public synchronized void close()
     {
         if (closed) {
@@ -69,7 +49,5 @@ public final class LocalSpillContext
 
         closed = true;
         parentSpillContext.updateBytes(-spilledBytes);
-        parentSpillContext.updateReadTime(spillReadTime.get());
-        parentSpillContext.updateWriteTime(spillWriteTime.get());
     }
 }

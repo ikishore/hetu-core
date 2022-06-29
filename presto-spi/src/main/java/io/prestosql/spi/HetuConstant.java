@@ -1,5 +1,5 @@
 /*
- * Copyright (C) 2018-2021. Huawei Technologies Co., Ltd. All rights reserved.
+ * Copyright (C) 2018-2020. Huawei Technologies Co., Ltd. All rights reserved.
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
  * You may obtain a copy of the License at
@@ -30,7 +30,6 @@ public class HetuConstant
     public static final String FILTER_CACHE_TTL = "hetu.heuristicindex.filter.cache.ttl";
     public static final String FILTER_CACHE_SOFT_REFERENCE = "hetu.heuristicindex.filter.cache.soft-reference";
     public static final String FILTER_CACHE_PRELOAD_INDICES = "hetu.heuristicindex.filter.cache.preload-indices";
-    public static final String FILTER_CACHE_AUTOLOAD_DEFAULT = "hetu.heuristicindex.filter.cache.autoload-default";
     public static final String INDEXSTORE_URI = "hetu.heuristicindex.indexstore.uri";
     public static final String INDEXSTORE_FILESYSTEM_PROFILE = "hetu.heuristicindex.indexstore.filesystem.profile";
     public static final String DATA_CENTER_CONNECTOR_NAME = "dc";
@@ -51,16 +50,4 @@ public class HetuConstant
     public static final String DATASOURCE_STRIPE_LENGTH = "datasource_stripe_length";
     public static final String DATASOURCE_TOTAL_PAGES = "datasource_total_pages";
     public static final String DATASOURCE_PAGE_NUMBER = "datasource_page_number";
-    public static final String CONNECTOR_PLANOPTIMIZER_RULE_BLACKLIST = "connector-planoptimizer-rule-blacklist";
-    public static final String INDEX_TABLE_DELETED = "Table Deleted";
-    public static final String INDEX_OUT_OF_SYNC = "Out-of-sync";
-    public static final String INDEX_OK = "OK";
-
-    // error message
-    public static final String HINDEX_CONFIG_ERROR_MSG = "Heuristic Index is not enabled in config.properties or is configured incorrectly.";
-
-    // extension support message
-    public static final String EXTENSION_EXECUTION_PLANNER_ENABLED = "extension_execution_planner_enabled";
-    public static final String EXTENSION_EXECUTION_PLANNER_JAR_PATH = "extension_execution_planner_jar_path";
-    public static final String EXTENSION_EXECUTION_PLANNER_CLASS_PATH = "extension_execution_planner_class_path";
 }

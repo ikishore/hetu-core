@@ -18,31 +18,31 @@ import com.google.common.util.concurrent.ListenableFuture;
 import io.prestosql.spi.Page;
 
 import java.util.List;
-import java.util.function.BiConsumer;
+import java.util.function.Consumer;
 
 import static java.util.Objects.requireNonNull;
 
 class BroadcastExchanger
         implements LocalExchanger
 {
-    private final List<BiConsumer<PageReference, String>> buffers;
+    private final List<Consumer<PageReference>> buffers;
     private final LocalExchangeMemoryManager memoryManager;
 
-    public BroadcastExchanger(List<BiConsumer<PageReference, String>> buffers, LocalExchangeMemoryManager memoryManager)
+    public BroadcastExchanger(List<Consumer<PageReference>> buffers, LocalExchangeMemoryManager memoryManager)
     {
         this.buffers = ImmutableList.copyOf(requireNonNull(buffers, "buffers is null"));
         this.memoryManager = requireNonNull(memoryManager, "memoryManager is null");
     }
 
     @Override
-    public void accept(Page page, String origin)
+    public void accept(Page page)
     {
         memoryManager.updateMemoryUsage(page.getRetainedSizeInBytes());
 
         PageReference pageReference = new PageReference(page, buffers.size(), () -> memoryManager.updateMemoryUsage(-page.getRetainedSizeInBytes()));
 
-        for (BiConsumer<PageReference, String> buffer : buffers) {
-            buffer.accept(pageReference, origin);
+        for (Consumer<PageReference> buffer : buffers) {
+            buffer.accept(pageReference);
         }
     }
 

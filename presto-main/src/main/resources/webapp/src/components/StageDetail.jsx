@@ -570,7 +570,7 @@ export class StageDetail extends React.Component {
                 query: query,
             });
             this.resetTimer();
-        }).fail(() => {
+        }).error(() => {
             this.setState({
                 initialized: true,
             });

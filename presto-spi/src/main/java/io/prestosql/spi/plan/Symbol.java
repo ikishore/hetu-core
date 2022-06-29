@@ -23,11 +23,30 @@ public class Symbol
 {
     private final String name;
 
+    public String attributeName;
+    public String tableName;
+
     @JsonCreator
     public Symbol(String name)
     {
         requireNonNull(name, "name is null");
         this.name = name;
+    }
+
+    /*
+    relativeName -> user_id_3
+    table_name -> postgresql.pubic.account
+    attribute_name -> user_id:integer
+    */
+    public Symbol(String relativeName, String tableName, String attributeName)
+    {
+        requireNonNull(relativeName, "relativeName is null");
+        requireNonNull(tableName, "tableName is null");
+        requireNonNull(attributeName, "attributeName is null");
+
+        this.name = relativeName;
+        this.tableName = tableName;
+        this.attributeName = attributeName;
     }
 
     @JsonValue

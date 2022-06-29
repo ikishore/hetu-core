@@ -93,13 +93,12 @@ public class Query
 
     private static String clean(String sql)
     {
-        String newSql = sql;
-        newSql = newSql.replaceAll("\t", "  ");
-        newSql = newSql.replaceAll("\n+", "\n");
-        newSql = newSql.trim();
-        while (newSql.endsWith(";")) {
-            newSql = newSql.substring(0, newSql.length() - 1).trim();
+        sql = sql.replaceAll("\t", "  ");
+        sql = sql.replaceAll("\n+", "\n");
+        sql = sql.trim();
+        while (sql.endsWith(";")) {
+            sql = sql.substring(0, sql.length() - 1).trim();
         }
-        return newSql;
+        return sql;
     }
 }

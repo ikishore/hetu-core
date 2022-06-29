@@ -16,10 +16,9 @@ package io.prestosql.sql.planner.optimizations;
 import com.google.common.collect.ImmutableList;
 import io.prestosql.Session;
 import io.prestosql.execution.warnings.WarningCollector;
-import io.prestosql.expressions.LogicalRowExpressions;
 import io.prestosql.metadata.Metadata;
 import io.prestosql.operator.window.RankingFunction;
-import io.prestosql.spi.function.FunctionMetadata;
+import io.prestosql.spi.function.Signature;
 import io.prestosql.spi.plan.FilterNode;
 import io.prestosql.spi.plan.LimitNode;
 import io.prestosql.spi.plan.PlanNode;
@@ -30,18 +29,17 @@ import io.prestosql.spi.predicate.Domain;
 import io.prestosql.spi.predicate.Range;
 import io.prestosql.spi.predicate.TupleDomain;
 import io.prestosql.spi.predicate.ValueSet;
-import io.prestosql.spi.relation.DomainTranslator;
-import io.prestosql.spi.relation.RowExpression;
-import io.prestosql.spi.relation.VariableReferenceExpression;
+import io.prestosql.spi.type.StandardTypes;
+import io.prestosql.sql.ExpressionUtils;
+import io.prestosql.sql.planner.ExpressionDomainTranslator;
+import io.prestosql.sql.planner.LiteralEncoder;
 import io.prestosql.sql.planner.PlanSymbolAllocator;
 import io.prestosql.sql.planner.TypeProvider;
 import io.prestosql.sql.planner.plan.RowNumberNode;
 import io.prestosql.sql.planner.plan.SimplePlanRewriter;
 import io.prestosql.sql.planner.plan.TopNRankingNumberNode;
-import io.prestosql.sql.relational.FunctionResolution;
-import io.prestosql.sql.relational.RowExpressionDeterminismEvaluator;
-import io.prestosql.sql.relational.RowExpressionDomainTranslator;
 import io.prestosql.sql.tree.BooleanLiteral;
+import io.prestosql.sql.tree.Expression;
 
 import java.util.Map;
 import java.util.Optional;
@@ -54,7 +52,12 @@ import static io.prestosql.SystemSessionProperties.isOptimizeTopNRankingNumber;
 import static io.prestosql.spi.function.FunctionKind.WINDOW;
 import static io.prestosql.spi.predicate.Marker.Bound.BELOW;
 import static io.prestosql.spi.type.BigintType.BIGINT;
+import static io.prestosql.spi.type.TypeSignature.parseTypeSignature;
+import static io.prestosql.sql.planner.ExpressionDomainTranslator.ExtractionResult;
+import static io.prestosql.sql.planner.ExpressionDomainTranslator.fromPredicate;
 import static io.prestosql.sql.planner.plan.ChildReplacer.replaceChildren;
+import static io.prestosql.sql.relational.OriginalExpressionUtils.castToExpression;
+import static io.prestosql.sql.relational.OriginalExpressionUtils.castToRowExpression;
 import static java.lang.Math.toIntExact;
 import static java.util.Objects.requireNonNull;
 import static java.util.stream.Collectors.toMap;
@@ -62,13 +65,15 @@ import static java.util.stream.Collectors.toMap;
 public class WindowFilterPushDown
         implements PlanOptimizer
 {
+    private static final Signature ROW_NUMBER_SIGNATURE = new Signature("row_number", WINDOW, parseTypeSignature(StandardTypes.BIGINT), ImmutableList.of());
+
     private final Metadata metadata;
-    private final RowExpressionDomainTranslator domainTranslator;
+    private final ExpressionDomainTranslator domainTranslator;
 
     public WindowFilterPushDown(Metadata metadata)
     {
         this.metadata = requireNonNull(metadata, "metadata is null");
-        this.domainTranslator = new RowExpressionDomainTranslator(metadata);
+        this.domainTranslator = new ExpressionDomainTranslator(new LiteralEncoder(metadata));
     }
 
     @Override
@@ -88,11 +93,11 @@ public class WindowFilterPushDown
     {
         private final PlanNodeIdAllocator idAllocator;
         private final Metadata metadata;
-        private final RowExpressionDomainTranslator domainTranslator;
+        private final ExpressionDomainTranslator domainTranslator;
         private final Session session;
         private final TypeProvider types;
 
-        private Rewriter(PlanNodeIdAllocator idAllocator, Metadata metadata, RowExpressionDomainTranslator domainTranslator, Session session, TypeProvider types)
+        private Rewriter(PlanNodeIdAllocator idAllocator, Metadata metadata, ExpressionDomainTranslator domainTranslator, Session session, TypeProvider types)
         {
             this.idAllocator = requireNonNull(idAllocator, "idAllocator is null");
             this.metadata = requireNonNull(metadata, "metadata is null");
@@ -160,77 +165,72 @@ public class WindowFilterPushDown
         public PlanNode visitFilter(FilterNode filterNode, RewriteContext<Void> context)
         {
             PlanNode source = context.rewrite(filterNode.getSource());
-            TupleDomain<VariableReferenceExpression> tupleDomain = domainTranslator.fromPredicate(session.toConnectorSession(), filterNode.getPredicate()).getTupleDomain();
+            TupleDomain<Symbol> tupleDomain = fromPredicate(metadata, session, castToExpression(filterNode.getPredicate()), types).getTupleDomain();
 
             if (source instanceof RowNumberNode) {
                 Symbol rowNumberSymbol = ((RowNumberNode) source).getRowNumberSymbol();
-                VariableReferenceExpression rowNumberVariable = new VariableReferenceExpression(rowNumberSymbol.getName(), types.get(rowNumberSymbol));
-                OptionalInt upperBound = extractUpperBound(tupleDomain, rowNumberVariable);
+                OptionalInt upperBound = extractUpperBound(tupleDomain, rowNumberSymbol);
 
                 if (upperBound.isPresent()) {
                     source = mergeLimit(((RowNumberNode) source), upperBound.getAsInt());
-                    return rewriteFilterSource(filterNode, source, rowNumberVariable, upperBound.getAsInt());
+                    return rewriteFilterSource(filterNode, source, rowNumberSymbol, upperBound.getAsInt());
                 }
             }
             else if (source instanceof WindowNode && canOptimizeWindowFunction((WindowNode) source) && isOptimizeTopNRankingNumber(session)) {
                 WindowNode windowNode = (WindowNode) source;
                 Symbol symbol = getOnlyElement(windowNode.getWindowFunctions().entrySet()).getKey();
-                VariableReferenceExpression variable = new VariableReferenceExpression(symbol.getName(), types.get(symbol));
-                OptionalInt upperBound = extractUpperBound(tupleDomain, variable);
+                OptionalInt upperBound = extractUpperBound(tupleDomain, symbol);
 
                 if (upperBound.isPresent()) {
                     source = convertToTopNRankingFunction(windowNode, upperBound.getAsInt());
-                    return rewriteFilterSource(filterNode, source, variable, upperBound.getAsInt());
+                    return rewriteFilterSource(filterNode, source, symbol, upperBound.getAsInt());
                 }
             }
             return replaceChildren(filterNode, ImmutableList.of(source));
         }
 
-        private PlanNode rewriteFilterSource(FilterNode filterNode, PlanNode source, VariableReferenceExpression variable, int upperBound)
+        private PlanNode rewriteFilterSource(FilterNode filterNode, PlanNode source, Symbol symbol, int upperBound)
         {
-            DomainTranslator.ExtractionResult extractionResult = domainTranslator.fromPredicate(session.toConnectorSession(), filterNode.getPredicate());
-            TupleDomain<VariableReferenceExpression> tupleDomain = extractionResult.getTupleDomain();
+            ExtractionResult extractionResult = fromPredicate(metadata, session, castToExpression(filterNode.getPredicate()), types);
+            TupleDomain<Symbol> tupleDomain = extractionResult.getTupleDomain();
 
-            if (!isEqualRange(tupleDomain, variable, upperBound)) {
+            if (!isEqualRange(tupleDomain, symbol, upperBound)) {
                 return new FilterNode(filterNode.getId(), source, filterNode.getPredicate());
             }
 
             // Remove the row number domain because it is absorbed into the node
-            Map<VariableReferenceExpression, Domain> newDomains = tupleDomain.getDomains().get().entrySet().stream()
-                    .filter(entry -> !entry.getKey().equals(variable))
+            Map<Symbol, Domain> newDomains = tupleDomain.getDomains().get().entrySet().stream()
+                    .filter(entry -> !entry.getKey().equals(symbol))
                     .collect(toMap(Map.Entry::getKey, Map.Entry::getValue));
 
             // Construct a new predicate
-            TupleDomain<VariableReferenceExpression> newTupleDomain = TupleDomain.withColumnDomains(newDomains);
-            LogicalRowExpressions logicalRowExpressions = new LogicalRowExpressions(new RowExpressionDeterminismEvaluator(metadata),
-                                                                                    new FunctionResolution(metadata.getFunctionAndTypeManager()),
-                                                                                    metadata.getFunctionAndTypeManager());
-            RowExpression newPredicate = logicalRowExpressions.combineConjuncts(
+            TupleDomain<Symbol> newTupleDomain = TupleDomain.withColumnDomains(newDomains);
+            Expression newPredicate = ExpressionUtils.combineConjuncts(
                     extractionResult.getRemainingExpression(),
                     domainTranslator.toPredicate(newTupleDomain));
 
             if (newPredicate.equals(BooleanLiteral.TRUE_LITERAL)) {
                 return source;
             }
-            return new FilterNode(filterNode.getId(), source, newPredicate);
+            return new FilterNode(filterNode.getId(), source, castToRowExpression(newPredicate));
         }
 
-        private static boolean isEqualRange(TupleDomain<VariableReferenceExpression> tupleDomain, VariableReferenceExpression variable, long upperBound)
+        private static boolean isEqualRange(TupleDomain<Symbol> tupleDomain, Symbol symbol, long upperBound)
         {
             if (tupleDomain.isNone()) {
                 return false;
             }
-            Domain domain = tupleDomain.getDomains().get().get(variable);
+            Domain domain = tupleDomain.getDomains().get().get(symbol);
             return domain.getValues().equals(ValueSet.ofRanges(Range.lessThanOrEqual(domain.getType(), upperBound)));
         }
 
-        private static OptionalInt extractUpperBound(TupleDomain<VariableReferenceExpression> tupleDomain, VariableReferenceExpression variable)
+        private static OptionalInt extractUpperBound(TupleDomain<Symbol> tupleDomain, Symbol symbol)
         {
             if (tupleDomain.isNone()) {
                 return OptionalInt.empty();
             }
 
-            Domain rowNumberDomain = tupleDomain.getDomains().get().get(variable);
+            Domain rowNumberDomain = tupleDomain.getDomains().get().get(symbol);
             if (rowNumberDomain == null) {
                 return OptionalInt.empty();
             }
@@ -257,9 +257,8 @@ public class WindowFilterPushDown
             return OptionalInt.empty();
         }
 
-        private static RowNumberNode mergeLimit(RowNumberNode node, int inputNewRowCountPerPartition)
+        private static RowNumberNode mergeLimit(RowNumberNode node, int newRowCountPerPartition)
         {
-            int newRowCountPerPartition = inputNewRowCountPerPartition;
             if (node.getMaxRowCountPerPartition().isPresent()) {
                 newRowCountPerPartition = Math.min(node.getMaxRowCountPerPartition().get(), newRowCountPerPartition);
             }
@@ -278,48 +277,44 @@ public class WindowFilterPushDown
                     getRankingFunction(windowNode));
         }
 
-        private boolean canReplaceWithRowNumber(WindowNode node)
+        private static boolean canReplaceWithRowNumber(WindowNode node)
         {
             if (node.getWindowFunctions().size() != 1) {
                 return false;
             }
 
             Symbol rowNumberSymbol = getOnlyElement(node.getWindowFunctions().entrySet()).getKey();
-            FunctionMetadata functionMetaData = metadata.getFunctionAndTypeManager().getFunctionMetadata(node.getWindowFunctions().get(rowNumberSymbol).getFunctionHandle());
-            return functionMetaData.getFunctionKind() == WINDOW
-                    && functionMetaData.getName().equals(RankingFunction.ROW_NUMBER.getName())
-                    && !node.getOrderingScheme().isPresent();
+            return node.getWindowFunctions().get(rowNumberSymbol).getSignature().equals(RankingFunction.ROW_NUMBER.getValue()) &&
+                    !node.getOrderingScheme().isPresent();
         }
 
-        private boolean canOptimizeWindowFunction(WindowNode node)
+        private static boolean canOptimizeWindowFunction(WindowNode node)
         {
             if (node.getWindowFunctions().size() != 1) {
                 return false;
             }
             Symbol symbol = getOnlyElement(node.getWindowFunctions().entrySet()).getKey();
-            FunctionMetadata functionMetaData = metadata.getFunctionAndTypeManager().getFunctionMetadata(node.getWindowFunctions().get(symbol).getFunctionHandle());
-            return canOptimizeRankingFunctionSignature(functionMetaData);
+            return canOptimizeRankingFunctionSignature(node.getWindowFunctions().get(symbol).getSignature());
         }
 
-        private static boolean canOptimizeRankingFunctionSignature(FunctionMetadata functionMetaData)
+        private static boolean canOptimizeRankingFunctionSignature(Signature signature)
         {
-            return functionMetaData.getFunctionKind() == WINDOW &&
-                    (functionMetaData.getName().equals(RankingFunction.ROW_NUMBER.getName()) ||
-                     functionMetaData.getName().equals(RankingFunction.RANK.getName()) ||
-                     functionMetaData.getName().equals(RankingFunction.DENSE_RANK.getName()));
+            return signature.equals(RankingFunction.ROW_NUMBER.getValue()) ||
+                    signature.equals(RankingFunction.RANK.getValue()) ||
+                    signature.equals(RankingFunction.DENSE_RANK.getValue());
         }
 
-        private Optional<RankingFunction> getRankingFunction(WindowNode node)
+        private static Optional<RankingFunction> getRankingFunction(WindowNode node)
         {
             Symbol rowNumberSymbol = getOnlyElement(node.getWindowFunctions().entrySet()).getKey();
-            FunctionMetadata functionMetaData = metadata.getFunctionAndTypeManager().getFunctionMetadata(node.getWindowFunctions().get(rowNumberSymbol).getFunctionHandle());
-            if (functionMetaData.getName().equals(RankingFunction.ROW_NUMBER.getName())) {
+            Signature signature = node.getWindowFunctions().get(rowNumberSymbol).getSignature();
+            if (signature.equals(RankingFunction.ROW_NUMBER.getValue())) {
                 return Optional.of(RankingFunction.ROW_NUMBER);
             }
-            else if (functionMetaData.getName().equals(RankingFunction.RANK.getName())) {
+            else if (signature.equals(RankingFunction.RANK.getValue())) {
                 return Optional.of(RankingFunction.RANK);
             }
-            else if (functionMetaData.getName().equals(RankingFunction.DENSE_RANK.getName())) {
+            else if (signature.equals(RankingFunction.DENSE_RANK.getValue())) {
                 return Optional.of(RankingFunction.DENSE_RANK);
             }
             else {

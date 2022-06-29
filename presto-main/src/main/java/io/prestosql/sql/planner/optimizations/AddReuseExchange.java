@@ -1,5 +1,5 @@
 /*
- * Copyright (C) 2018-2021. Huawei Technologies Co., Ltd. All rights reserved.
+ * Copyright (C) 2018-2020. Huawei Technologies Co., Ltd. All rights reserved.
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
  * You may obtain a copy of the License at
@@ -50,7 +50,6 @@ import java.util.stream.Collectors;
 import static io.prestosql.SystemSessionProperties.getSpillOperatorThresholdReuseExchange;
 import static io.prestosql.SystemSessionProperties.isColocatedJoinEnabled;
 import static io.prestosql.SystemSessionProperties.isReuseTableScanEnabled;
-import static io.prestosql.SystemSessionProperties.isSnapshotEnabled;
 import static io.prestosql.spi.operator.ReuseExchangeOperator.STRATEGY.REUSE_STRATEGY_CONSUMER;
 import static io.prestosql.spi.operator.ReuseExchangeOperator.STRATEGY.REUSE_STRATEGY_DEFAULT;
 import static io.prestosql.spi.operator.ReuseExchangeOperator.STRATEGY.REUSE_STRATEGY_PRODUCER;
@@ -79,7 +78,7 @@ public class AddReuseExchange
         requireNonNull(planSymbolAllocator, "symbolAllocator is null");
         requireNonNull(idAllocator, "idAllocator is null");
 
-        if (!isReuseTableScanEnabled(session) || isColocatedJoinEnabled(session) || isSnapshotEnabled(session)) {
+        if (!isReuseTableScanEnabled(session) || isColocatedJoinEnabled(session)) {
             return plan;
         }
         else {
@@ -184,9 +183,8 @@ public class AddReuseExchange
         }
 
         @Override
-        public PlanNode visitJoin(JoinNode inputNode, RewriteContext<Void> context)
+        public PlanNode visitJoin(JoinNode node, RewriteContext<Void> context)
         {
-            JoinNode node = inputNode;
             node = (JoinNode) visitPlan(node, context);
             // verify right side
             TableScanNode left = (TableScanNode) getTableScanNode(node.getLeft());
@@ -218,7 +216,7 @@ public class AddReuseExchange
         private void visitTableScanInternal(TableScanNode node, TupleDomain<ColumnHandle> newDomain)
         {
             if (!isNodeAlreadyVisited && node.getTable().getConnectorHandle().isReuseTableScanSupported()) {
-                TableStatistics stats = metadata.getTableStatistics(session, node.getTable(), (newDomain != null) ? new Constraint(newDomain) : Constraint.alwaysTrue(), true);
+                TableStatistics stats = metadata.getTableStatistics(session, node.getTable(), (newDomain != null) ? new Constraint(newDomain) : Constraint.alwaysTrue());
                 if (isMaxTableSizeGreaterThanSpillThreshold(node, stats)) {
                     planNodeListHashMap.remove(WrapperScanNode.of(node));
                 }
@@ -282,9 +280,9 @@ public class AddReuseExchange
         }
 
         @Override
-        public PlanNode visitProject(ProjectNode inputNode, RewriteContext<Void> context)
+        public PlanNode visitProject(ProjectNode node, RewriteContext<Void> context)
         {
-            ProjectNode node = (ProjectNode) visitPlan(inputNode, context);
+            node = (ProjectNode) visitPlan(node, context);
 
             // Incase of reuse exchange both consumer and producer should have assigments in same order.
             Assignments.Builder newAssignments = Assignments.builder();
@@ -314,9 +312,9 @@ public class AddReuseExchange
         }
 
         @Override
-        public PlanNode visitExchange(ExchangeNode inputNode, RewriteContext<Void> context)
+        public PlanNode visitExchange(ExchangeNode node, RewriteContext<Void> context)
         {
-            ExchangeNode node = (ExchangeNode) visitPlan(inputNode, context);
+            node = (ExchangeNode) visitPlan(node, context);
             node.getSources().stream().forEach(x -> {
                 if (x instanceof TableScanNode) {
                     visitTableScanInternal((TableScanNode) x, null);

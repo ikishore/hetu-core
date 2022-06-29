@@ -50,7 +50,7 @@ public class PruneSemiJoinColumns
                 semiJoinNode.getSourceHashSymbol().map(Stream::of).orElse(Stream.empty()))
                 .collect(toImmutableSet());
 
-        return restrictOutputs(idAllocator, semiJoinNode.getSource(), requiredSourceInputs, false, null)
+        return restrictOutputs(idAllocator, semiJoinNode.getSource(), requiredSourceInputs)
                 .map(newSource ->
                         semiJoinNode.replaceChildren(ImmutableList.of(
                                 newSource, semiJoinNode.getFilteringSource())));

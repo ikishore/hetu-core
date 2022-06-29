@@ -1,5 +1,5 @@
 /*
- * Copyright (C) 2018-2021. Huawei Technologies Co., Ltd. All rights reserved.
+ * Copyright (C) 2018-2020. Huawei Technologies Co., Ltd. All rights reserved.
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
  * You may obtain a copy of the License at
@@ -14,23 +14,25 @@
  */
 package io.prestosql.operator.window;
 
-import io.prestosql.spi.connector.QualifiedObjectName;
+import com.google.common.collect.ImmutableList;
+import io.prestosql.spi.function.Signature;
+import io.prestosql.spi.type.StandardTypes;
+
+import static io.prestosql.spi.function.FunctionKind.WINDOW;
+import static io.prestosql.spi.type.TypeSignature.parseTypeSignature;
 
 public enum RankingFunction
 {
-    ROW_NUMBER(QualifiedObjectName.valueOfDefaultFunction("row_number")),
-    RANK(QualifiedObjectName.valueOfDefaultFunction("rank")),
-    DENSE_RANK(QualifiedObjectName.valueOfDefaultFunction("dense_rank"));
+    ROW_NUMBER(new Signature("row_number", WINDOW, parseTypeSignature(StandardTypes.BIGINT), ImmutableList.of())), RANK(new Signature("rank", WINDOW, parseTypeSignature(StandardTypes.BIGINT), ImmutableList.of())), DENSE_RANK(new Signature("dense_rank", WINDOW, parseTypeSignature(StandardTypes.BIGINT), ImmutableList.of()));
+    private Signature value;
 
-    private QualifiedObjectName name;
-
-    private RankingFunction(QualifiedObjectName name)
+    private RankingFunction(Signature value)
     {
-        this.name = name;
+        this.value = value;
     }
 
-    public QualifiedObjectName getName()
+    public Signature getValue()
     {
-        return this.name;
+        return this.value;
     }
 }

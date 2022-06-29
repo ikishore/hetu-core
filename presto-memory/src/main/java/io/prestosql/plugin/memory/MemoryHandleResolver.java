@@ -45,13 +45,13 @@ public final class MemoryHandleResolver
     @Override
     public Class<? extends ConnectorOutputTableHandle> getOutputTableHandleClass()
     {
-        return MemoryWriteTableHandle.class;
+        return MemoryOutputTableHandle.class;
     }
 
     @Override
     public Class<? extends ConnectorInsertTableHandle> getInsertTableHandleClass()
     {
-        return MemoryWriteTableHandle.class;
+        return MemoryInsertTableHandle.class;
     }
 
     @Override

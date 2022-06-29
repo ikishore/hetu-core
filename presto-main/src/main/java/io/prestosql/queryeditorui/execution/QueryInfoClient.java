@@ -53,9 +53,8 @@ public class QueryInfoClient
         this.okHttpClient = okHttpClient;
     }
 
-    public BasicQueryInfo from(URI inputInfoUri, String id)
+    public BasicQueryInfo from(URI infoUri, String id)
     {
-        URI infoUri = inputInfoUri;
         infoUri = requireNonNull(infoUri, "infoUri is null");
         HttpUrl url = HttpUrl.get(infoUri);
         url = url.newBuilder().encodedPath("/v1/query/" + id).query(null).build();

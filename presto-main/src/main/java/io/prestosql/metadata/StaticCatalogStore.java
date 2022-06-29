@@ -20,7 +20,6 @@ import com.google.common.io.Files;
 import io.airlift.log.Logger;
 import io.prestosql.catalog.CatalogStoreUtil;
 import io.prestosql.connector.ConnectorManager;
-import io.prestosql.utils.OptimizerUtils;
 
 import javax.inject.Inject;
 
@@ -103,7 +102,6 @@ public class StaticCatalogStore
         checkState(connectorName != null, "Catalog configuration %s does not contain connector.name", file.getAbsoluteFile());
 
         connectorManager.createConnection(catalogName, connectorName, ImmutableMap.copyOf(properties));
-        OptimizerUtils.addPlanOptimizerBlacklist(catalogName, properties);
         log.info("-- Added catalog %s using connector %s --", catalogName, connectorName);
     }
 

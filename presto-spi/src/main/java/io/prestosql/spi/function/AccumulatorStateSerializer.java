@@ -15,8 +15,6 @@ package io.prestosql.spi.function;
 
 import io.prestosql.spi.block.Block;
 import io.prestosql.spi.block.BlockBuilder;
-import io.prestosql.spi.snapshot.BlockEncodingSerdeProvider;
-import io.prestosql.spi.snapshot.Restorable;
 import io.prestosql.spi.type.Type;
 
 public interface AccumulatorStateSerializer<T>
@@ -36,22 +34,4 @@ public interface AccumulatorStateSerializer<T>
      * {@code block.isNull(index)} is guaranteed to return false.
      */
     void deserialize(Block block, int index, T state);
-
-    default Object serializeCapture(Object state, BlockEncodingSerdeProvider serdeProvider)
-    {
-        if (state instanceof Restorable) {
-            return ((Restorable) state).capture(serdeProvider);
-        }
-        throw new UnsupportedOperationException();
-    }
-
-    default void deserializeRestore(Object snapshot, Object state, BlockEncodingSerdeProvider serdeProvider)
-    {
-        if (state instanceof Restorable) {
-            ((Restorable) state).restore(snapshot, serdeProvider);
-        }
-        else {
-            throw new UnsupportedOperationException();
-        }
-    }
 }

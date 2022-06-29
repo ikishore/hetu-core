@@ -22,7 +22,6 @@ import io.prestosql.tempto.fulfillment.table.hive.HiveTableDefinition;
 import org.testng.annotations.Test;
 
 import java.math.BigDecimal;
-import java.nio.charset.StandardCharsets;
 import java.sql.Date;
 import java.sql.Timestamp;
 import java.time.LocalDateTime;
@@ -112,7 +111,7 @@ public class TestInsertIntoHiveTable
                         "ala ma kot",
                         "ala ma    ",
                         true,
-                        "kot binarny".getBytes(StandardCharsets.UTF_8)));
+                        "kot binarny".getBytes()));
     }
 
     @Test
@@ -137,7 +136,7 @@ public class TestInsertIntoHiveTable
                         "ala ma kot",
                         "ala ma    ",
                         true,
-                        "kot binarny".getBytes(StandardCharsets.UTF_8)));
+                        "kot binarny".getBytes()));
     }
 
     @Test

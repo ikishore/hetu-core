@@ -1,5 +1,5 @@
 /*
- * Copyright (C) 2018-2021. Huawei Technologies Co., Ltd. All rights reserved.
+ * Copyright (C) 2018-2020. Huawei Technologies Co., Ltd. All rights reserved.
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
  * You may obtain a copy of the License at
@@ -34,7 +34,6 @@ import io.prestosql.statestore.StateStoreProvider;
 
 import java.io.ByteArrayInputStream;
 import java.io.IOException;
-import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.HashMap;
 import java.util.HashSet;
@@ -148,7 +147,7 @@ public class BloomFilterUtils
      * @param tableScanNode table
      * @return
      */
-    public static Supplier<List<Map<ColumnHandle, DynamicFilter>>> getCrossRegionDynamicFilterSupplier(DynamicFilterCacheManager dynamicFilterCacheManager, String queryId, TableScanNode tableScanNode)
+    public static Supplier<Map<ColumnHandle, DynamicFilter>> getCrossRegionDynamicFilterSupplier(DynamicFilterCacheManager dynamicFilterCacheManager, String queryId, TableScanNode tableScanNode)
     {
         if (queryId == null || tableScanNode == null || dynamicFilterCacheManager == null) {
             return null;
@@ -160,12 +159,12 @@ public class BloomFilterUtils
         }
 
         return () -> {
-            List<Map<ColumnHandle, DynamicFilter>> result = new ArrayList<>();
+            Map<ColumnHandle, DynamicFilter> result = new HashMap<>();
             Map<String, byte[]> newBloomFilterStateStoreCache = dynamicFilterCacheManager.getBloomFitler(queryId + CROSS_LAYER_DYNAMIC_FILTER);
             if (newBloomFilterStateStoreCache == null) {
                 return result;
             }
-            Map<ColumnHandle, DynamicFilter> dynamicFilters = new HashMap<>();
+
             for (Map.Entry<String, byte[]> entry : newBloomFilterStateStoreCache.entrySet()) {
                 if (tableColumnNames.contains(entry.getKey())) {
                     ColumnHandle columnHandle = new ColumnHandle() {
@@ -176,8 +175,7 @@ public class BloomFilterUtils
                         }
                     };
                     DynamicFilter newDynamicFilter = new BloomFilterDynamicFilter("", columnHandle, entry.getValue(), DynamicFilter.Type.GLOBAL);
-                    dynamicFilters.put(columnHandle, newDynamicFilter);
-                    result.add(dynamicFilters);
+                    result.put(columnHandle, newDynamicFilter);
                 }
             }
             return result;

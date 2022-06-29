@@ -16,7 +16,6 @@ package io.prestosql.plugin.resourcegroups;
 import com.google.common.collect.ImmutableList;
 import io.airlift.units.DataSize;
 import io.airlift.units.Duration;
-import io.prestosql.spi.resourcegroups.KillPolicy;
 import io.prestosql.spi.resourcegroups.ResourceGroup;
 import io.prestosql.spi.resourcegroups.ResourceGroupId;
 import io.prestosql.spi.resourcegroups.SchedulingPolicy;
@@ -41,7 +40,6 @@ public class TestingResourceGroup
     private int schedulingWeight;
     private SchedulingPolicy policy;
     private boolean jmxExport;
-    private KillPolicy killPolicy;
 
     public TestingResourceGroup(ResourceGroupId id)
     {
@@ -218,17 +216,5 @@ public class TestingResourceGroup
     public int getRunningQueries()
     {
         return 0;
-    }
-
-    @Override
-    public void setKillPolicy(KillPolicy killPolicy)
-    {
-        this.killPolicy = killPolicy;
-    }
-
-    @Override
-    public KillPolicy getKillPolicy()
-    {
-        return killPolicy;
     }
 }

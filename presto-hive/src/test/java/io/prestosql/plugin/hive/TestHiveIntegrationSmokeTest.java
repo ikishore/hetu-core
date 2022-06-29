@@ -13,57 +13,23 @@
  */
 package io.prestosql.plugin.hive;
 
-import com.google.common.base.Joiner;
 import com.google.common.collect.ImmutableList;
 import com.google.common.collect.ImmutableMap;
 import com.google.common.collect.ImmutableSet;
-import com.google.common.collect.Multimap;
 import io.prestosql.Session;
-import io.prestosql.client.NodeVersion;
 import io.prestosql.cost.StatsAndCosts;
-import io.prestosql.dynamicfilter.DynamicFilterService;
-import io.prestosql.execution.Lifespan;
-import io.prestosql.execution.MockRemoteTaskFactory;
-import io.prestosql.execution.NodeTaskMap;
-import io.prestosql.execution.RemoteTask;
-import io.prestosql.execution.SplitKey;
-import io.prestosql.execution.SqlStageExecution;
-import io.prestosql.execution.StageId;
-import io.prestosql.execution.TableInfo;
-import io.prestosql.execution.TestSqlTaskManager;
-import io.prestosql.execution.scheduler.LegacyNetworkTopology;
-import io.prestosql.execution.scheduler.NodeScheduler;
-import io.prestosql.execution.scheduler.NodeSchedulerConfig;
-import io.prestosql.execution.scheduler.NodeSelector;
-import io.prestosql.execution.scheduler.SplitSchedulerStats;
-import io.prestosql.failuredetector.NoOpFailureDetector;
-import io.prestosql.filesystem.FileSystemClientManager;
-import io.prestosql.metadata.InMemoryNodeManager;
 import io.prestosql.metadata.InsertTableHandle;
-import io.prestosql.metadata.InternalNode;
 import io.prestosql.metadata.Metadata;
-import io.prestosql.metadata.Split;
+import io.prestosql.metadata.QualifiedObjectName;
 import io.prestosql.metadata.TableMetadata;
-import io.prestosql.seedstore.SeedStoreManager;
-import io.prestosql.snapshot.QueryRecoveryManager;
-import io.prestosql.snapshot.QuerySnapshotManager;
-import io.prestosql.spi.HetuConstant;
-import io.prestosql.spi.PrestoException;
-import io.prestosql.spi.QueryId;
 import io.prestosql.spi.connector.CatalogName;
 import io.prestosql.spi.connector.CatalogSchemaTableName;
 import io.prestosql.spi.connector.ColumnMetadata;
 import io.prestosql.spi.connector.ConnectorSession;
-import io.prestosql.spi.connector.ConnectorSplit;
 import io.prestosql.spi.connector.Constraint;
-import io.prestosql.spi.connector.QualifiedObjectName;
 import io.prestosql.spi.metadata.TableHandle;
-import io.prestosql.spi.operator.ReuseExchangeOperator;
-import io.prestosql.spi.plan.PlanNodeId;
-import io.prestosql.spi.predicate.TupleDomain;
 import io.prestosql.spi.security.Identity;
 import io.prestosql.spi.security.SelectedRole;
-import io.prestosql.spi.service.PropertyService;
 import io.prestosql.spi.type.BigintType;
 import io.prestosql.spi.type.BooleanType;
 import io.prestosql.spi.type.CharType;
@@ -77,12 +43,9 @@ import io.prestosql.spi.type.TinyintType;
 import io.prestosql.spi.type.Type;
 import io.prestosql.spi.type.TypeSignature;
 import io.prestosql.spi.type.VarcharType;
-import io.prestosql.split.ConnectorAwareSplitSource;
 import io.prestosql.sql.analyzer.FeaturesConfig.JoinDistributionType;
 import io.prestosql.sql.analyzer.FeaturesConfig.JoinReorderingStrategy;
 import io.prestosql.sql.planner.Plan;
-import io.prestosql.sql.planner.PlanFragment;
-import io.prestosql.sql.planner.StageExecutionPlan;
 import io.prestosql.sql.planner.plan.ExchangeNode;
 import io.prestosql.sql.planner.planprinter.IoPlanPrinter.ColumnConstraint;
 import io.prestosql.sql.planner.planprinter.IoPlanPrinter.FormattedDomain;
@@ -90,13 +53,10 @@ import io.prestosql.sql.planner.planprinter.IoPlanPrinter.FormattedMarker;
 import io.prestosql.sql.planner.planprinter.IoPlanPrinter.FormattedRange;
 import io.prestosql.sql.planner.planprinter.IoPlanPrinter.IoPlan;
 import io.prestosql.sql.planner.planprinter.IoPlanPrinter.IoPlan.TableColumnInfo;
-import io.prestosql.statestore.LocalStateStoreProvider;
 import io.prestosql.testing.MaterializedResult;
 import io.prestosql.testing.MaterializedRow;
-import io.prestosql.testing.TestingSplit;
 import io.prestosql.tests.AbstractTestIntegrationSmokeTest;
 import io.prestosql.tests.DistributedQueryRunner;
-import io.prestosql.util.FinalizerService;
 import org.apache.hadoop.fs.Path;
 import org.intellij.lang.annotations.Language;
 import org.testng.annotations.Test;
@@ -104,22 +64,15 @@ import org.testng.annotations.Test;
 import java.io.File;
 import java.io.FilenameFilter;
 import java.math.BigDecimal;
-import java.net.URI;
 import java.time.LocalDate;
 import java.time.LocalDateTime;
 import java.util.ArrayList;
 import java.util.Arrays;
-import java.util.Collection;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
-import java.util.OptionalInt;
-import java.util.Properties;
 import java.util.Set;
-import java.util.UUID;
-import java.util.concurrent.ExecutorService;
-import java.util.concurrent.ScheduledExecutorService;
 import java.util.concurrent.TimeUnit;
 import java.util.function.BiConsumer;
 import java.util.function.Consumer;
@@ -134,15 +87,13 @@ import static com.google.common.base.Preconditions.checkState;
 import static com.google.common.base.Verify.verify;
 import static com.google.common.collect.Iterables.getOnlyElement;
 import static com.google.common.io.Files.asCharSink;
+import static com.google.common.io.Files.createTempDir;
 import static com.google.common.io.MoreFiles.deleteRecursively;
 import static com.google.common.io.RecursiveDeleteOption.ALLOW_INSECURE;
-import static io.airlift.concurrent.Threads.daemonThreadsNamed;
 import static io.airlift.json.JsonCodec.jsonCodec;
 import static io.airlift.tpch.TpchTable.CUSTOMER;
 import static io.airlift.tpch.TpchTable.LINE_ITEM;
 import static io.airlift.tpch.TpchTable.ORDERS;
-import static io.prestosql.SessionTestUtils.TEST_SESSION;
-import static io.prestosql.SessionTestUtils.TEST_SESSION_REUSE;
 import static io.prestosql.SystemSessionProperties.COLOCATED_JOIN;
 import static io.prestosql.SystemSessionProperties.CONCURRENT_LIFESPANS_PER_NODE;
 import static io.prestosql.SystemSessionProperties.DYNAMIC_SCHEDULE_FOR_GROUPED_EXECUTION;
@@ -150,12 +101,8 @@ import static io.prestosql.SystemSessionProperties.ENABLE_DYNAMIC_FILTERING;
 import static io.prestosql.SystemSessionProperties.GROUPED_EXECUTION;
 import static io.prestosql.SystemSessionProperties.JOIN_DISTRIBUTION_TYPE;
 import static io.prestosql.SystemSessionProperties.JOIN_REORDERING_STRATEGY;
-import static io.prestosql.execution.SqlStageExecution.createSqlStageExecution;
-import static io.prestosql.execution.scheduler.TestPhasedExecutionSchedule.createTableScanPlanFragment;
-import static io.prestosql.execution.scheduler.TestSourcePartitionedScheduler.createFixedSplitSource;
 import static io.prestosql.plugin.hive.HiveColumnHandle.BUCKET_COLUMN_NAME;
 import static io.prestosql.plugin.hive.HiveColumnHandle.PATH_COLUMN_NAME;
-import static io.prestosql.plugin.hive.HiveCompressionCodec.NONE;
 import static io.prestosql.plugin.hive.HiveQueryRunner.TPCH_SCHEMA;
 import static io.prestosql.plugin.hive.HiveTableProperties.BUCKETED_BY_PROPERTY;
 import static io.prestosql.plugin.hive.HiveTableProperties.BUCKET_COUNT_PROPERTY;
@@ -182,21 +129,14 @@ import static io.prestosql.sql.planner.planprinter.PlanPrinter.textLogicalPlan;
 import static io.prestosql.testing.MaterializedResult.resultBuilder;
 import static io.prestosql.testing.TestingAccessControlManager.TestingPrivilegeType.SELECT_COLUMN;
 import static io.prestosql.testing.TestingAccessControlManager.privilege;
-import static io.prestosql.testing.TestingRecoveryUtils.NOOP_RECOVERY_UTILS;
 import static io.prestosql.testing.TestingSession.testSessionBuilder;
 import static io.prestosql.testing.assertions.Assert.assertEquals;
 import static io.prestosql.tests.QueryAssertions.assertEqualsIgnoreOrder;
 import static io.prestosql.transaction.TransactionBuilder.transaction;
 import static java.lang.String.format;
 import static java.nio.charset.StandardCharsets.UTF_8;
-import static java.nio.file.Files.createTempDirectory;
 import static java.util.Objects.requireNonNull;
-import static java.util.concurrent.Executors.newCachedThreadPool;
-import static java.util.concurrent.Executors.newScheduledThreadPool;
 import static java.util.stream.Collectors.joining;
-import static java.util.stream.Collectors.toList;
-import static org.apache.hadoop.hive.metastore.api.hive_metastoreConstants.FILE_INPUT_FORMAT;
-import static org.apache.hadoop.hive.serde.serdeConstants.SERIALIZATION_LIB;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.testng.Assert.assertFalse;
@@ -210,27 +150,10 @@ import static org.testng.FileAssert.assertFile;
 public class TestHiveIntegrationSmokeTest
         extends AbstractTestIntegrationSmokeTest
 {
-    private static final CatalogName CONNECTOR_ID = new CatalogName("connector_id");
-    private static final String TEST_CATALOG = "test_catalog";
-    private static final String TEST_SCHEMA = "test_schema";
-    private static final String TEST_TABLE = "test_table";
-
     private final String catalog;
     private final Session bucketedSession;
     private final Session autoVacuumSession;
     private final TypeTranslator typeTranslator;
-
-    private Session testSessionSort;
-    private Session testSessionSortPrcntDrv50;
-    private Session testSessionSortPrcntDrv25;
-    private Session testSessionSortPrcntDrv40;
-    private FinalizerService finalizerService;
-    private NodeTaskMap nodeTaskMap;
-    private InMemoryNodeManager nodeManager;
-    private NodeSelector nodeSelector;
-    private Map<InternalNode, RemoteTask> taskMap;
-    private ExecutorService remoteTaskExecutor;
-    private ScheduledExecutorService remoteTaskScheduledExecutor;
 
     @SuppressWarnings("unused")
     public TestHiveIntegrationSmokeTest()
@@ -249,24 +172,6 @@ public class TestHiveIntegrationSmokeTest
         this.bucketedSession = requireNonNull(bucketedSession, "bucketSession is null");
         this.autoVacuumSession = requireNonNull(autoVacuumSession, "autoVacuumSession is null");
         this.typeTranslator = requireNonNull(typeTranslator, "typeTranslator is null");
-
-        this.remoteTaskExecutor = newCachedThreadPool(daemonThreadsNamed("remoteTaskExecutor-%s"));
-        this.remoteTaskScheduledExecutor = newScheduledThreadPool(2, daemonThreadsNamed("remoteTaskScheduledExecutor-%s"));
-        PropertyService.setProperty(HetuConstant.SPLIT_CACHE_MAP_ENABLED, false);
-
-        finalizerService = new FinalizerService();
-        nodeTaskMap = new NodeTaskMap(finalizerService);
-        nodeManager = new InMemoryNodeManager();
-
-        NodeSchedulerConfig nodeSchedulerConfig = new NodeSchedulerConfig()
-                .setMaxSplitsPerNode(20)
-                .setIncludeCoordinator(false)
-                .setMaxPendingSplitsPerTask(10);
-
-        NodeScheduler nodeScheduler = new NodeScheduler(new LegacyNetworkTopology(), nodeManager, nodeSchedulerConfig, nodeTaskMap);
-        // contents of taskMap indicate the node-task map for the current stage
-        taskMap = new HashMap<>();
-        nodeSelector = nodeScheduler.createNodeSelector(CONNECTOR_ID, false, null);
     }
 
     @Test
@@ -1021,13 +926,12 @@ public class TestHiveIntegrationSmokeTest
     private static final Pattern DELTA_PATTERN = Pattern.compile("(delete_)?delta_(\\d+)_(\\d+)(_\\d+)?");
     private static final Pattern BASE_PATTERN = Pattern.compile("base_(\\d+)");
 
-    private String[] listPartition(String testTablePath, String testPartition)
+    private String[] listPartition(String tablePath, String partition)
     {
-        String tablePath = testTablePath;
         if (tablePath.startsWith("file:")) {
             tablePath = tablePath.replace("file:", "");
         }
-        String[] partitionDirs = new File(tablePath + "/" + testPartition).list((f, s) -> !s.startsWith("."));
+        String[] partitionDirs = new File(tablePath + "/" + partition).list((f, s) -> !s.startsWith("."));
         Arrays.sort(partitionDirs);
         return partitionDirs;
     }
@@ -1050,9 +954,8 @@ public class TestHiveIntegrationSmokeTest
         });
     }
 
-    private void assertFilesAfterCleanup(String testTablePath, int expectedNumberOfDirectories)
+    private void assertFilesAfterCleanup(String tablePath, int expectedNumberOfDirectories)
     {
-        String tablePath = testTablePath;
         int loopNumber = 50;
         if (tablePath.startsWith("file:")) {
             tablePath = tablePath.replace("file:", "");
@@ -2692,7 +2595,7 @@ public class TestHiveIntegrationSmokeTest
     public void testCreateExternalTable()
             throws Exception
     {
-        File tempDir = createTempDirectory(getClass().getName()).toFile();
+        File tempDir = createTempDir();
         File dataFile = new File(tempDir, "test.txt");
         asCharSink(dataFile, UTF_8).write("hello\nworld\n");
 
@@ -3153,7 +3056,7 @@ public class TestHiveIntegrationSmokeTest
 
         assertUpdate(createTable, "SELECT count(*) FROM orders");
         assertUpdate("ALTER TABLE test_rename_column RENAME COLUMN orderkey TO new_orderkey");
-        assertQuery("SELECT new_orderkey, orderstatus FROM test_rename_column", "SELECT orderkey, orderstatus FROM orders where orderstatus != 'dfd'");
+        assertQuery("SELECT new_orderkey, orderstatus FROM test_rename_column", "SELECT orderkey, orderstatus FROM orders");
         assertQueryFails("ALTER TABLE test_rename_column RENAME COLUMN \"$path\" TO test", ".* Cannot rename hidden column");
         assertQueryFails("ALTER TABLE test_rename_column RENAME COLUMN orderstatus TO new_orderstatus", "Renaming partition columns is not supported");
         assertQuery("SELECT new_orderkey, orderstatus FROM test_rename_column", "SELECT orderkey, orderstatus FROM orders");
@@ -3201,26 +3104,6 @@ public class TestHiveIntegrationSmokeTest
         assertQuery("SELECT * FROM test_drop_bucketing_column", "SELECT custkey, orderkey,  orderstatus FROM orders");
 
         assertUpdate("DROP TABLE test_drop_bucketing_column");
-    }
-
-    @Test
-    private void testRenameBucketingColumn()
-    {
-        @Language("SQL") String createTable = "" +
-                "CREATE TABLE test_rename_bucketing_column\n" +
-                "WITH (\n" +
-                "  bucket_count = 5, bucketed_by = ARRAY ['orderstatus']\n" +
-                ")\n" +
-                "AS\n" +
-                "SELECT custkey, orderkey, orderstatus FROM orders";
-
-        assertUpdate(createTable, "SELECT count(*) FROM orders");
-        assertQuery("SELECT orderkey, orderstatus FROM test_rename_bucketing_column", "SELECT orderkey, orderstatus FROM orders");
-
-        assertUpdate("ALTER TABLE test_rename_bucketing_column RENAME COLUMN orderstatus TO orderstatus1");
-        assertQuery("SELECT orderkey, orderstatus1  FROM test_rename_bucketing_column", "SELECT orderkey, orderstatus  FROM orders");
-
-        assertUpdate("DROP TABLE test_rename_bucketing_column");
     }
 
     @Test
@@ -4654,7 +4537,7 @@ public class TestHiveIntegrationSmokeTest
         String tableName = "test_create_avro_table_with_schema_url";
         File schemaFile = createAvroSchemaFile();
 
-        String createTableSql = getAvroCreateTableSql(tableName, schemaFile.getCanonicalPath());
+        String createTableSql = getAvroCreateTableSql(tableName, schemaFile.getAbsolutePath());
         String expectedShowCreateTable = getAvroCreateTableSql(tableName, schemaFile.toURI().toString());
 
         assertUpdate(createTableSql);
@@ -4682,7 +4565,7 @@ public class TestHiveIntegrationSmokeTest
         String tableName = "test_alter_avro_table_with_schema_url";
         File schemaFile = createAvroSchemaFile();
 
-        assertUpdate(getAvroCreateTableSql(tableName, schemaFile.getCanonicalPath()));
+        assertUpdate(getAvroCreateTableSql(tableName, schemaFile.getAbsolutePath()));
 
         try {
             if (renameColumn) {
@@ -5100,9 +4983,8 @@ public class TestHiveIntegrationSmokeTest
         Session session = getSession();
         ImmutableList.Builder<TestingHiveStorageFormat> formats = ImmutableList.builder();
         for (HiveStorageFormat hiveStorageFormat : HiveStorageFormat.values()) {
-            if (hiveStorageFormat == HiveStorageFormat.CSV || hiveStorageFormat == HiveStorageFormat.MULTIDELIMIT) {
+            if (hiveStorageFormat == HiveStorageFormat.CSV) {
                 // CSV supports only unbounded VARCHAR type
-                // MULTIDELIMIT is supported only when field.delim property is specified
                 continue;
             }
             formats.add(new TestingHiveStorageFormat(session, hiveStorageFormat));
@@ -5191,7 +5073,7 @@ public class TestHiveIntegrationSmokeTest
         assertUpdate(autoVacuumSession, "DROP TABLE auto_vacuum_test_table2");
     }
 
-    private void checkBaseDirectoryExists(String testPath, boolean delayRequired)
+    private void checkBaseDirectoryExists(String path, boolean delayRequired)
     {
         try {
             // Since auto-vacuum runs asynchronously
@@ -5202,8 +5084,6 @@ public class TestHiveIntegrationSmokeTest
         catch (InterruptedException e) {
             // Ignore
         }
-
-        String path = testPath;
         if (path.startsWith("file:")) {
             path = path.replace("file:", "");
         }
@@ -5326,14 +5206,13 @@ public class TestHiveIntegrationSmokeTest
         String[] types = {"double", "decimal(7,2)", "decimal(38,7)", "integer", "bigint", "string", "boolean"};
         for (String type : types) {
             testPushdownNullForType(session1, session2, type);
-            testPushdownGetAllNULLsForType(session1, session2, type);
         }
     }
 
     private void testPushdownNullForType(Session sessionWithOr, Session sessionWithoutOR, String type)
     {
         try {
-            assertUpdate(sessionWithOr, "CREATE TABLE test_predicate_or_NULL (a " + type + ", b " + type + ", c int) with (transactional=false, format='orc')");
+            assertUpdate(sessionWithOr, "CREATE TABLE test_predicate_or_NULL (a " + type + ", b " + type + ", c int) with (transactional=true, format='orc')");
             assertUpdate(sessionWithOr, "INSERT INTO test_predicate_or_NULL VALUES " +
                     "(cast(0 as " + type + "), cast(0 as " + type + "),0)," +
                     "(cast(1 as " + type + "), NULL, 1)," +
@@ -5387,73 +5266,6 @@ public class TestHiveIntegrationSmokeTest
         }
     }
 
-    private void testPushdownGetAllNULLsForType(Session sessionWithOr, Session sessionWithoutOR, String type)
-    {
-        try {
-            assertUpdate(sessionWithOr, "CREATE TABLE test_predicate_or_NULL_tmp (a " + type + ", b " + type + ", c int) with (transactional=false, format='orc')");
-            assertUpdate(sessionWithOr, "INSERT INTO test_predicate_or_NULL_tmp VALUES " +
-                            "(cast(0 as " + type + "),NULL,0)," +
-                            "(NULL,NULL,1)," +
-                            "(cast(2 as " + type + "),NULL,2)," +
-                            "(NULL,NULL,3)," +
-                            "(cast(4 as " + type + "),NULL,4)," +
-                    "(NULL,NULL,NULL)",
-                    6);
-            assertUpdate(sessionWithOr, "INSERT INTO test_predicate_or_NULL_tmp SELECT * from test_predicate_or_NULL_tmp", 6); /* 12 rows */
-            assertUpdate(sessionWithOr, "INSERT INTO test_predicate_or_NULL_tmp SELECT * from test_predicate_or_NULL_tmp", 12); /* 24 rows */
-            assertUpdate(sessionWithOr, "INSERT INTO test_predicate_or_NULL_tmp SELECT * from test_predicate_or_NULL_tmp", 24); /* 48 rows */
-            assertUpdate(sessionWithOr, "INSERT INTO test_predicate_or_NULL_tmp SELECT * from test_predicate_or_NULL_tmp", 48); /* 96 rows */
-            assertUpdate(sessionWithOr, "INSERT INTO test_predicate_or_NULL_tmp SELECT * from test_predicate_or_NULL_tmp", 96); /* 192 rows */
-            assertUpdate(sessionWithOr, "INSERT INTO test_predicate_or_NULL_tmp SELECT * from test_predicate_or_NULL_tmp", 192); /* 384 rows */
-            assertUpdate(sessionWithOr, "INSERT INTO test_predicate_or_NULL_tmp SELECT * from test_predicate_or_NULL_tmp", 384); /* 768 rows */
-            assertUpdate(sessionWithOr, "INSERT INTO test_predicate_or_NULL_tmp SELECT * from test_predicate_or_NULL_tmp", 768); /* 1536 rows */
-
-            assertUpdate(sessionWithOr, "CREATE TABLE test_predicate_or_NULL WITH (transactional=false, format='orc')" +
-                    " AS SELECT * FROM test_predicate_or_NULL_tmp ORDER BY a, b, c",
-                    1536);
-
-            List<String> queries = new ArrayList<>();
-            queries.add("SELECT a FROM test_predicate_or_NULL WHERE c = 2 ORDER BY 1");
-            queries.add("SELECT a FROM test_predicate_or_NULL WHERE c >= 1 and c <= 3 ORDER BY 1");
-            queries.add("SELECT a FROM test_predicate_or_NULL WHERE c IN (1,3,5) ORDER BY 1");
-            queries.add("SELECT a FROM test_predicate_or_NULL WHERE c IN (0,2,4) ORDER BY 1");
-            queries.add("SELECT a FROM test_predicate_or_NULL WHERE c IS NULL ORDER BY 1");
-
-            queries.add("SELECT a FROM test_predicate_or_NULL WHERE b IS NULL ORDER BY 1");
-            queries.add("SELECT a,c FROM test_predicate_or_NULL WHERE b IS NULL ORDER BY 1,2");
-
-            queries.add("SELECT b FROM test_predicate_or_NULL WHERE c = 2 ORDER BY 1");
-            queries.add("SELECT b FROM test_predicate_or_NULL WHERE c >= 1 and c <= 3 ORDER BY 1");
-            queries.add("SELECT b FROM test_predicate_or_NULL WHERE c IN (1,3,5) ORDER BY 1");
-            queries.add("SELECT B FROM test_predicate_or_NULL WHERE c IN (0,2,4) ORDER BY 1");
-            queries.add("SELECT b FROM test_predicate_or_NULL WHERE c IS NULL ORDER BY 1");
-
-            queries.add("SELECT a,b FROM test_predicate_or_NULL WHERE c = 2 ORDER BY 1,2");
-            queries.add("SELECT b,a FROM test_predicate_or_NULL WHERE c >= 1 and c <= 3 ORDER BY 1,2");
-            queries.add("SELECT a,b FROM test_predicate_or_NULL WHERE c IN (1,3,5) ORDER BY 1,2");
-            queries.add("SELECT b,a FROM test_predicate_or_NULL WHERE c IN (0,2,4) ORDER BY 1,2");
-            queries.add("SELECT a,b,a FROM test_predicate_or_NULL WHERE c IS NULL ORDER BY 1,2");
-
-            MaterializedResult expected;
-            MaterializedResult resultPushdownOr;
-            MaterializedResult resultPushdown;
-            for (String query : queries) {
-                expected = computeActual(query);
-                resultPushdownOr = computeActual(sessionWithOr, query);
-                resultPushdown = computeActual(sessionWithoutOR, query);
-                System.out.println("Query [ " + query + " ]");
-
-                assertEquals(expected.getMaterializedRows(), resultPushdown.getMaterializedRows());
-                assertEquals(expected.getMaterializedRows(), resultPushdownOr.getMaterializedRows());
-                System.out.println("Type(" + type + ")\n-------------\n" + resultPushdown.getMaterializedRows().size());
-            }
-        }
-        finally {
-            assertUpdate("DROP TABLE IF EXISTS test_predicate_or_NULL_tmp");
-            assertUpdate("DROP TABLE IF EXISTS test_predicate_or_NULL");
-        }
-    }
-
     @Test
     public void testUpdateAndDeleteForBooleanColumn()
     {
@@ -5485,23 +5297,23 @@ public class TestHiveIntegrationSmokeTest
     @Test
     public void testVacuumForBooleanColumn()
     {
-        assertUpdate("DROP TABLE IF EXISTS tab_bkt_010");
-        assertUpdate(autoVacuumSession, "CREATE TABLE tab_bkt_010 (aa tinyint, bb smallint, cc int, " +
+        assertUpdate("DROP TABLE IF EXISTS tab_bkt_009");
+        assertUpdate(autoVacuumSession, "CREATE TABLE tab_bkt_009 (aa tinyint, bb smallint, cc int, " +
                 "dd bigint, ee boolean, ff real, gg double, hh varchar(10), ii varbinary, jj timestamp, kk decimal,ll decimal(10, 8),mm date,nn char(6)) " +
                 "with (bucket_count=2, bucketed_by=array ['dd'], format='orc', transactional=true)");
 
-        assertUpdate("insert into tab_bkt_010 values (tinyint'23', smallint'33', 830, 999930, boolean'0', 3.3, 3.03," +
+        assertUpdate("insert into tab_bkt_009 values (tinyint'23', smallint'33', 830, 999930, boolean'0', 3.3, 3.03," +
                 "'hello_3', varbinary'/', timestamp'2019-09-13 15:00:03', 53, 30.33, date '2019-09-13', 'work_3')", 1);
-        assertUpdate("insert into tab_bkt_010 values (tinyint'24', smallint'34', 840, 999940, boolean'1', 4.4, 4.04," +
+        assertUpdate("insert into tab_bkt_009 values (tinyint'24', smallint'34', 840, 999940, boolean'1', 4.4, 4.04," +
                 "'hello_4', varbinary'/', timestamp'2019-09-14 15:00:04', 54, 40.34, date '2019-09-14', 'work_4')", 1);
-        assertUpdate("insert into tab_bkt_010 values (tinyint'23', smallint'33', 830, 999930, boolean'0', 3.3, 3.03," +
+        assertUpdate("insert into tab_bkt_009 values (tinyint'23', smallint'33', 830, 999930, boolean'0', 3.3, 3.03," +
                 "'hello_3', varbinary'/', timestamp'2019-09-13 15:00:03', 53, 30.33, date '2019-09-13', 'work_3')", 1);
-        assertUpdate("insert into tab_bkt_010 values (tinyint'24', smallint'34', 840, 999940, boolean'1', 4.4, 4.04," +
+        assertUpdate("insert into tab_bkt_009 values (tinyint'24', smallint'34', 840, 999940, boolean'1', 4.4, 4.04," +
                 "'hello_4', varbinary'/', timestamp'2019-09-14 15:00:04', 54, 40.34, date '2019-09-14', 'work_4')", 1);
-        assertUpdate(String.format("VACUUM TABLE tab_bkt_010 AND WAIT"), 4);
-        assertUpdate("delete from tab_bkt_010 where mm=date'2019-09-14'", 2);
+        assertUpdate(String.format("VACUUM TABLE tab_bkt_009 AND WAIT"), 4);
+        assertUpdate("delete from tab_bkt_009 where mm=date'2019-09-14'", 2);
 
-        assertUpdate(String.format("DROP TABLE tab_bkt_010"));
+        assertUpdate(String.format("DROP TABLE tab_bkt_009"));
     }
 
     @Test
@@ -5524,1425 +5336,5 @@ public class TestHiveIntegrationSmokeTest
         result = getQueryRunner().execute("with ss as (select * from orders), sd as (select * from ss) " +
                 " select * from ss,sd where ss.orderkey = sd.orderkey");
         assertEquals(result.getRowCount(), 15000);
-    }
-
-    private void setUpNodes()
-    {
-        ImmutableList.Builder<InternalNode> nodeBuilder = ImmutableList.builder();
-        nodeBuilder.add(new InternalNode("other1", URI.create("http://10.0.0.1:11"), io.prestosql.client.NodeVersion.UNKNOWN, false));
-        nodeBuilder.add(new InternalNode("other2", URI.create("http://10.0.0.1:12"), io.prestosql.client.NodeVersion.UNKNOWN, false));
-        nodeBuilder.add(new InternalNode("other3", URI.create("http://10.0.0.1:13"), NodeVersion.UNKNOWN, false));
-        ImmutableList<InternalNode> nodes = nodeBuilder.build();
-        nodeManager.addNode(CONNECTOR_ID, nodes);
-    }
-
-    @Test
-    public void testRuseExchangeGroupSplitsMatchingBetweenProducerConsumer()
-    {
-        setUpNodes();
-        NodeTaskMap nodeTasks = new NodeTaskMap(new FinalizerService());
-        StageId stageId = new StageId(new QueryId("query"), 0);
-        UUID uuid = UUID.randomUUID();
-
-        PlanFragment testFragmentProducer = createTableScanPlanFragment("build", ReuseExchangeOperator.STRATEGY.REUSE_STRATEGY_PRODUCER, uuid, 1);
-
-        PlanNodeId tableScanNodeId = new PlanNodeId("plan_id");
-        StageExecutionPlan producerStageExecutionPlan = new StageExecutionPlan(
-                testFragmentProducer,
-                ImmutableMap.of(tableScanNodeId, new ConnectorAwareSplitSource(CONNECTOR_ID, createFixedSplitSource(0, TestingSplit::createRemoteSplit))),
-                ImmutableList.of(),
-                ImmutableMap.of(tableScanNodeId, new TableInfo(new QualifiedObjectName("test", TEST_SCHEMA, "test"), TupleDomain.all())));
-
-        SqlStageExecution producerStage = createSqlStageExecution(
-                stageId,
-                new TestSqlTaskManager.MockLocationFactory().createStageLocation(stageId),
-                producerStageExecutionPlan.getFragment(),
-                producerStageExecutionPlan.getTables(),
-                new MockRemoteTaskFactory(remoteTaskExecutor, remoteTaskScheduledExecutor),
-                TEST_SESSION_REUSE,
-                true,
-                nodeTasks,
-                remoteTaskExecutor,
-                new NoOpFailureDetector(),
-                new SplitSchedulerStats(),
-                new DynamicFilterService(new LocalStateStoreProvider(
-                        new SeedStoreManager(new FileSystemClientManager()))),
-                new QuerySnapshotManager(stageId.getQueryId(), NOOP_RECOVERY_UTILS, TEST_SESSION),
-                new QueryRecoveryManager(NOOP_RECOVERY_UTILS, TEST_SESSION, stageId.getQueryId()));
-
-        Set<Split> splits = createAndGetSplits(10);
-        Multimap<InternalNode, Split> producerAssignment = nodeSelector.computeAssignments(splits, ImmutableList.copyOf(taskMap.values()), Optional.of(producerStage)).getAssignments();
-        PlanFragment testFragmentConsumer = createTableScanPlanFragment("build", ReuseExchangeOperator.STRATEGY.REUSE_STRATEGY_CONSUMER, uuid, 1);
-        StageExecutionPlan consumerStageExecutionPlan = new StageExecutionPlan(
-                testFragmentConsumer,
-                ImmutableMap.of(tableScanNodeId, new ConnectorAwareSplitSource(CONNECTOR_ID, createFixedSplitSource(0, TestingSplit::createRemoteSplit))),
-                ImmutableList.of(),
-                ImmutableMap.of(tableScanNodeId, new TableInfo(new QualifiedObjectName("test", TEST_SCHEMA, "test"), TupleDomain.all())));
-
-        SqlStageExecution stage = createSqlStageExecution(
-                stageId,
-                new TestSqlTaskManager.MockLocationFactory().createStageLocation(stageId),
-                consumerStageExecutionPlan.getFragment(),
-                consumerStageExecutionPlan.getTables(),
-                new MockRemoteTaskFactory(remoteTaskExecutor, remoteTaskScheduledExecutor),
-                TEST_SESSION_REUSE,
-                true,
-                nodeTasks,
-                remoteTaskExecutor,
-                new NoOpFailureDetector(),
-                new SplitSchedulerStats(),
-                new DynamicFilterService(new LocalStateStoreProvider(
-                        new SeedStoreManager(new FileSystemClientManager()))),
-                new QuerySnapshotManager(stageId.getQueryId(), NOOP_RECOVERY_UTILS, TEST_SESSION),
-                new QueryRecoveryManager(NOOP_RECOVERY_UTILS, TEST_SESSION, stageId.getQueryId()));
-        Multimap<InternalNode, Split> consumerAssignment = nodeSelector.computeAssignments(splits, ImmutableList.copyOf(taskMap.values()), Optional.of(stage)).getAssignments();
-
-        assertEquals(consumerAssignment.size(), consumerAssignment.size());
-        for (InternalNode node : consumerAssignment.keySet()) {
-            List<Split> splitList = new ArrayList<>();
-            List<Split> splitList2 = new ArrayList<>();
-            boolean b = producerAssignment.containsEntry(node, consumerAssignment.get(node));
-            Collection<Split> producerSplits = producerAssignment.get(node);
-            Collection<Split> consumerSplits = producerAssignment.get(node);
-            producerSplits.forEach(s -> splitList.add(s));
-            List<Split> splitList1 = splitList.get(0).getSplits();
-            consumerSplits.forEach(s -> splitList2.add(s));
-            int i = 0;
-            for (Split split3 : splitList1) {
-                SplitKey splitKey1 = new SplitKey(split3, TEST_CATALOG, TEST_SCHEMA, TEST_TABLE);
-                SplitKey splitKey2 = new SplitKey(splitList1.get(i), TEST_CATALOG, TEST_SCHEMA, TEST_TABLE);
-                boolean f = splitKey1.equals(splitKey2);
-                assertEquals(true, f);
-                i++;
-            }
-        }
-    }
-
-    @Test
-    public void testRuseExchangeSplitsGroupNotMatchingBetweenProducerConsumer()
-    {
-        setUpNodes();
-        NodeTaskMap nodeTasks = new NodeTaskMap(new FinalizerService());
-        StageId stageId = new StageId(new QueryId("query"), 0);
-        UUID uuid = UUID.randomUUID();
-
-        PlanFragment testFragmentProducer = createTableScanPlanFragment("build", ReuseExchangeOperator.STRATEGY.REUSE_STRATEGY_PRODUCER, uuid, 1);
-
-        PlanNodeId tableScanNodeId = new PlanNodeId("plan_id");
-        StageExecutionPlan producerStageExecutionPlan = new StageExecutionPlan(
-                testFragmentProducer,
-                ImmutableMap.of(tableScanNodeId, new ConnectorAwareSplitSource(CONNECTOR_ID, createFixedSplitSource(0, TestingSplit::createRemoteSplit))),
-                ImmutableList.of(),
-                ImmutableMap.of(tableScanNodeId, new TableInfo(new QualifiedObjectName("test", TEST_SCHEMA, "test"), TupleDomain.all())));
-
-        SqlStageExecution producerStage = createSqlStageExecution(
-                stageId,
-                new TestSqlTaskManager.MockLocationFactory().createStageLocation(stageId),
-                producerStageExecutionPlan.getFragment(),
-                producerStageExecutionPlan.getTables(),
-                new MockRemoteTaskFactory(remoteTaskExecutor, remoteTaskScheduledExecutor),
-                TEST_SESSION_REUSE,
-                true,
-                nodeTasks,
-                remoteTaskExecutor,
-                new NoOpFailureDetector(),
-                new SplitSchedulerStats(),
-                new DynamicFilterService(new LocalStateStoreProvider(
-                        new SeedStoreManager(new FileSystemClientManager()))),
-                new QuerySnapshotManager(stageId.getQueryId(), NOOP_RECOVERY_UTILS, TEST_SESSION),
-                new QueryRecoveryManager(NOOP_RECOVERY_UTILS, TEST_SESSION, stageId.getQueryId()));
-
-        Set<Split> producerSplits = createAndGetSplits(10);
-        Multimap<InternalNode, Split> producerAssignment = nodeSelector.computeAssignments(producerSplits, ImmutableList.copyOf(taskMap.values()), Optional.of(producerStage)).getAssignments();
-        PlanFragment testFragmentConsumer = createTableScanPlanFragment("build", ReuseExchangeOperator.STRATEGY.REUSE_STRATEGY_CONSUMER, uuid, 1);
-        StageExecutionPlan consumerStageExecutionPlan = new StageExecutionPlan(
-                testFragmentConsumer,
-                ImmutableMap.of(tableScanNodeId, new ConnectorAwareSplitSource(CONNECTOR_ID, createFixedSplitSource(0, TestingSplit::createRemoteSplit))),
-                ImmutableList.of(),
-                ImmutableMap.of(tableScanNodeId, new TableInfo(new QualifiedObjectName("test", TEST_SCHEMA, "test"), TupleDomain.all())));
-
-        SqlStageExecution stage = createSqlStageExecution(
-                stageId,
-                new TestSqlTaskManager.MockLocationFactory().createStageLocation(stageId),
-                consumerStageExecutionPlan.getFragment(),
-                consumerStageExecutionPlan.getTables(),
-                new MockRemoteTaskFactory(remoteTaskExecutor, remoteTaskScheduledExecutor),
-                TEST_SESSION_REUSE,
-                true,
-                nodeTasks,
-                remoteTaskExecutor,
-                new NoOpFailureDetector(),
-                new SplitSchedulerStats(),
-                new DynamicFilterService(new LocalStateStoreProvider(
-                        new SeedStoreManager(new FileSystemClientManager()))),
-                new QuerySnapshotManager(stageId.getQueryId(), NOOP_RECOVERY_UTILS, TEST_SESSION),
-                new QueryRecoveryManager(NOOP_RECOVERY_UTILS, TEST_SESSION, stageId.getQueryId()));
-        Set<Split> consumerSplits = createAndGetSplits(50);
-
-        try {
-            Multimap<InternalNode, Split> consumerAssignment = nodeSelector.computeAssignments(consumerSplits, ImmutableList.copyOf(taskMap.values()), Optional.of(stage)).getAssignments();
-        }
-        catch (PrestoException e) {
-            assertEquals("Producer & consumer splits are not same", e.getMessage());
-            return;
-        }
-        assertEquals(false, true);
-    }
-
-    private void initSortBasedAggregation()
-    {
-        synchronized (TestHiveIntegrationSmokeTest.this) {
-            if (null == testSessionSort) {
-                this.testSessionSort = Session.builder(getSession())
-                        .setSystemProperty("sort_based_aggregation_enabled", "true")
-                        .build();
-
-                this.testSessionSortPrcntDrv50 = Session.builder(getSession())
-                        .setSystemProperty("sort_based_aggregation_enabled", "true")
-                        .setSystemProperty("prcnt_drivers_for_partial_aggr", "33")
-                        .build();
-
-                this.testSessionSortPrcntDrv25 = Session.builder(getSession())
-                        .setSystemProperty("sort_based_aggregation_enabled", "true")
-                        .setSystemProperty("prcnt_drivers_for_partial_aggr", "25")
-                        .build();
-
-                this.testSessionSortPrcntDrv40 = Session.builder(getSession())
-                        .setSystemProperty("sort_based_aggregation_enabled", "true")
-                        .setSystemProperty("prcnt_drivers_for_partial_aggr", "25")
-                        .build();
-            }
-        }
-    }
-
-    @Test
-    public void sortAggSingleSort()
-    {
-        initSortBasedAggregation();
-        assertUpdate("drop table if exists unsorttable");
-        assertUpdate("drop table if exists sorttable");
-        computeActual("create table unsorttable (orderkey int, year int) WITH (transactional = true , " +
-                "format = 'ORC', partitioned_by = ARRAY[ 'year' ] )");
-        assertUpdate("insert into unsorttable values (1,2011)", 1);
-        assertUpdate("insert into unsorttable values (2,2012)", 1);
-        assertUpdate("insert into unsorttable values (2,2012)", 1);
-        assertUpdate("insert into unsorttable values (2,2012)", 1);
-        assertUpdate("insert into unsorttable values (3,2013)", 1);
-        assertUpdate("insert into unsorttable values (3,2013)", 1);
-        assertUpdate("insert into unsorttable values (3,2014)", 1);
-
-        computeActual("create table sorttable  with(transactional = false, " +
-                "format = 'ORC',  bucketed_by=array['year'], bucket_count=1, sorted_by = ARRAY['year'])  as select * from unsorttable order by year");
-
-        MaterializedResult sortResult = computeActual(testSessionSort, "select avg(orderkey), count(year)," +
-                "year from sorttable  group by year order by year");
-
-        MaterializedResult hashResult = computeActual("select avg(orderkey), count(year)," +
-                "year from sorttable  group by year order by year");
-        assertEquals(sortResult.getMaterializedRows(), hashResult.getMaterializedRows());
-
-        sortResult = computeActual(testSessionSortPrcntDrv50, "select avg(orderkey), count(year), year from sorttable  group by year order by year");
-        assertEquals(sortResult.getMaterializedRows(), hashResult.getMaterializedRows());
-
-        assertUpdate("DROP TABLE sorttable");
-        assertUpdate("DROP TABLE unsorttable");
-    }
-
-    @Test
-    public void sortAggSingleSortNoAggregation()
-    {
-        initSortBasedAggregation();
-        assertUpdate("drop table if exists unsorttable1");
-        assertUpdate("drop table if exists sorttable1");
-        computeActual("create table unsorttable1 (orderkey int, year bigint) WITH (transactional = true , " +
-                "format = 'ORC', partitioned_by = ARRAY[ 'year'] )");
-        assertUpdate("insert into unsorttable1 values (1,2011)", 1);
-        assertUpdate("insert into unsorttable1 values (2,2012)", 1);
-        assertUpdate("insert into unsorttable1 values (2,2012)", 1);
-        assertUpdate("insert into unsorttable1 values (2,2012)", 1);
-        assertUpdate("insert into unsorttable1 values (3,2013)", 1);
-        assertUpdate("insert into unsorttable1 values (3,2013)", 1);
-        assertUpdate("insert into unsorttable1 values (3,2014)", 1);
-
-        computeActual("create table sorttable1  with(transactional = false, " +
-                "format = 'ORC',  bucketed_by=array['year'], bucket_count=1, sorted_by = ARRAY['year'])  as select * from unsorttable1 order by year");
-
-        MaterializedResult sortResult = computeActual(testSessionSort, "select year from sorttable1 group by year order by year");
-        MaterializedResult hashResult = computeActual("select year from sorttable1 group by year order by year");
-        assertEquals(sortResult.getMaterializedRows(), hashResult.getMaterializedRows());
-
-        sortResult = computeActual(testSessionSortPrcntDrv50, "select year from sorttable1 group by year order by year");
-        assertEquals(sortResult.getMaterializedRows(), hashResult.getMaterializedRows());
-
-        assertUpdate("DROP TABLE sorttable1");
-        assertUpdate("DROP TABLE unsorttable1");
-    }
-
-    @Test
-    public void sortAggBigint()
-    {
-        initSortBasedAggregation();
-        assertUpdate("drop table if exists unsorttable2");
-        assertUpdate("drop table if exists sorttable2");
-        computeActual("create table unsorttable2 (orderkey int, year bigint) WITH (transactional = true , " +
-                "format = 'ORC', partitioned_by = ARRAY[ 'year'] )");
-        assertUpdate("insert into unsorttable2 values (1,null)", 1);
-        assertUpdate("insert into unsorttable2 values (2,null)", 1);
-        assertUpdate("insert into unsorttable2 values (2,2012)", 1);
-        assertUpdate("insert into unsorttable2 values (2,2012)", 1);
-        assertUpdate("insert into unsorttable2 values (3,2013)", 1);
-        assertUpdate("insert into unsorttable2 values (3,2013)", 1);
-        assertUpdate("insert into unsorttable2 values (3,2014)", 1);
-
-        computeActual("create table sorttable2  with(transactional = false, " +
-                "format = 'ORC',  bucketed_by=array['year'], bucket_count=10, sorted_by = ARRAY['year'])  as select * from unsorttable2 order by year");
-
-        assertUpdate("set session sort_based_aggregation_enabled=true");
-        MaterializedResult sortResult = computeActual(testSessionSort, "select avg(orderkey), count(year), year from sorttable2 group by year order by year");
-        MaterializedResult hashResult = computeActual("select avg(orderkey), count(year), year from sorttable2 group by year order by year");
-        assertEquals(sortResult.getMaterializedRows(), hashResult.getMaterializedRows());
-
-        sortResult = computeActual(testSessionSortPrcntDrv50, "select avg(orderkey), count(year), year from sorttable2 group by year order by year");
-        assertEquals(sortResult.getMaterializedRows(), hashResult.getMaterializedRows());
-
-        assertUpdate("DROP TABLE sorttable2");
-        assertUpdate("DROP TABLE unsorttable2");
-    }
-
-    @Test
-    public void sortAggMultipleSort()
-    {
-        initSortBasedAggregation();
-        assertUpdate("drop table if exists unsorttable3");
-        assertUpdate("drop table if exists sorttable3");
-        computeActual("create table unsorttable3 (number int, orderkey double, year double) WITH (transactional = true , " +
-                "format = 'ORC')");
-        assertUpdate("insert into unsorttable3 values (1,11,2011)", 1);
-        assertUpdate("insert into unsorttable3 values (2,22,2012)", 1);
-        assertUpdate("insert into unsorttable3 values (3,33,2012)", 1);
-        assertUpdate("insert into unsorttable3 values (4,33,2012)", 1);
-        assertUpdate("insert into unsorttable3 values (4,44,2012)", 1);
-        assertUpdate("insert into unsorttable3 values (5,55,2013)", 1);
-        assertUpdate("insert into unsorttable3 values (6,66,2013)", 1);
-        assertUpdate("insert into unsorttable3 values (7,77,2014)", 1);
-
-        computeActual("create table sorttable3  with(transactional = false, " +
-                "format = 'ORC',  bucketed_by=array['orderkey', 'year'], bucket_count=2, sorted_by = ARRAY['orderkey', 'year'])  as select * from unsorttable3 order by orderkey,year");
-
-        MaterializedResult sortResult = computeActual(testSessionSort, "select avg(orderkey), count(year)," +
-                "year from sorttable3  group by orderkey,year order by orderkey,year");
-
-        MaterializedResult hashResult = computeActual("select avg(orderkey), count(year)," +
-                "year from sorttable3  group by orderkey,year order by orderkey,year");
-
-        assertEquals(sortResult.getMaterializedRows(), hashResult.getMaterializedRows());
-
-        sortResult = computeActual(testSessionSort, "select avg(orderkey), count(year)," +
-                "year from sorttable3 group by year order by year");
-
-        hashResult = computeActual("select avg(orderkey), count(year)," +
-                "year from sorttable3 group by year order by year");
-
-        assertEquals(sortResult.getMaterializedRows(), hashResult.getMaterializedRows());
-
-        sortResult = computeActual(testSessionSortPrcntDrv50, "select avg(orderkey), count(year), year from sorttable3 group by year order by year");
-        assertEquals(sortResult.getMaterializedRows(), hashResult.getMaterializedRows());
-
-        assertUpdate("DROP TABLE sorttable3");
-        assertUpdate("DROP TABLE unsorttable3");
-    }
-
-    @Test
-    public void sortAggDateType()
-    {
-        initSortBasedAggregation();
-        assertUpdate("drop table if exists unsorttable4");
-        assertUpdate("drop table if exists sorttable4");
-        computeActual("create table unsorttable4 (number int, orderkey decimal(10,4), year date) WITH (transactional = true , " +
-                "format = 'ORC')");
-        assertUpdate("insert into unsorttable4 values (1,11.1,date '2011-07-20')", 1);
-        assertUpdate("insert into unsorttable4 values (2,22.2,date '2012-07-20')", 1);
-        assertUpdate("insert into unsorttable4 values (3,33.3,date '2013-07-20')", 1);
-        assertUpdate("insert into unsorttable4 values (4,33.3,date '2013-07-20')", 1);
-        assertUpdate("insert into unsorttable4 values (5,55.5,date '2013-07-20')", 1);
-        assertUpdate("insert into unsorttable4 values (6,66.6,date '2014-07-20')", 1);
-        assertUpdate("insert into unsorttable4 values (7,77.7,date '2015-07-20')", 1);
-
-        computeActual("create table sorttable4  with(transactional = false, " +
-                "format = 'ORC',  bucketed_by=array['year'], bucket_count=2, sorted_by = ARRAY['year'])  as select * from unsorttable4 order by year");
-        String query = "select avg(orderkey), count(year), year from sorttable4  group by year order by year";
-        MaterializedResult sortResult = computeActual(testSessionSort, query);
-        MaterializedResult hashResult = computeActual(query);
-        assertEquals(sortResult.getMaterializedRows(), hashResult.getMaterializedRows());
-        sortResult = computeActual(testSessionSortPrcntDrv50, query);
-        assertEquals(sortResult.getMaterializedRows(), hashResult.getMaterializedRows());
-        sortResult = computeActual(testSessionSortPrcntDrv40, query);
-        assertEquals(sortResult.getMaterializedRows(), hashResult.getMaterializedRows());
-
-        assertUpdate("DROP TABLE sorttable4");
-        assertUpdate("DROP TABLE unsorttable4");
-    }
-
-    @Test
-    public void sortAggVarchar()
-    {
-        initSortBasedAggregation();
-        assertUpdate("drop table if exists unsorttable5");
-        assertUpdate("drop table if exists sorttable5");
-        computeActual("create table unsorttable5 (number int, orderkey decimal(10,4), year varchar) WITH (transactional = true , " +
-                "format = 'ORC')");
-        assertUpdate("insert into unsorttable5 values (1,11.1, '2011-07-20')", 1);
-        assertUpdate("insert into unsorttable5 values (2,22.2, '2012-07-20')", 1);
-        assertUpdate("insert into unsorttable5 values (3,33.3, '2013-07-20')", 1);
-        assertUpdate("insert into unsorttable5 values (4,33.3, '2013-07-20')", 1);
-        assertUpdate("insert into unsorttable5 values (5,55.5, '2013-07-20')", 1);
-        assertUpdate("insert into unsorttable5 values (6,66.6, '2014-07-20')", 1);
-        assertUpdate("insert into unsorttable5 values (7,77.7, '2015-07-20')", 1);
-
-        computeActual("create table sorttable5  with(transactional = false, " +
-                "format = 'ORC',  bucketed_by=array['year'], bucket_count=2, sorted_by = ARRAY['year'])  as select * from unsorttable5 order by year");
-
-        MaterializedResult sortResult = computeActual(testSessionSort, "select avg(orderkey), count(year)," +
-                "year from sorttable5  group by year order by year");
-
-        MaterializedResult hashResult = computeActual("select avg(orderkey), count(year)," +
-                "year from sorttable5  group by year order by year");
-
-        assertEquals(sortResult.getMaterializedRows(), hashResult.getMaterializedRows());
-
-        sortResult = computeActual(testSessionSortPrcntDrv50, "select avg(orderkey), count(year), year from sorttable5  group by year order by year");
-        assertEquals(sortResult.getMaterializedRows(), hashResult.getMaterializedRows());
-
-        assertUpdate("DROP TABLE sorttable5");
-        assertUpdate("DROP TABLE unsorttable5");
-    }
-
-    @Test
-    public void sortAggSmallint()
-    {
-        initSortBasedAggregation();
-        assertUpdate("drop table if exists unsorttable6");
-        assertUpdate("drop table if exists sorttable6");
-        computeActual("create table unsorttable6 (orderkey int, year smallint) WITH (transactional = true , " +
-                "format = 'ORC', partitioned_by = ARRAY[ 'year' ] )");
-        assertUpdate("insert into unsorttable6 values (1,smallint '2011')", 1);
-        assertUpdate("insert into unsorttable6 values (2,smallint '2012')", 1);
-        assertUpdate("insert into unsorttable6 values (2,smallint '2012')", 1);
-        assertUpdate("insert into unsorttable6 values (2,smallint '2012')", 1);
-        assertUpdate("insert into unsorttable6 values (3,smallint '2013')", 1);
-        assertUpdate("insert into unsorttable6 values (3,smallint '2014')", 1);
-        assertUpdate("insert into unsorttable6 values (3,smallint '2015')", 1);
-
-        computeActual("create table sorttable6  with(transactional = false, " +
-                "format = 'ORC',  bucketed_by=array['year'], bucket_count=1, sorted_by = ARRAY['year'])  as select * from unsorttable6 order by year");
-
-        MaterializedResult sortResult = computeActual(testSessionSort, "select avg(orderkey), count(year)," +
-                "year from sorttable6  group by year order by year");
-
-        MaterializedResult hashResult = computeActual("select avg(orderkey), count(year)," +
-                "year from sorttable6  group by year order by year");
-
-        assertEquals(sortResult.getMaterializedRows(), hashResult.getMaterializedRows());
-
-        sortResult = computeActual(testSessionSortPrcntDrv50, "select avg(orderkey), count(year), year from sorttable6  group by year order by year");
-        assertEquals(sortResult.getMaterializedRows(), hashResult.getMaterializedRows());
-
-        assertUpdate("DROP TABLE sorttable6");
-        assertUpdate("DROP TABLE unsorttable6");
-    }
-
-    @Test
-    public void sortAggBoolean()
-    {
-        initSortBasedAggregation();
-        assertUpdate("drop table if exists unsorttable7");
-        assertUpdate("drop table if exists sorttable7");
-        computeActual("create table unsorttable7 (orderkey int, year int, iscurrentemployee boolean ) WITH (transactional = true , " +
-                "format = 'ORC')");
-        assertUpdate("insert into unsorttable7 values (1,2011, true)", 1);
-        assertUpdate("insert into unsorttable7 values (2,2012, true)", 1);
-        assertUpdate("insert into unsorttable7 values (2,2012, true)", 1);
-        assertUpdate("insert into unsorttable7 values (2,2012, false)", 1);
-        assertUpdate("insert into unsorttable7 values (3,2013, false)", 1);
-        assertUpdate("insert into unsorttable7 values (3,2013, true)", 1);
-        assertUpdate("insert into unsorttable7 values (3,2014, false)", 1);
-
-        computeActual("create table sorttable7  with(transactional = false, " +
-                "format = 'ORC',  bucketed_by=array['iscurrentemployee'], bucket_count=1, sorted_by = ARRAY['iscurrentemployee'])" +
-                "  as select * from unsorttable7 order by iscurrentemployee");
-
-        MaterializedResult sortResult = computeActual(testSessionSort, "select avg(orderkey), count(year)," +
-                "iscurrentemployee from sorttable7  group by iscurrentemployee order by iscurrentemployee");
-
-        MaterializedResult hashResult = computeActual("select avg(orderkey), count(year)," +
-                "iscurrentemployee from sorttable7  group by iscurrentemployee order by iscurrentemployee");
-
-        assertEquals(sortResult.getMaterializedRows(), hashResult.getMaterializedRows());
-
-        sortResult = computeActual(testSessionSortPrcntDrv50, "select avg(orderkey), count(year), iscurrentemployee from sorttable7  group by iscurrentemployee order by iscurrentemployee");
-        assertEquals(sortResult.getMaterializedRows(), hashResult.getMaterializedRows());
-
-        assertUpdate("DROP TABLE sorttable7");
-        assertUpdate("DROP TABLE unsorttable7");
-    }
-
-    @Test
-    public void sortAggSplitWithMultiplePagesBigint()
-    {
-        initSortBasedAggregation();
-        // this Test case we will insert many rows , so that single split will yield many pages, groub & sort by bigint
-
-        assertUpdate("drop table if exists unsorttable8");
-        assertUpdate("drop table if exists sorttable8");
-        computeActual("create table unsorttable8 (orderkey int, year bigint) WITH (transactional = false , " +
-                "format = 'ORC')");
-
-        String str = generateNumberOfRowsForTwoColumns(2500, 10);
-
-        assertUpdate("insert into unsorttable8 values " + str, 2510);
-
-        computeActual("create table sorttable8  with(transactional = false, " +
-                "format = 'ORC',  bucketed_by=array['year'], bucket_count=1, sorted_by = ARRAY['year'])  as select * from unsorttable8 order by year");
-
-        MaterializedResult sortResult = computeActual(testSessionSort, "select avg(orderkey), count(year)," +
-                "year from sorttable8  group by year order by year");
-
-        MaterializedResult hashResult = computeActual("select avg(orderkey), count(year)," +
-                "year from sorttable8  group by year order by year");
-
-        assertEquals(sortResult.getMaterializedRows(), hashResult.getMaterializedRows());
-
-        sortResult = computeActual(testSessionSortPrcntDrv50, "select avg(orderkey), count(year)," +
-                "year from sorttable8  group by year order by year");
-        assertEquals(sortResult.getMaterializedRows(), hashResult.getMaterializedRows());
-
-        sortResult = computeActual(testSessionSortPrcntDrv25, "select avg(orderkey), count(year)," +
-                "year from sorttable8  group by year order by year");
-        assertEquals(sortResult.getMaterializedRows(), hashResult.getMaterializedRows());
-
-        assertUpdate("DROP TABLE sorttable8");
-        assertUpdate("DROP TABLE unsorttable8");
-    }
-
-    @Test
-    public void sortAggSplitWithMultiplePagesBigintMultiSort()
-    {
-        // this Test case we will insert many rows , so that single split will yield many pages, groub & sort by bigint
-        assertUpdate("drop table if exists unsorttable9");
-        assertUpdate("drop table if exists sorttable9");
-        computeActual("create table unsorttable9 (code int, orderkey int, year bigint) WITH (transactional = false , " +
-                "format = 'ORC')");
-
-        String str = generateNumberOfRowsForThreeColumns(2500);
-
-        assertUpdate("insert into unsorttable9 values " + str, 5000);
-
-        computeActual("create table sorttable9  with(transactional = false, " +
-                "format = 'ORC',  bucketed_by=array['year'], bucket_count=10, sorted_by = ARRAY['year', 'orderkey'])  as select * from unsorttable9");
-
-        MaterializedResult sortResult = computeActual(testSessionSort, "select avg(orderkey), count(year)," +
-                "year from sorttable9  group by year order by year");
-
-        MaterializedResult hashResult = computeActual("select avg(orderkey), count(year)," +
-                "year from sorttable9  group by year order by year");
-
-        assertEquals(sortResult.getMaterializedRows(), hashResult.getMaterializedRows());
-
-        sortResult = computeActual(testSessionSortPrcntDrv50, "select avg(orderkey), count(year), year from sorttable9  group by year order by year");
-        assertEquals(sortResult.getMaterializedRows(), hashResult.getMaterializedRows());
-
-        sortResult = computeActual(testSessionSortPrcntDrv25, "select avg(orderkey), count(year), year from sorttable9  group by year order by year");
-        assertEquals(sortResult.getMaterializedRows(), hashResult.getMaterializedRows());
-
-        assertUpdate("DROP TABLE sorttable9");
-        assertUpdate("DROP TABLE unsorttable9");
-    }
-
-    @Test
-    public void sortAggSplitWithMultiplePagesInt()
-    {
-        initSortBasedAggregation();
-        // this Test case we will insert many rows , so that single split will yield many pages, groub & sort by int
-        assertUpdate("drop table if exists unsorttable10");
-        assertUpdate("drop table if exists sorttable10");
-        computeActual("create table unsorttable10 (orderkey int, year int) WITH (transactional = false , " +
-                "format = 'ORC')");
-
-        String str = generateNumberOfRowsForTwoColumns(2500, 5);
-
-        assertUpdate("insert into unsorttable10 values " + str, 2505);
-
-        computeActual("create table sorttable10  with(transactional = false, " +
-                "format = 'ORC',  bucketed_by=array['year'], bucket_count=1, sorted_by = ARRAY['year'])  as select * from unsorttable10 order by year");
-
-        MaterializedResult sortResult = computeActual(testSessionSort, "select count(orderkey), count(year)," +
-                "year from sorttable10  group by year order by year");
-
-        MaterializedResult hashResult = computeActual("select count(orderkey), count(year), " +
-                "year from sorttable10  group by year order by year");
-
-        assertEquals(sortResult.getMaterializedRows(), hashResult.getMaterializedRows());
-
-        sortResult = computeActual(testSessionSortPrcntDrv25, "select count(orderkey), count(year)," +
-            "year from sorttable10  group by year order by year");
-        assertEquals(sortResult.getMaterializedRows(), hashResult.getMaterializedRows());
-
-        sortResult = computeActual(testSessionSortPrcntDrv50, "select count(orderkey), count(year)," +
-                "year from sorttable10  group by year order by year");
-        assertEquals(sortResult.getMaterializedRows(), hashResult.getMaterializedRows());
-        assertUpdate("DROP TABLE sorttable10");
-        assertUpdate("DROP TABLE unsorttable10");
-    }
-
-    @Test
-    public void sortAggNullAndZero()
-    {
-        initSortBasedAggregation();
-        assertUpdate("drop table if exists unsorttable11");
-        assertUpdate("drop table if exists sorttable11");
-        computeActual("create table unsorttable11 (number int, orderkey int, year int) WITH (transactional = true , " +
-                "format = 'ORC')");
-        assertUpdate("insert into unsorttable11 values (1, null, null)", 1);
-        assertUpdate("insert into unsorttable11 values (1, null, null)", 1);
-        assertUpdate("insert into unsorttable11 values (2, 0, null)", 1);
-        assertUpdate("insert into unsorttable11 values (2, 0, null)", 1);
-        assertUpdate("insert into unsorttable11 values (4, null, 0)", 1);
-        assertUpdate("insert into unsorttable11 values (5, null, 0)", 1);
-        assertUpdate("insert into unsorttable11 values (6, 0, 33)", 1);
-        assertUpdate("insert into unsorttable11 values (7, 0, 33)", 1);
-        assertUpdate("insert into unsorttable11 values (8, 33, 0)", 1);
-        assertUpdate("insert into unsorttable11 values (9, 33, 0)", 1);
-        assertUpdate("insert into unsorttable11 values (10, 33, null)", 1);
-        assertUpdate("insert into unsorttable11 values (11, 33, null)", 1);
-        assertUpdate("insert into unsorttable11 values (12, 33, null)", 1);
-        assertUpdate("insert into unsorttable11 values (13, null, 33)", 1);
-        assertUpdate("insert into unsorttable11 values (13, null, 33)", 1);
-        assertUpdate("insert into unsorttable11 values (12, null, 33)", 1);
-        assertUpdate("insert into unsorttable11 values (14, 33, 66)", 1);
-        assertUpdate("insert into unsorttable11 values (15, 55, 77 )", 1);
-        assertUpdate("insert into unsorttable11 values (16, 66, 88)", 1);
-        assertUpdate("insert into unsorttable11 values (17, 77, 99)", 1);
-
-        computeActual("create table sorttable11  with(transactional = false, " +
-                "format = 'ORC',  bucketed_by=array['year', 'orderkey'], bucket_count=1, sorted_by = ARRAY['year', 'orderkey'])  as select * from unsorttable11 order by year");
-        String query = "select sum (number), avg(orderkey  ), count(year)," +
-                "year from sorttable11  group by year order by year";
-
-        MaterializedResult sortResult = computeActual(testSessionSort, query);
-        MaterializedResult hashResult = computeActual(query);
-        assertEquals(sortResult.getMaterializedRows(), hashResult.getMaterializedRows());
-        sortResult = computeActual(testSessionSortPrcntDrv50, query);
-        assertEquals(sortResult.getMaterializedRows(), hashResult.getMaterializedRows());
-
-        query = "select sum (number), avg(CASE WHEN orderkey IS NULL THEN 0 ELSE orderkey END), count(CASE WHEN year IS NULL THEN 0 ELSE year END)," +
-                "year from sorttable11  group by year, orderkey order by year, orderkey";
-
-        sortResult = computeActual(testSessionSort, query);
-        hashResult = computeActual(query);
-        assertEquals(sortResult.getMaterializedRows(), hashResult.getMaterializedRows());
-        sortResult = computeActual(testSessionSortPrcntDrv50, query);
-        assertEquals(sortResult.getMaterializedRows(), hashResult.getMaterializedRows());
-
-        assertUpdate("DROP TABLE sorttable11");
-        assertUpdate("DROP TABLE unsorttable11");
-    }
-
-    private String generateNumberOfRowsForTwoColumns(int numberOfRows, int numberOfNullRows)
-    {
-        String str = "";
-        String str1;
-        for (int i = 0; i < numberOfRows; i++) {
-            str1 = " ( " + (i + 200) + " , " + i + " ) ";
-            str = str.concat(str1);
-            if (i != numberOfRows - 1) {
-                str = str.concat(",");
-            }
-        }
-
-        if (numberOfNullRows != 0) {
-            str = str.concat(",");
-        }
-        for (int i = 0; i < numberOfNullRows; i++) {
-            str1 = " ( " + (i + 200) + " , null  ) ";
-            str = str.concat(str1);
-            if (i != numberOfNullRows - 1) {
-                str = str.concat(",");
-            }
-        }
-        return str;
-    }
-
-    private String generateNumberOfRowsForThreeColumns(int numberOfRows)
-    {
-        String str = "";
-        String str1;
-        for (int i = 0; i < numberOfRows; i++) {
-            str1 = " ( " + (i + 300) + " , " + (i + 200) + " , " + i + " ), ";
-            str = str.concat(str1);
-            str1 = " ( " + (i + 600) + " , " + (i + 500) + " , " + i + " ) ";
-            str = str.concat(str1);
-            if (i != numberOfRows - 1) {
-                str = str.concat(",");
-            }
-        }
-        return str;
-    }
-
-    private Set<Split> createAndGetSplits(long start)
-    {
-        HiveConfig config = new HiveConfig();
-        config.setHiveStorageFormat(HiveStorageFormat.ORC);
-        config.setHiveCompressionCodec(NONE);
-        Properties splitProperties = new Properties();
-        splitProperties.setProperty(FILE_INPUT_FORMAT, config.getHiveStorageFormat().getInputFormat());
-        splitProperties.setProperty(SERIALIZATION_LIB, config.getHiveStorageFormat().getSerDe());
-        splitProperties.setProperty("columns", Joiner.on(',').join(TestHivePageSink.getColumnHandles().stream().map(HiveColumnHandle::getName).collect(toList())));
-        splitProperties.setProperty("columns.types", Joiner.on(',').join(TestHivePageSink.getColumnHandles().stream().map(HiveColumnHandle::getHiveType).map(hiveType -> hiveType.getHiveTypeName().toString()).collect(toList())));
-        List<ConnectorSplit> connectorSplits1 = new ArrayList<>();
-
-        for (long j = start; j < start + 30; j += 10) {
-            List<HiveSplit> hiveSplitList = new ArrayList<>();
-            for (int i = 0; i < 3; i++) {
-                HiveSplit hiveSplit = new HiveSplit(
-                        TEST_SCHEMA,
-                        TEST_TABLE,
-                        "",
-                        "file:///",
-                        i + j,
-                        100 + i + j,
-                        100 + i + j,
-                        0,
-                        splitProperties,
-                        ImmutableList.of(),
-                        ImmutableList.of(),
-                        OptionalInt.empty(),
-                        false,
-                        ImmutableMap.of(),
-                        Optional.empty(),
-                        false,
-                        Optional.empty(),
-                        Optional.empty(),
-                        false,
-                        ImmutableMap.of());
-                hiveSplitList.add(hiveSplit);
-            }
-
-            HiveSplitWrapper split2 = HiveSplitWrapper.wrap(hiveSplitList, OptionalInt.empty());
-            connectorSplits1.add(split2);
-        }
-
-        ImmutableList.Builder<Split> result = ImmutableList.builder();
-        for (ConnectorSplit connectorSplit : connectorSplits1) {
-            result.add(new Split(CONNECTOR_ID, connectorSplit, Lifespan.taskWide()));
-        }
-        List<Split> splitList = result.build();
-        Set<Split> set = splitList.stream().collect(Collectors.toSet());
-        return set;
-    }
-
-    @Test
-    public void sortAggBasicAggreTestOnTpch()
-    {
-        initSortBasedAggregation();
-        assertUpdate("drop table if exists sortLineitem");
-        assertUpdate("drop table if exists orders_orderkey_totalprice");
-
-        computeActual("create table sortLineitem  with(transactional = false, " +
-                "format = 'ORC',  bucketed_by=array['orderkey', 'partkey'], bucket_count=4, sorted_by = ARRAY['orderkey', 'partkey'])" +
-                "  as select * from tpch.tiny.lineitem");
-
-        String query = "select count(partkey), count(orderkey), orderkey from sortLineitem  group by orderkey, partkey order by orderkey, partkey";
-        MaterializedResult sortResult = computeActual(testSessionSort, query);
-
-        MaterializedResult hashResult = computeActual(query);
-        assertEquals(sortResult.toString(), hashResult.toString());
-
-        computeActual("create table orders_orderkey_totalprice  with(transactional = false, " +
-                "format = 'ORC',  bucketed_by=array['orderkey', 'totalprice'], bucket_count=4, sorted_by = ARRAY['orderkey', 'totalprice'])" +
-                "  as select * from tpch.tiny.orders");
-
-        sortResult = computeActual(testSessionSortPrcntDrv50, "select count(totalprice), count(orderkey)," +
-                "orderkey from orders_orderkey_totalprice  group by orderkey, totalprice order by orderkey, totalprice");
-
-        hashResult = computeActual("select count(totalprice), count(orderkey)," +
-                "orderkey from orders_orderkey_totalprice group by orderkey, totalprice order by orderkey, totalprice");
-        assertEquals(sortResult.toString(), hashResult.toString());
-
-        assertUpdate("DROP TABLE sortLineitem");
-        assertUpdate("DROP TABLE orders_orderkey_totalprice");
-    }
-
-    @Test
-    public void sortAggInnerJoin()
-    {
-        initSortBasedAggregation();
-        assertUpdate("drop table if exists lineitemSortBy_orderkey_inner");
-        assertUpdate("drop table if exists ordersSortBy_orderkey_inner");
-        computeActual("create table lineitemSortBy_orderkey_inner  with(transactional = false, " +
-                "format = 'ORC',  bucketed_by=array['orderkey'], bucket_count=1, sorted_by = ARRAY['orderkey'])" +
-                "  as select * from tpch.tiny.lineitem");
-
-        computeActual("create table ordersSortBy_orderkey_inner  with(transactional = false, " +
-                "format = 'ORC',  bucketed_by=array['orderkey'], bucket_count=1, sorted_by = ARRAY['orderkey'])" +
-                "  as select * from tpch.tiny.orders");
-        assertUpdate("set session sort_based_aggregation_enabled=true");
-        String query = "select avg(lineitemSortBy_orderkey_inner.orderkey),lineitemSortBy_orderkey_inner.orderkey from lineitemSortBy_orderkey_inner " +
-                "INNER JOIN ordersSortBy_orderkey_inner ON lineitemSortBy_orderkey_inner.orderkey = ordersSortBy_orderkey_inner.orderkey " +
-                "group by lineitemSortBy_orderkey_inner.orderkey " +
-                "order by lineitemSortBy_orderkey_inner.orderkey";
-
-        MaterializedResult sortResult = computeActual(testSessionSort, query);
-        MaterializedResult hashResult = computeActual(query);
-        assertEquals(sortResult.toString(), hashResult.toString());
-        sortResult = computeActual(testSessionSortPrcntDrv50, query);
-        assertEquals(sortResult.toString(), hashResult.toString());
-        sortResult = computeActual(testSessionSortPrcntDrv25, query);
-        assertEquals(sortResult.toString(), hashResult.toString());
-
-        assertUpdate("DROP TABLE lineitemSortBy_orderkey_inner");
-        assertUpdate("DROP TABLE ordersSortBy_orderkey_inner");
-    }
-
-    @Test
-    public void sortAggLeftJoin()
-    {
-        initSortBasedAggregation();
-        assertUpdate("drop table if exists lineitemSortBy_orderkey_left");
-        assertUpdate("drop table if exists ordersSortBy_orderkey_left");
-        computeActual("create table lineitemSortBy_orderkey_left  with(transactional = false, " +
-                "format = 'ORC',  bucketed_by=array['orderkey'], bucket_count=1, sorted_by = ARRAY['orderkey'])" +
-                "  as select * from tpch.tiny.lineitem");
-
-        computeActual("create table ordersSortBy_orderkey_left  with(transactional = false, " +
-                "format = 'ORC',  bucketed_by=array['orderkey'], bucket_count=1, sorted_by = ARRAY['orderkey'])" +
-                "  as select * from tpch.tiny.orders");
-        assertUpdate("set session sort_based_aggregation_enabled=true");
-        String query = "select avg(lineitemSortBy_orderkey_left.orderkey),lineitemSortBy_orderkey_left.orderkey from lineitemSortBy_orderkey_left " +
-                "LEFT JOIN " +
-                "ordersSortBy_orderkey_left ON lineitemSortBy_orderkey_left.orderkey = ordersSortBy_orderkey_left.orderkey " +
-                "group by lineitemSortBy_orderkey_left.orderkey " +
-                "order by lineitemSortBy_orderkey_left.orderkey";
-
-        MaterializedResult sortResult = computeActual(testSessionSort, query);
-        MaterializedResult hashResult = computeActual(query);
-        assertEquals(sortResult.getMaterializedRows(), hashResult.getMaterializedRows());
-        sortResult = computeActual(testSessionSortPrcntDrv50, query);
-        assertEquals(sortResult.getMaterializedRows(), hashResult.getMaterializedRows());
-        sortResult = computeActual(testSessionSortPrcntDrv25, query);
-        assertEquals(sortResult.getMaterializedRows(), hashResult.getMaterializedRows());
-        sortResult = computeActual(testSessionSortPrcntDrv40, query);
-        assertEquals(sortResult.getMaterializedRows(), hashResult.getMaterializedRows());
-
-        assertUpdate("DROP TABLE lineitemSortBy_orderkey_left");
-        assertUpdate("DROP TABLE ordersSortBy_orderkey_left");
-    }
-
-    @Test
-    public void sortAggRightJoin()
-    {
-        initSortBasedAggregation();
-        assertUpdate("drop table if exists lineitemSortBy_orderkey_right");
-
-        computeActual("create table lineitemSortBy_orderkey_right  with(transactional = false, " +
-                "format = 'ORC',  bucketed_by=array['orderkey'], bucket_count=1, sorted_by = ARRAY['orderkey'])" +
-                "  as select * from tpch.tiny.lineitem");
-        assertUpdate("set session sort_based_aggregation_enabled=true");
-        String query = "select count(lineitemSortBy_orderkey_right.orderkey), lineitemSortBy_orderkey_right.orderkey from lineitemSortBy_orderkey_right " +
-                "RIGHT JOIN " +
-                "tpch.tiny.orders ON lineitemSortBy_orderkey_right.orderkey = tpch.tiny.orders.orderkey " +
-                "group by " +
-                "lineitemSortBy_orderkey_right.orderkey " +
-                "order by " +
-                "lineitemSortBy_orderkey_right.orderkey";
-
-        MaterializedResult sortResult = computeActual(testSessionSort, query);
-        MaterializedResult hashResult = computeActual(query);
-        assertEquals(sortResult.getMaterializedRows(), hashResult.getMaterializedRows());
-        sortResult = computeActual(testSessionSortPrcntDrv50, query);
-        assertEquals(sortResult.getMaterializedRows(), hashResult.getMaterializedRows());
-        sortResult = computeActual(testSessionSortPrcntDrv25, query);
-        assertEquals(sortResult.getMaterializedRows(), hashResult.getMaterializedRows());
-        sortResult = computeActual(testSessionSortPrcntDrv40, query);
-        assertEquals(sortResult.getMaterializedRows(), hashResult.getMaterializedRows());
-
-        assertUpdate("DROP TABLE lineitemSortBy_orderkey_right");
-    }
-
-    @Test
-    public void sortAggInnerLeftJoin()
-    {
-        initSortBasedAggregation();
-        computeActual("create table lineitem_orderkey_partkey_InnerLeftJoin  with(transactional = false, " +
-                "format = 'ORC',  bucketed_by=array['orderkey', 'partkey'], bucket_count=1, sorted_by = ARRAY['orderkey', 'partkey'])" +
-                "  as select * from tpch.tiny.lineitem");
-
-        computeActual("create table shortlineitem_InnerLeftJoin  with(transactional = false, format = 'ORC') as select * from tpch.tiny.lineitem limit 10000");
-        String query = "select avg(lineitem_orderkey_partkey_InnerLeftJoin.orderkey), lineitem_orderkey_partkey_InnerLeftJoin.orderkey " +
-                "from " +
-                "lineitem_orderkey_partkey_InnerLeftJoin " +
-                "INNER JOIN  " +
-                "shortlineitem_InnerLeftJoin ON lineitem_orderkey_partkey_InnerLeftJoin.orderkey = shortlineitem_InnerLeftJoin.orderkey " +
-                "Left JOIN " +
-                " tpch.tiny.orders ON lineitem_orderkey_partkey_InnerLeftJoin.orderkey = tpch.tiny.orders.orderkey " +
-                "group by lineitem_orderkey_partkey_InnerLeftJoin.orderkey, lineitem_orderkey_partkey_InnerLeftJoin.partkey " +
-                "order by lineitem_orderkey_partkey_InnerLeftJoin.orderkey, lineitem_orderkey_partkey_InnerLeftJoin.partkey";
-
-        MaterializedResult sortResult = computeActual(testSessionSort, query);
-        MaterializedResult hashResult = computeActual(query);
-        assertEquals(sortResult.getMaterializedRows(), hashResult.getMaterializedRows());
-        sortResult = computeActual(testSessionSortPrcntDrv50, query);
-        assertEquals(sortResult.getMaterializedRows(), hashResult.getMaterializedRows());
-        sortResult = computeActual(testSessionSortPrcntDrv40, query);
-        assertEquals(sortResult.getMaterializedRows(), hashResult.getMaterializedRows());
-
-        assertUpdate("DROP TABLE lineitem_orderkey_partkey_InnerLeftJoin");
-        assertUpdate("DROP TABLE shortlineitem_InnerLeftJoin");
-    }
-
-    @Test
-    public void sortAggInnerRightJoin()
-    {
-        initSortBasedAggregation();
-        computeActual("create table lineitem_orderkey_partkey_innerRight  with(transactional = false, " +
-                "format = 'ORC',  bucketed_by=array['orderkey', 'partkey'], bucket_count=4, sorted_by = ARRAY['orderkey', 'partkey'])" +
-                "  as select * from tpch.tiny.lineitem");
-
-        computeActual("create table shortlineitem_InnerRightJoin  with(transactional = false, format = 'ORC') as select * from tpch.tiny.lineitem limit 10000");
-        String query = "select avg(lineitem_orderkey_partkey_innerRight.orderkey), lineitem_orderkey_partkey_innerRight.orderkey " +
-                "from lineitem_orderkey_partkey_innerRight " +
-                "INNER JOIN " +
-                "shortlineitem_InnerRightJoin ON lineitem_orderkey_partkey_innerRight.orderkey = shortlineitem_InnerRightJoin.orderkey " +
-                "RIGHT JOIN " +
-                "tpch.tiny.orders ON lineitem_orderkey_partkey_innerRight.orderkey = tpch.tiny.orders.orderkey " +
-                "group by " +
-                "lineitem_orderkey_partkey_innerRight.orderkey, lineitem_orderkey_partkey_innerRight.partkey " +
-                "order by " +
-                "lineitem_orderkey_partkey_innerRight.orderkey, lineitem_orderkey_partkey_innerRight.partkey";
-
-        MaterializedResult sortResult = computeActual(testSessionSort, query);
-        MaterializedResult hashResult = computeActual(query);
-        assertEquals(sortResult.getMaterializedRows(), hashResult.getMaterializedRows());
-        sortResult = computeActual(testSessionSortPrcntDrv50, query);
-        assertEquals(sortResult.getMaterializedRows(), hashResult.getMaterializedRows());
-        sortResult = computeActual(testSessionSortPrcntDrv40, query);
-        assertEquals(sortResult.getMaterializedRows(), hashResult.getMaterializedRows());
-
-        assertUpdate("DROP TABLE lineitem_orderkey_partkey_innerRight");
-        assertUpdate("DROP TABLE shortlineitem_InnerRightJoin");
-    }
-
-    @Test
-    public void testCachedPlanTableValidation()
-    {
-        assertUpdate("CREATE TABLE table_plan_cache_001 (id int)");
-        assertUpdate("INSERT INTO table_plan_cache_001 VALUES(1)", 1);
-        assertUpdate("INSERT INTO table_plan_cache_001 VALUES(2)", 1);
-        assertUpdate("INSERT INTO table_plan_cache_001 VALUES(3)", 1);
-        MaterializedResult result = computeActual("SELECT * from table_plan_cache_001 where id = 1");
-        assertEquals(result.getRowCount(), 1);
-        assertUpdate("DROP TABLE table_plan_cache_001");
-        assertUpdate("CREATE TABLE table_plan_cache_001 (id int) with (transactional=true)");
-        assertUpdate("INSERT INTO table_plan_cache_001 VALUES(1)", 1);
-        assertUpdate("INSERT INTO table_plan_cache_001 VALUES(2)", 1);
-        assertUpdate("INSERT INTO table_plan_cache_001 VALUES(3)", 1);
-        result = computeActual("SELECT * from table_plan_cache_001 where id = 1");
-        assertEquals(result.getRowCount(), 1);
-        assertUpdate("DROP TABLE table_plan_cache_001");
-    }
-
-    @Test
-    public void sortAggPartitionBucketCount1()
-    {
-        initSortBasedAggregation();
-        computeActual("create table lineitem_orderkey_partkey_partition  with(transactional = false, " +
-                "format = 'ORC', partitioned_by = ARRAY['comment'], bucketed_by=array['orderkey'], bucket_count=1, sorted_by = ARRAY['orderkey', 'partkey'])" +
-                "  as select * from tpch.tiny.lineitem limit 100");
-
-        String query = "select avg(lineitem_orderkey_partkey_partition.orderkey), lineitem_orderkey_partkey_partition.orderkey " +
-                "from lineitem_orderkey_partkey_partition " +
-                "group by " +
-                "comment, orderkey, partkey " +
-                "order by " +
-                "comment, orderkey, partkey ";
-
-        MaterializedResult sortResult = computeActual(testSessionSort, query);
-        MaterializedResult hashResult = computeActual(query);
-        assertEquals(sortResult.getMaterializedRows(), hashResult.getMaterializedRows());
-        sortResult = computeActual(testSessionSortPrcntDrv50, query);
-        assertEquals(sortResult.getMaterializedRows(), hashResult.getMaterializedRows());
-        sortResult = computeActual(testSessionSortPrcntDrv40, query);
-        assertEquals(sortResult.getMaterializedRows(), hashResult.getMaterializedRows());
-        assertUpdate("DROP TABLE lineitem_orderkey_partkey_partition");
-    }
-
-    @Test
-    public void sortAggPartitionBucketCount2()
-    {
-        initSortBasedAggregation();
-        computeActual("create table lineitem_orderkey_partkey_partition2  with(transactional = false, " +
-                "format = 'ORC', partitioned_by = ARRAY['comment'], bucketed_by=array['orderkey',  'partkey'], bucket_count=2, sorted_by = ARRAY['orderkey', 'partkey'])" +
-                "  as select * from tpch.tiny.lineitem limit 100");
-
-        String query = "select avg(lineitem_orderkey_partkey_partition2.orderkey), lineitem_orderkey_partkey_partition2.orderkey " +
-                "from lineitem_orderkey_partkey_partition2 " +
-                "group by comment, orderkey, partkey " +
-                "order by comment, orderkey, partkey ";
-
-        MaterializedResult sortResult = computeActual(testSessionSort, query);
-        MaterializedResult hashResult = computeActual(query);
-        assertEquals(sortResult.getMaterializedRows(), hashResult.getMaterializedRows());
-        sortResult = computeActual(testSessionSortPrcntDrv50, query);
-        assertEquals(sortResult.getMaterializedRows(), hashResult.getMaterializedRows());
-        sortResult = computeActual(testSessionSortPrcntDrv40, query);
-        assertEquals(sortResult.getMaterializedRows(), hashResult.getMaterializedRows());
-        assertUpdate("DROP TABLE lineitem_orderkey_partkey_partition2");
-    }
-
-    @Test
-    public void sortAggPartitionBucketCount1With2BucketColumns()
-    {
-        initSortBasedAggregation();
-        computeActual("create table lineitem_orderkey_partkey_partition3  with(transactional = false, " +
-                "format = 'ORC', partitioned_by = ARRAY['comment'], bucketed_by=array['orderkey',  'partkey'], bucket_count=1, sorted_by = ARRAY['orderkey', 'partkey'])" +
-                "  as select * from tpch.tiny.lineitem limit 100");
-
-        String query = "select avg(lineitem_orderkey_partkey_partition3.orderkey), lineitem_orderkey_partkey_partition3.orderkey " +
-                "from lineitem_orderkey_partkey_partition3 " +
-                "group by comment, orderkey, partkey " +
-                "order by comment, orderkey, partkey ";
-
-        MaterializedResult sortResult = computeActual(testSessionSort, query);
-        MaterializedResult hashResult = computeActual(query);
-        assertEquals(sortResult.getMaterializedRows(), hashResult.getMaterializedRows());
-        sortResult = computeActual(testSessionSortPrcntDrv50, query);
-        assertEquals(sortResult.getMaterializedRows(), hashResult.getMaterializedRows());
-        sortResult = computeActual(testSessionSortPrcntDrv40, query);
-        assertEquals(sortResult.getMaterializedRows(), hashResult.getMaterializedRows());
-        assertUpdate("DROP TABLE lineitem_orderkey_partkey_partition3");
-    }
-
-    @Test
-    public void sortAggPartition2BucketCount1With2BucketColumns()
-    {
-        initSortBasedAggregation();
-        computeActual("create table lineitem_orderkey_partkey_partition4  with(transactional = false, " +
-                "format = 'ORC', partitioned_by = ARRAY['shipmode', 'comment'], bucketed_by=array['orderkey',  'partkey'], bucket_count=1, sorted_by = ARRAY['orderkey', 'partkey'])" +
-                "  as select * from tpch.tiny.lineitem limit 100");
-
-        String query = "select avg(lineitem_orderkey_partkey_partition4.orderkey), lineitem_orderkey_partkey_partition4.orderkey " +
-                "from lineitem_orderkey_partkey_partition4 " +
-                "group by shipmode, comment, orderkey, partkey " +
-                "order by shipmode, comment, orderkey, partkey ";
-
-        MaterializedResult sortResult = computeActual(testSessionSort, query);
-        MaterializedResult hashResult = computeActual(query);
-        assertEquals(sortResult.getMaterializedRows(), hashResult.getMaterializedRows());
-        sortResult = computeActual(testSessionSortPrcntDrv50, query);
-        assertEquals(sortResult.getMaterializedRows(), hashResult.getMaterializedRows());
-        sortResult = computeActual(testSessionSortPrcntDrv40, query);
-        assertEquals(sortResult.getMaterializedRows(), hashResult.getMaterializedRows());
-        assertUpdate("DROP TABLE lineitem_orderkey_partkey_partition4");
-    }
-
-    @Test
-    public void sortAggSemiJoin()
-    {
-        initSortBasedAggregation();
-
-        computeActual("create table lineitem_orderkey_partkey_SemiJoin  with(transactional = false, " +
-                "format = 'ORC', bucketed_by=array['orderkey', 'partkey'], bucket_count=1, sorted_by = ARRAY['orderkey', 'partkey'])" +
-                "  as select * from tpch.tiny.lineitem");
-
-        computeActual("create table lineitem_semiJoin with(transactional = false, format = 'ORC')" +
-                "  as select * from tpch.tiny.lineitem where partkey is not null");
-
-        String query = "select avg(lineitem_orderkey_partkey_SemiJoin.orderkey), lineitem_orderkey_partkey_SemiJoin.orderkey " +
-                " from lineitem_orderkey_partkey_SemiJoin " +
-                " where orderkey " +
-                " in (select orderkey from lineitem_semiJoin) " +
-                " group by orderkey, partkey " +
-                " order by orderkey, partkey ";
-
-        MaterializedResult sortResult = computeActual(testSessionSort, query);
-        MaterializedResult hashResult = computeActual(query);
-        assertEquals(sortResult.getMaterializedRows(), hashResult.getMaterializedRows());
-        sortResult = computeActual(testSessionSortPrcntDrv50, query);
-        assertEquals(sortResult.getMaterializedRows(), hashResult.getMaterializedRows());
-        sortResult = computeActual(testSessionSortPrcntDrv40, query);
-        assertEquals(sortResult.getMaterializedRows(), hashResult.getMaterializedRows());
-        assertUpdate("DROP TABLE lineitem_orderkey_partkey_SemiJoin");
-        assertUpdate("DROP TABLE lineitem_semiJoin");
-    }
-
-    @Test
-    public void SortAggreDistinct()
-    {
-        initSortBasedAggregation();
-        computeActual("create table lineitem_orderkey_partkey_Distinct  with(transactional = false, " +
-                "format = 'ORC', bucketed_by=array['orderkey', 'partkey'], bucket_count=1, sorted_by = ARRAY['orderkey', 'partkey'])" +
-                "  as select * from tpch.tiny.lineitem");
-
-        String query = "select sum(distinct(partkey)), orderkey from lineitem_orderkey_partkey_Distinct " +
-                "group by orderkey order by orderkey";
-
-        MaterializedResult sortResult = computeActual(testSessionSort, query);
-        MaterializedResult hashResult = computeActual(query);
-        assertEquals(sortResult.getMaterializedRows(), hashResult.getMaterializedRows());
-        sortResult = computeActual(testSessionSortPrcntDrv50, query);
-        assertEquals(sortResult.getMaterializedRows(), hashResult.getMaterializedRows());
-        sortResult = computeActual(testSessionSortPrcntDrv40, query);
-        assertEquals(sortResult.getMaterializedRows(), hashResult.getMaterializedRows());
-        assertUpdate("DROP TABLE lineitem_orderkey_partkey_Distinct");
-    }
-
-    @Test
-    public void testFailRefreshMetaCache()
-    {
-        assertQueryFails("REFRESH META CACHE FOR abc", "Catalog does not exist:abc");
-        assertQueryFails("REFRESH META CACHE FOR abc.def", "Catalog does not exist:abc.def");
-    }
-
-    @Test
-    public void testCachedPlanForTablesWithSameName()
-    {
-        String table = "tab2";
-        String schema = "default";
-        assertUpdate(String.format("CREATE SCHEMA IF NOT EXISTS %s", schema));
-        assertUpdate(String.format("CREATE TABLE %s.%s (a int, b int, c int) with (partitioned_by = ARRAY['c'])", schema, table));
-        assertUpdate(String.format("INSERT INTO %s.%s VALUES (1, 1, 1)", schema, table), 1);
-        assertQuery(String.format("SELECT * FROM %s.%s", schema, table), "VALUES (1, 1, 1)");
-        assertUpdate(String.format("DROP TABLE %s.%s", schema, table));
-        assertUpdate(String.format("CREATE TABLE %s.%s (a int, b int, c int)", schema, table));
-        assertUpdate(String.format("INSERT INTO %s.%s VALUES (1, 1, 1)", schema, table), 1);
-        assertQuery(String.format("SELECT * FROM %s.%s", schema, table), "VALUES (1, 1, 1)");
-        assertUpdate(String.format("DROP TABLE %s.%s", schema, table));
-    }
-
-    @Test
-    public void UnSortAggrePartitionBucketCount1()
-    {
-        initSortBasedAggregation();
-        computeActual("create table lineitem_partition_shipmode_comment_bucket1  with(transactional = false, " +
-                "format = 'ORC', partitioned_by = ARRAY['shipmode', 'comment'], bucketed_by=array['orderkey',  'partkey'], bucket_count=1)" +
-                "  as select * from tpch.tiny.lineitem limit 100");
-
-        String query = "select lineitem_partition_shipmode_comment_bucket1.shipmode, lineitem_partition_shipmode_comment_bucket1.comment " +
-                "from lineitem_partition_shipmode_comment_bucket1 " +
-                "group by shipmode, comment " +
-                "order by shipmode, comment ";
-
-        MaterializedResult sortResult = computeActual(testSessionSort, query);
-        MaterializedResult hashResult = computeActual(query);
-        assertEquals(sortResult.getMaterializedRows(), hashResult.getMaterializedRows());
-        sortResult = computeActual(testSessionSortPrcntDrv50, query);
-        assertEquals(sortResult.getMaterializedRows(), hashResult.getMaterializedRows());
-        sortResult = computeActual(testSessionSortPrcntDrv40, query);
-        assertEquals(sortResult.getMaterializedRows(), hashResult.getMaterializedRows());
-        assertUpdate("DROP TABLE lineitem_partition_shipmode_comment_bucket1");
-    }
-
-    @Test
-    public void SortAggreGroupOnlyPartitionColumns()
-    {
-        initSortBasedAggregation();
-        computeActual("create table lineitem_sort_partition_shipmode_comment_bucket1  with(transactional = false, " +
-                "format = 'ORC', partitioned_by = ARRAY['shipmode', 'comment'], bucketed_by=array['orderkey',  'partkey'], bucket_count=1, sorted_by = ARRAY['orderkey', 'partkey'])" +
-                "  as select * from tpch.tiny.lineitem limit 100");
-
-        String query = "select lineitem_sort_partition_shipmode_comment_bucket1.shipmode, lineitem_sort_partition_shipmode_comment_bucket1.comment " +
-                "from lineitem_sort_partition_shipmode_comment_bucket1 " +
-                "group by shipmode, comment " +
-                "order by shipmode, comment ";
-
-        MaterializedResult sortResult = computeActual(testSessionSort, query);
-        MaterializedResult hashResult = computeActual(query);
-        assertEquals(sortResult.getMaterializedRows(), hashResult.getMaterializedRows());
-        sortResult = computeActual(testSessionSortPrcntDrv50, query);
-        assertEquals(sortResult.getMaterializedRows(), hashResult.getMaterializedRows());
-        sortResult = computeActual(testSessionSortPrcntDrv40, query);
-        assertEquals(sortResult.getMaterializedRows(), hashResult.getMaterializedRows());
-        assertUpdate("DROP TABLE lineitem_sort_partition_shipmode_comment_bucket1");
-    }
-
-    @Test
-    public void testAcidFormatColumnNameConflict()
-    {
-        assertUpdate(String.format("CREATE TABLE test_acid_columnname_conflict (originalTransaction int, currentTransaction int," +
-                " rowId int, bucket int, row int )"
-                + "with (transactional=true, format='orc')"));
-
-        assertUpdate(String.format("INSERT INTO test_acid_columnname_conflict VALUES (1, 2, 3, 4, 5)"), 1);
-
-        assertQuery("SELECT * FROM test_acid_columnname_conflict", "VALUES (1, 2, 3, 4, 5)");
-
-        assertUpdate(String.format("DROP TABLE test_acid_columnname_conflict"));
-    }
-
-    @Test
-    public void testMultiDelimitFormat()
-    {
-        assertUpdate(String.format("CREATE TABLE multi_delimit(id int, row int," +
-                " class int )"
-                + "with (format='MULTIDELIMIT', \"field.delim\"='#')"));
-        assertUpdate(String.format("INSERT INTO multi_delimit VALUES (1, 2, 3)"), 1);
-
-        assertQuery("SELECT * FROM multi_delimit", "VALUES (1, 2, 3)");
-
-        assertUpdate(String.format("DROP TABLE multi_delimit"));
-    }
-
-    @Test(expectedExceptions = RuntimeException.class)
-    public void testMultiDelimitFormatWithoutFieldDelim()
-    {
-        assertUpdate(String.format("CREATE TABLE multi_delimit_without_delim(id int, row int," +
-                " class int )"
-                + "with (format='MULTIDELIMIT')"));
-    }
-
-    @Test(expectedExceptions = RuntimeException.class)
-    public void testFieldDelimForORCFormat()
-    {
-        assertUpdate(String.format("CREATE TABLE multi_delimit_without_delim(id int, row int," +
-                " class int )"
-                + "with (format='ORC', \"field.delim\"='#')"));
-    }
-
-    @Test
-    public void testShowViews()
-    {
-        List<String> views = new ArrayList<>(Arrays.asList("v1", "v2", "a1"));
-        List<String> viewsStartingWith = new ArrayList<>(Arrays.asList("v1", "v2"));
-        List<String> viewsEndingWith = new ArrayList<>(Arrays.asList("v1", "a1"));
-        assertUpdate(String.format("CREATE TABLE table1 (id int, row int)"));
-        assertUpdate(String.format("INSERT INTO table1 VALUES(1, 10), (2, 20)"), 2);
-        assertUpdate(String.format("CREATE TABLE table2 (id int, row int)"));
-        assertUpdate(String.format("INSERT INTO table2 VALUES(1, 10), (2, 20)"), 2);
-        assertUpdate(String.format("CREATE TABLE table3 (id int, row int)"));
-        assertUpdate(String.format("INSERT INTO table3 VALUES(1, 10), (2, 20)"), 2);
-        assertUpdate(String.format("CREATE VIEW v1 AS SELECT * FROM table1"));
-        assertUpdate(String.format("CREATE VIEW v2 AS SELECT * FROM table2"));
-        assertUpdate(String.format("CREATE VIEW a1 AS SELECT * FROM table3"));
-        assertTrue(computeActual("SHOW VIEWS").getOnlyColumn().collect(Collectors.toList()).containsAll(views));
-        assertTrue(computeActual("SHOW VIEWS LIKE \'v*\'").getOnlyColumn().collect(Collectors.toList()).containsAll(viewsStartingWith));
-        assertTrue(computeActual("SHOW VIEWS LIKE \'v%\'").getOnlyColumn().collect(Collectors.toList()).containsAll(viewsStartingWith));
-        assertTrue(computeActual("SHOW VIEWS LIKE \'*1\'").getOnlyColumn().collect(Collectors.toList()).containsAll(viewsEndingWith));
-        assertTrue(computeActual("SHOW VIEWS LIKE \'%1\'").getOnlyColumn().collect(Collectors.toList()).containsAll(viewsEndingWith));
-        assertUpdate(String.format("DROP VIEW v1"));
-        assertUpdate(String.format("DROP VIEW v2"));
-        assertUpdate(String.format("DROP VIEW a1"));
-        assertUpdate(String.format("DROP TABLE table1"));
-        assertUpdate(String.format("DROP TABLE table2"));
-        assertUpdate(String.format("DROP TABLE table3"));
-    }
-
-    @Test
-    public void testShowViewsFrom()
-    {
-        List<String> viewsFromFirstSchema = new ArrayList<>(Arrays.asList("v1", "a1"));
-        List<String> viewsFromSecondSchema = new ArrayList<>(Arrays.asList("v2"));
-        assertUpdate(String.format("CREATE SCHEMA schema1"));
-        assertUpdate(String.format("CREATE SCHEMA schema2"));
-        assertUpdate(String.format("CREATE TABLE schema1.table1 (id int, row int)"));
-        assertUpdate(String.format("INSERT INTO schema1.table1 VALUES(1, 10), (2, 20)"), 2);
-        assertUpdate(String.format("CREATE TABLE schema1.table2 (id int, row int)"));
-        assertUpdate(String.format("INSERT INTO schema1.table2 VALUES(1, 10), (2, 20)"), 2);
-        assertUpdate(String.format("CREATE TABLE schema2.table3 (id int, row int)"));
-        assertUpdate(String.format("INSERT INTO schema2.table3 VALUES(1, 10), (2, 20)"), 2);
-        assertUpdate(String.format("CREATE VIEW schema1.v1 AS SELECT * FROM schema1.table1"));
-        assertUpdate(String.format("CREATE VIEW schema1.a1 AS SELECT * FROM schema1.table2"));
-        assertUpdate(String.format("CREATE VIEW schema2.v2 AS SELECT * FROM schema2.table3"));
-        assertTrue(computeActual("SHOW VIEWS FROM schema1").getOnlyColumn().collect(Collectors.toList()).containsAll(viewsFromFirstSchema));
-        assertTrue(computeActual("SHOW VIEWS IN schema1").getOnlyColumn().collect(Collectors.toList()).containsAll(viewsFromFirstSchema));
-        assertTrue(computeActual("SHOW VIEWS FROM schema2").getOnlyColumn().collect(Collectors.toList()).containsAll(viewsFromSecondSchema));
-        assertTrue(computeActual("SHOW VIEWS IN schema2").getOnlyColumn().collect(Collectors.toList()).containsAll(viewsFromSecondSchema));
-        assertUpdate(String.format("DROP VIEW schema1.v1"));
-        assertUpdate(String.format("DROP VIEW schema2.v2"));
-        assertUpdate(String.format("DROP VIEW schema1.a1"));
-        assertUpdate(String.format("DROP TABLE schema1.table1"));
-        assertUpdate(String.format("DROP TABLE schema1.table2"));
-        assertUpdate(String.format("DROP TABLE schema2.table3"));
-        assertUpdate(String.format("DROP SCHEMA schema1"));
-        assertUpdate(String.format("DROP SCHEMA schema2"));
-    }
-
-    @Test
-    public void testAlterTableRenameColumn()
-    {
-        assertUpdate(String.format("CREATE TABLE alter_table_1(id int, name string, age int)"));
-        assertUpdate(String.format("CREATE TABLE alter_table_2(id int, name string, age int) with (transactional=true)"));
-        assertUpdate(String.format("CREATE TABLE alter_table_3(id int, name string, age int) with (partitioned_by=ARRAY['age'])"));
-        assertUpdate(String.format("INSERT INTO alter_table_1 VALUES (1, 'table_1', 10)"), 1);
-        assertUpdate(String.format("INSERT INTO alter_table_2 VALUES (1, 'table_2', 10)"), 1);
-        assertUpdate(String.format("INSERT INTO alter_table_3 VALUES (1, 'table_3', 10)"), 1);
-        assertQuery("SELECT * FROM alter_table_1", "VALUES (1, 'table_1', 10)");
-        assertQuery("SELECT * FROM alter_table_2", "VALUES (1, 'table_2', 10)");
-        assertQuery("SELECT * FROM alter_table_3", "VALUES (1, 'table_3', 10)");
-        assertUpdate(String.format("ALTER TABLE alter_table_1 RENAME COLUMN id to id_new"));
-        assertUpdate(String.format("ALTER TABLE alter_table_2 RENAME COLUMN id to id_new"));
-        assertUpdate(String.format("ALTER TABLE alter_table_3 RENAME COLUMN id to id_new"));
-        assertQuery("SELECT * FROM alter_table_1", "VALUES (1, 'table_1', 10)");
-        assertQuery("SELECT * FROM alter_table_2", "VALUES (1, 'table_2', 10)");
-        assertQuery("SELECT * FROM alter_table_3", "VALUES (1, 'table_3', 10)");
-        assertUpdate(String.format("DROP TABLE alter_table_1"));
-        assertUpdate(String.format("DROP TABLE alter_table_2"));
-        assertUpdate(String.format("DROP TABLE alter_table_3"));
-    }
-
-    @Test
-    public void testAlterTableAddColumn()
-    {
-        assertUpdate(String.format("CREATE TABLE alter_table_4(id int, name string, age int)"));
-        assertUpdate(String.format("CREATE TABLE alter_table_5(id int, name string, age int) with (transactional=true)"));
-        assertUpdate(String.format("CREATE TABLE alter_table_6(id int, name string, age int) with (partitioned_by=ARRAY['age'])"));
-        assertUpdate(String.format("INSERT INTO alter_table_4 VALUES (1, 'table_1', 10)"), 1);
-        assertUpdate(String.format("INSERT INTO alter_table_5 VALUES (1, 'table_2', 10)"), 1);
-        assertUpdate(String.format("INSERT INTO alter_table_6 VALUES (1, 'table_3', 10)"), 1);
-        assertQuery("SELECT * FROM alter_table_4", "VALUES (1, 'table_1', 10)");
-        assertQuery("SELECT * FROM alter_table_5", "VALUES (1, 'table_2', 10)");
-        assertQuery("SELECT * FROM alter_table_6", "VALUES (1, 'table_3', 10)");
-        assertUpdate(String.format("ALTER TABLE alter_table_4 ADD COLUMN new_column int"));
-        assertUpdate(String.format("ALTER TABLE alter_table_5 ADD COLUMN new_column int"));
-        assertUpdate(String.format("ALTER TABLE alter_table_6 ADD COLUMN new_column int"));
-        assertUpdate(String.format("INSERT INTO alter_table_4 VALUES (2, 'table_1', 20, 200)"), 1);
-        assertUpdate(String.format("INSERT INTO alter_table_5 VALUES (2, 'table_2', 20, 200)"), 1);
-        assertUpdate(String.format("INSERT INTO alter_table_6 VALUES (2, 'table_3', 200, 20), (3, 'table_3', 300, 10)"), 2);
-        assertQuery("SELECT * FROM alter_table_4", "VALUES (1, 'table_1', 10, NULL), (2, 'table_1', 20, 200)");
-        assertQuery("SELECT * FROM alter_table_5", "VALUES (1, 'table_2', 10, NULL), (2, 'table_2', 20, 200)");
-        assertQuery("SELECT * FROM alter_table_6", "VALUES (1, 'table_3', NULL, 10), (2, 'table_3', 200, 20), (3, 'table_3', NULL, 10)");
-        assertUpdate(String.format("DROP TABLE alter_table_4"));
-        assertUpdate(String.format("DROP TABLE alter_table_5"));
-        assertUpdate(String.format("DROP TABLE alter_table_6"));
-    }
-
-    @Test
-    public void testAlterTableDropColumn()
-    {
-        assertUpdate(String.format("CREATE TABLE alter_table_7(id int, name int, age int)"));
-        assertUpdate(String.format("CREATE TABLE alter_table_8(id int, name int, age int) with (transactional=true)"));
-        assertUpdate(String.format("CREATE TABLE alter_table_9(id int, name int, age int) with (partitioned_by=ARRAY['age'])"));
-        assertUpdate(String.format("INSERT INTO alter_table_7 VALUES (1, 10, 100)"), 1);
-        assertUpdate(String.format("INSERT INTO alter_table_8 VALUES (1, 10, 100)"), 1);
-        assertUpdate(String.format("INSERT INTO alter_table_9 VALUES (1, 10, 100)"), 1);
-        assertQuery("SELECT * FROM alter_table_7", "VALUES (1, 10, 100)");
-        assertQuery("SELECT * FROM alter_table_8", "VALUES (1, 10, 100)");
-        assertQuery("SELECT * FROM alter_table_9", "VALUES (1, 10, 100)");
-        assertUpdate(String.format("ALTER TABLE alter_table_7 DROP COLUMN id"));
-        assertUpdate(String.format("ALTER TABLE alter_table_8 DROP COLUMN id"));
-        assertUpdate(String.format("ALTER TABLE alter_table_9 DROP COLUMN id"));
-        assertQuery("SELECT * FROM alter_table_7", "VALUES (1, 10)");
-        assertQuery("SELECT * FROM alter_table_8", "VALUES (1, 10)");
-        assertQuery("SELECT * FROM alter_table_9", "VALUES (1, 100)");
-        assertUpdate(String.format("DROP TABLE alter_table_7"));
-        assertUpdate(String.format("DROP TABLE alter_table_8"));
-        assertUpdate(String.format("DROP TABLE alter_table_9"));
-    }
-
-    @Test
-    public void testEscapeCharacter()
-    {
-        testWithAllStorageFormats(this::testEscapeCharacter);
-    }
-
-    private void testEscapeCharacter(Session session, HiveStorageFormat storageFormat)
-    {
-        String tableName = format("test_escape_character_%s", storageFormat);
-        assertUpdate(session, format("CREATE TABLE %s (id varchar) WITH (format = '%s')", tableName, storageFormat));
-        assertUpdate(session, format("INSERT INTO %s VALUES ('\0')", tableName), 1);
-
-        MaterializedResult result = getQueryRunner().execute(session, format("SELECT * FROM %s", tableName));
-        assertEquals(result.getRowCount(), 1);
-        MaterializedRow actualRow = result.getMaterializedRows().get(0);
-        assertEquals(actualRow.getField(0), String.valueOf('\0'));
-
-        assertUpdate(session, format("DROP TABLE %s", tableName));
-    }
-
-    @Test
-    public void testReadFromTableWithStructDataTypeColumns()
-    {
-        assertUpdate("CREATE SCHEMA testReadSchema");
-        assertUpdate("CREATE TABLE testReadSchema.testReadStruct1 (orderkey array(varchar), orderstatus row(big int), lables map(varchar, integer))  WITH (format='orc',transactional=true)");
-        assertUpdate("INSERT INTO testReadSchema.testReadStruct1 VALUES (ARRAY ['YOUNG', 'FASION', 'STYLE'], row(111), MAP(ARRAY ['type', 'grand'], ARRAY [1, 2]))", 1);
-        assertEquals(computeActual("SELECT * FROM testReadSchema.testReadStruct1").getRowCount(), 1);
-        assertUpdate("CREATE TABLE testReadSchema.testReadStruct2 (orderkey array(varchar), orderstatus row(big int, big1 int), lables map(varchar, integer))  WITH (format='orc',transactional=true)");
-        assertUpdate("INSERT INTO testReadSchema.testReadStruct2 VALUES (ARRAY ['YOUNG', 'FASION', 'STYLE'], row(111,222), MAP(ARRAY ['type', 'grand'], ARRAY[1, 2]))", 1);
-        assertEquals(computeActual("SELECT * FROM testReadSchema.testReadStruct2").getRowCount(), 1);
-        assertUpdate("CREATE TABLE testReadSchema.testReadStruct3 (orderkey array(varchar), orderstatus row(big int, big1 int), lables map(varchar, array(int)), orderstatus1 row(big2 int))  WITH (format='orc',transactional=true)");
-        assertUpdate("INSERT INTO testReadSchema.testReadStruct3 VALUES (ARRAY ['YOUNG', 'FASION', 'STYLE'], row(111,222), MAP(ARRAY ['type', 'grand'], ARRAY [ARRAY[1, 2], ARRAY[1,2]]), row(333))", 1);
-        assertEquals(computeActual("SELECT * FROM testReadSchema.testReadStruct3").getRowCount(), 1);
-        assertUpdate("CREATE TABLE testReadSchema.testReadStruct4 (orderkey array(varchar), orderstatus row(big int, big1 int), lables map(varchar, array(int)), orderstatus1 row(big2 int))  WITH (format='orc',transactional=true)");
-        assertUpdate("INSERT INTO testReadSchema.testReadStruct4 VALUES (ARRAY ['YOUNG', 'FASION', 'STYLE'], row(111,222), MAP(ARRAY ['type', 'grand'], ARRAY [ARRAY[1, 2], ARRAY[1,2]]), row(111))", 1);
-        assertEquals(computeActual("SELECT * FROM testReadSchema.testReadStruct4").getRowCount(), 1);
-        assertUpdate("CREATE TABLE testReadSchema.testReadStruct5 (orderkey array(varchar), orderstatus row(big row(big1 int)), lables map(varchar, array(int)), orderstatus1 row(big2 int))  WITH (format='orc',transactional=true)");
-        assertUpdate("INSERT INTO testReadSchema.testReadStruct5 VALUES (ARRAY ['YOUNG', 'FASION', 'STYLE'], row(row(111)), MAP(ARRAY ['type', 'grand'], ARRAY [ARRAY[1, 2], ARRAY[1,2]]), row(111))", 1);
-        assertEquals(computeActual("SELECT * FROM testReadSchema.testReadStruct5").getRowCount(), 1);
-        assertUpdate("DROP TABLE testReadSchema.testReadStruct1");
-        assertUpdate("DROP TABLE testReadSchema.testReadStruct2");
-        assertUpdate("DROP TABLE testReadSchema.testReadStruct3");
-        assertUpdate("DROP TABLE testReadSchema.testReadStruct4");
-        assertUpdate("DROP TABLE testReadSchema.testReadStruct5");
-        assertUpdate("DROP SCHEMA testReadSchema");
-    }
-
-    @Test
-    public void testAlterTableWithStructDataTypeColumns()
-    {
-        assertUpdate("CREATE SCHEMA testReadSchema1");
-        assertUpdate("CREATE TABLE testReadSchema1.testReadStruct6 (orderkey array(varchar), orderstatus array(row(big int)), lables map(varchar, array(int)), orderstatus1 row(big2 int))  WITH (format='orc',transactional=true)");
-        assertUpdate("INSERT INTO testReadSchema1.testReadStruct6 VALUES (ARRAY ['YOUNG', 'FASION', 'STYLE'], ARRAY[row(111), row(222)], MAP(ARRAY ['type', 'grand'], ARRAY [ARRAY[1, 2], ARRAY[1,2]]), row(111))", 1);
-        assertEquals(computeActual("SELECT * FROM testReadSchema1.testReadStruct6").getRowCount(), 1);
-        assertUpdate("ALTER TABLE testReadSchema1.testReadStruct6 RENAME COLUMN orderstatus to new_orderstatus");
-        assertEquals(computeActual("SELECT * FROM testReadSchema1.testReadStruct6").getRowCount(), 1);
-        assertUpdate("DROP TABLE testReadSchema1.testReadStruct6");
-        assertUpdate("DROP SCHEMA testReadSchema1");
-    }
-
-    @Test
-    public void testUpdateWithStructDataTypeColumns()
-    {
-        assertUpdate("CREATE SCHEMA testReadSchema2");
-        assertUpdate("CREATE TABLE testReadSchema2.testReadStruct7 (orderkey array(varchar), orderstatus array(row(big int)), lables map(varchar, array(int)), orderstatus1 row(big2 int))  WITH (format='orc',transactional=true)");
-        assertUpdate("INSERT INTO testReadSchema2.testReadStruct7 VALUES (ARRAY ['YOUNG', 'FASION', 'STYLE'], ARRAY[row(111), row(222)], MAP(ARRAY ['type', 'grand'], ARRAY [ARRAY[1, 2], ARRAY[1,2]]), row(111))", 1);
-        assertEquals(computeActual("SELECT * FROM testReadSchema2.testReadStruct7").getRowCount(), 1);
-        assertUpdate("UPDATE testReadSchema2.testReadStruct7 set orderkey = ARRAY['UPDATE','UPDATE','UPDATE']", 1);
-        assertEquals(computeActual("SELECT * FROM testReadSchema2.testReadStruct7").getRowCount(), 1);
-        assertUpdate("DROP TABLE testReadSchema2.testReadStruct7");
-        assertUpdate("DROP SCHEMA testReadSchema2");
-    }
-
-    @Test
-    public void testReadSingleColumnStructDataTypeColumns()
-    {
-        assertUpdate("CREATE SCHEMA testReadSchema3");
-        assertUpdate("CREATE TABLE testReadSchema3.testReadStruct8 (orderkey array(varchar), orderstatus array(row(big int)), lables map(varchar, array(int)), orderstatus1 row(big2 int))  WITH (format='orc',transactional=true)");
-        assertUpdate("INSERT INTO testReadSchema3.testReadStruct8 VALUES (ARRAY ['YOUNG', 'FASION', 'STYLE'], ARRAY[row(111), row(222)], MAP(ARRAY ['type', 'grand'], ARRAY [ARRAY[1, 2], ARRAY[1,2]]), row(111))", 1);
-        assertEquals(computeActual("SELECT orderkey FROM testReadSchema3.testReadStruct8").getRowCount(), 1);
-        assertEquals(computeActual("SELECT orderstatus FROM testReadSchema3.testReadStruct8").getRowCount(), 1);
-        assertEquals(computeActual("SELECT lables FROM testReadSchema3.testReadStruct8").getRowCount(), 1);
-        assertUpdate("DROP TABLE testReadSchema3.testReadStruct8");
-        assertUpdate("DROP SCHEMA testReadSchema3");
-    }
-
-    @Test
-    public void testReadFromTablesWithPrimitiveAndStructDataTypeColumns()
-    {
-        assertUpdate("CREATE SCHEMA testReadSchema4");
-        assertUpdate("CREATE TABLE testReadSchema4.testReadStruct9 (id int, orderkey array(varchar), name string, orderstatus array(row(big int)), lables map(varchar, array(int)), orderstatus1 row(big2 int), age int, salary double)  WITH (format='orc',transactional=true)");
-        assertUpdate("INSERT INTO testReadSchema4.testReadStruct9 VALUES (1, ARRAY ['YOUNG', 'FASION', 'STYLE'], 'name1', ARRAY[row(111), row(222)], MAP(ARRAY ['type', 'grand'], ARRAY [ARRAY[1, 2], ARRAY[1,2]]), row(111), 30, 2000.5)", 1);
-        assertEquals(computeActual("SELECT id FROM testReadSchema4.testReadStruct9").getRowCount(), 1);
-        assertEquals(computeActual("SELECT name FROM testReadSchema4.testReadStruct9").getRowCount(), 1);
-        assertEquals(computeActual("SELECT orderkey FROM testReadSchema4.testReadStruct9").getRowCount(), 1);
-        assertEquals(computeActual("SELECT orderstatus FROM testReadSchema4.testReadStruct9").getRowCount(), 1);
-        assertEquals(computeActual("SELECT lables FROM testReadSchema4.testReadStruct9").getRowCount(), 1);
-        assertEquals(computeActual("SELECT age FROM testReadSchema4.testReadStruct9").getRowCount(), 1);
-        assertEquals(computeActual("SELECT salary FROM testReadSchema4.testReadStruct9").getRowCount(), 1);
-        assertEquals(computeActual("SELECT id, name, age, salary FROM testReadSchema4.testReadStruct9").getRowCount(), 1);
-        assertEquals(computeActual("SELECT orderkey, orderstatus, lables, orderstatus1 FROM testReadSchema4.testReadStruct9").getRowCount(), 1);
-        assertEquals(computeActual("SELECT id, orderkey, name, orderstatus FROM testReadSchema4.testReadStruct9").getRowCount(), 1);
-        assertEquals(computeActual("SELECT salary, age, lables, orderstatus FROM testReadSchema4.testReadStruct9").getRowCount(), 1);
-        assertEquals(computeActual("SELECT orderkey, name, lables, orderstatus1 FROM testReadSchema4.testReadStruct9").getRowCount(), 1);
-        assertEquals(computeActual("SELECT * FROM testReadSchema4.testReadStruct9").getRowCount(), 1);
-        assertUpdate("DROP TABLE testReadSchema4.testReadStruct9");
-        assertUpdate("DROP SCHEMA testReadSchema4");
     }
 }

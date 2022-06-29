@@ -13,11 +13,9 @@
  */
 package io.prestosql.sql.planner;
 
-import com.google.common.collect.HashMultimap;
 import com.google.common.collect.ImmutableList;
 import com.google.common.collect.ImmutableMap;
 import com.google.common.collect.ImmutableSet;
-import com.google.common.collect.Multimap;
 import io.airlift.log.Logger;
 import io.prestosql.Session;
 import io.prestosql.dynamicfilter.DynamicFilterService;
@@ -27,7 +25,6 @@ import io.prestosql.metadata.Metadata;
 import io.prestosql.metadata.TableMetadata;
 import io.prestosql.metadata.TableProperties;
 import io.prestosql.operator.StageExecutionDescriptor;
-import io.prestosql.snapshot.MarkerSplitSource;
 import io.prestosql.spi.HetuConstant;
 import io.prestosql.spi.connector.ColumnHandle;
 import io.prestosql.spi.connector.ColumnMetadata;
@@ -45,6 +42,7 @@ import io.prestosql.spi.plan.MarkDistinctNode;
 import io.prestosql.spi.plan.PlanNode;
 import io.prestosql.spi.plan.PlanNodeId;
 import io.prestosql.spi.plan.ProjectNode;
+import io.prestosql.spi.plan.RouterNode;
 import io.prestosql.spi.plan.Symbol;
 import io.prestosql.spi.plan.TableScanNode;
 import io.prestosql.spi.plan.TopNNode;
@@ -58,51 +56,20 @@ import io.prestosql.split.SampledSplitSource;
 import io.prestosql.split.SplitManager;
 import io.prestosql.split.SplitSource;
 import io.prestosql.sql.DynamicFilters;
-import io.prestosql.sql.planner.plan.AssignUniqueId;
-import io.prestosql.sql.planner.plan.CreateIndexNode;
-import io.prestosql.sql.planner.plan.CubeFinishNode;
-import io.prestosql.sql.planner.plan.DeleteNode;
-import io.prestosql.sql.planner.plan.DistinctLimitNode;
-import io.prestosql.sql.planner.plan.EnforceSingleRowNode;
-import io.prestosql.sql.planner.plan.ExchangeNode;
-import io.prestosql.sql.planner.plan.ExplainAnalyzeNode;
-import io.prestosql.sql.planner.plan.IndexJoinNode;
-import io.prestosql.sql.planner.plan.InternalPlanVisitor;
-import io.prestosql.sql.planner.plan.OutputNode;
-import io.prestosql.sql.planner.plan.PlanFragmentId;
-import io.prestosql.sql.planner.plan.RemoteSourceNode;
-import io.prestosql.sql.planner.plan.RowNumberNode;
-import io.prestosql.sql.planner.plan.SampleNode;
-import io.prestosql.sql.planner.plan.SemiJoinNode;
-import io.prestosql.sql.planner.plan.SortNode;
-import io.prestosql.sql.planner.plan.SpatialJoinNode;
-import io.prestosql.sql.planner.plan.StatisticsWriterNode;
-import io.prestosql.sql.planner.plan.TableDeleteNode;
-import io.prestosql.sql.planner.plan.TableFinishNode;
-import io.prestosql.sql.planner.plan.TableUpdateNode;
-import io.prestosql.sql.planner.plan.TableWriterNode;
+import io.prestosql.sql.planner.plan.*;
 import io.prestosql.sql.planner.plan.TableWriterNode.VacuumTarget;
-import io.prestosql.sql.planner.plan.TopNRankingNumberNode;
-import io.prestosql.sql.planner.plan.UnnestNode;
-import io.prestosql.sql.planner.plan.UpdateIndexNode;
-import io.prestosql.sql.planner.plan.UpdateNode;
-import io.prestosql.sql.planner.plan.VacuumTableNode;
 
 import javax.inject.Inject;
 
-import java.util.ArrayList;
 import java.util.Collections;
-import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
 import java.util.Set;
-import java.util.Stack;
 import java.util.function.Supplier;
 
 import static com.google.common.collect.ImmutableMap.toImmutableMap;
 import static com.google.common.collect.Iterables.getOnlyElement;
-import static io.prestosql.SystemSessionProperties.isCTEReuseEnabled;
 import static io.prestosql.spi.connector.ConnectorSplitManager.SplitSchedulingStrategy.GROUPED_SCHEDULING;
 import static io.prestosql.spi.connector.ConnectorSplitManager.SplitSchedulingStrategy.UNGROUPED_SCHEDULING;
 import static io.prestosql.sql.planner.optimizations.PlanNodeSearcher.searchFrom;
@@ -111,13 +78,6 @@ import static java.util.Objects.requireNonNull;
 public class DistributedExecutionPlanner
 {
     private static final Logger log = Logger.get(DistributedExecutionPlanner.class);
-
-    public enum Mode
-    {
-        NORMAL, // First time to plan the query with snapshot off
-        SNAPSHOT, // First time to plan the query with snapshot on
-        RESUME // Resuming query execution from a snapshot (null means from start)
-    }
 
     private final SplitManager splitManager;
     private final Metadata metadata;
@@ -129,83 +89,16 @@ public class DistributedExecutionPlanner
         this.metadata = requireNonNull(metadata, "metadata is null");
     }
 
-    public StageExecutionPlan plan(SubPlan root, Session session, Mode mode, Long resumeSnapshotId, long nextSnapshotId)
+    public StageExecutionPlan plan(SubPlan root, Session session)
     {
         ImmutableList.Builder<SplitSource> allSplitSources = ImmutableList.builder();
         try {
-            if (mode != Mode.SNAPSHOT) {
-                return doPlan(mode, root, session, resumeSnapshotId, nextSnapshotId, allSplitSources, null, null, null);
-            }
-
-            // Capture dependencies among table scan sources. Only need to do this for the initial planning.
-            // The leftmost source of each fragment. Key is fragment id; value is SplitSource or ValuesNode or RemoteSourceNode
-            Map<PlanFragmentId, Object> leftmostSources = new HashMap<>();
-            // Source dependency. Key is SplitSource or ValuesNode or RemoteSourceNode; value is SplitSource or ValuesNode or RemoteSourceNode
-            Multimap<Object, Object> sourceDependencies = HashMultimap.create();
-            // List of sources from the same union. Values are SplitSource or ValuesNode or RemoteSourceNode.
-            List<List<Object>> unionSources = new ArrayList<>();
-            StageExecutionPlan ret = doPlan(mode, root, session, resumeSnapshotId, nextSnapshotId, allSplitSources, leftmostSources, sourceDependencies, unionSources);
-
-            for (Map.Entry<Object, Object> entry : sourceDependencies.entries()) {
-                List<MarkerSplitSource> right = collectSources(leftmostSources, entry.getValue());
-                for (MarkerSplitSource source : collectSources(leftmostSources, entry.getKey())) {
-                    for (SplitSource dependency : right) {
-                        source.addDependency((MarkerSplitSource) dependency);
-                    }
-                }
-            }
-
-            List<MarkerSplitSource> sources = new ArrayList<>();
-            for (List<Object> union : unionSources) {
-                sources.clear();
-                for (Object unionSource : union) {
-                    sources.addAll(collectSources(leftmostSources, unionSource));
-                }
-                // These sources are part of a "union". They eventually reach the same "union" point (e.g. an ExchangeOperator).
-                // For snapshot to work, all sources must produce the same number of markers, otherwise the union point
-                // will not receive markers from all input channels, causing corresponding snapshots to be incomplete.
-                // Adding all these sources as "union dependencies" for each other, to make sure they produce the same set of markers.
-                for (MarkerSplitSource source : sources) {
-                    source.addUnionSources(sources);
-                }
-            }
-
-            return ret;
+            return doPlan(root, session, allSplitSources);
         }
         catch (Throwable t) {
             allSplitSources.build().forEach(DistributedExecutionPlanner::closeSplitSource);
             throw t;
         }
-    }
-
-    private List<MarkerSplitSource> collectSources(Map<PlanFragmentId, Object> leftmostSources, Object source)
-    {
-        if (source instanceof ValuesNode) {
-            // TODO-cp-I2X9J6: should we worry about dependencies about Values operators, when it's the "left" of a join?
-            return ImmutableList.of();
-        }
-
-        if (source instanceof RemoteSourceNode) {
-            List<PlanFragmentId> fragments = ((RemoteSourceNode) source).getSourceFragmentIds();
-            if (fragments.size() == 1) {
-                return collectSources(leftmostSources, leftmostSources.get(fragments.get(0)));
-            }
-            List<MarkerSplitSource> sources = new ArrayList<>();
-            for (PlanFragmentId id : fragments) {
-                sources.addAll(collectSources(leftmostSources, leftmostSources.get(id)));
-            }
-            // These sources are part of a "union". They eventually reach the same "union" point (e.g. an ExchangeOperator).
-            // For snapshot to work, all sources must produce the same number of markers, otherwise the union point
-            // will not receive markers from all input channels, causing corresponding snapshots to be incomplete.
-            // Adding all these sources as "union dependencies" for each other, to make sure they produce the same set of markers.
-            for (MarkerSplitSource unionSource : sources) {
-                unionSource.addUnionSources(sources);
-            }
-            return sources;
-        }
-
-        // Must be a split source
-        return ImmutableList.of((MarkerSplitSource) source);
     }
 
     private static void closeSplitSource(SplitSource source)
@@ -218,43 +111,17 @@ public class DistributedExecutionPlanner
         }
     }
 
-    private StageExecutionPlan doPlan(
-            Mode mode,
-            SubPlan root,
-            Session session,
-            Long resumeSnapshotId,
-            long nextSnapshotId,
-            ImmutableList.Builder<SplitSource> allSplitSources,
-            Map<PlanFragmentId, Object> leftmostSources,
-            Multimap<Object, Object> sourceDependencies,
-            List<List<Object>> unionSources)
+    private StageExecutionPlan doPlan(SubPlan root, Session session, ImmutableList.Builder<SplitSource> allSplitSources)
     {
         PlanFragment currentFragment = root.getFragment();
 
         // get splits for this fragment, this is lazy so split assignments aren't actually calculated here
-        Map<PlanNodeId, SplitSource> splitSources;
-        switch (mode) {
-            case NORMAL:
-                splitSources = currentFragment.getRoot().accept(new Visitor(session, currentFragment.getStageExecutionDescriptor(), allSplitSources), null);
-                break;
-            case SNAPSHOT:
-                // Add additional logic to record which sources depend on (are blocked by) which other sources through join operators
-                SnapshotAwareVisitor visitor = new SnapshotAwareVisitor(session, currentFragment.getStageExecutionDescriptor(), nextSnapshotId, allSplitSources, sourceDependencies, unionSources);
-                splitSources = currentFragment.getRoot().accept(visitor, null);
-                leftmostSources.put(currentFragment.getId(), visitor.leftmostSource);
-                break;
-            case RESUME:
-                splitSources = currentFragment.getRoot().accept(new UpdateValuesVisitor(session, currentFragment.getStageExecutionDescriptor(),
-                        resumeSnapshotId, nextSnapshotId, allSplitSources), null);
-                break;
-            default:
-                throw new RuntimeException("Unexpected mode: " + mode);
-        }
+        Map<PlanNodeId, SplitSource> splitSources = currentFragment.getRoot().accept(new Visitor(session, currentFragment.getStageExecutionDescriptor(), allSplitSources), null);
 
         // create child stages
         ImmutableList.Builder<StageExecutionPlan> dependencies = ImmutableList.builder();
         for (SubPlan childPlan : root.getChildren()) {
-            dependencies.add(doPlan(mode, childPlan, session, resumeSnapshotId, nextSnapshotId, allSplitSources, leftmostSources, sourceDependencies, unionSources));
+            dependencies.add(doPlan(childPlan, session, allSplitSources));
         }
 
         // extract TableInfo
@@ -279,7 +146,7 @@ public class DistributedExecutionPlanner
         return new TableInfo(tableMetadata.getQualifiedName(), tableProperties.getPredicate());
     }
 
-    private class Visitor
+    private final class Visitor
             extends InternalPlanVisitor<Map<PlanNodeId, SplitSource>, Void>
     {
         private final Session session;
@@ -318,32 +185,22 @@ public class DistributedExecutionPlanner
                     queryInfo, false);
         }
 
-        Map<PlanNodeId, SplitSource> visitScanAndFilter(PlanNodeId nodeId,
-                TableHandle tableHandle,
-                Optional<FilterNode> filter,
-                Map<Symbol, ColumnHandle> assignments,
-                Optional<QueryType> queryType,
-                Map<String, Object> queryInfo,
-                boolean partOfReuse)
+        private Map<PlanNodeId, SplitSource> visitScanAndFilter(PlanNodeId nodeId,
+                                                                TableHandle tableHandle,
+                                                                Optional<FilterNode> filter,
+                                                                Map<Symbol, ColumnHandle> assignments,
+                                                                Optional<QueryType> queryType,
+                                                                Map<String, Object> queryInfo,
+                                                                boolean partOfReuse)
         {
-            List<List<DynamicFilters.Descriptor>> dynamicFilters;
-            if (isCTEReuseEnabled(session)) {
-                dynamicFilters = DynamicFilters.extractDynamicFiltersAsUnion(filter.map(FilterNode::getPredicate), metadata);
-            }
-            else {
-                List<DynamicFilters.Descriptor> descriptors = filter
-                        .map(FilterNode::getPredicate)
-                        .map(DynamicFilters::extractDynamicFilters)
-                        .map(DynamicFilters.ExtractResult::getDynamicConjuncts).orElse(ImmutableList.of());
-                if (!descriptors.isEmpty()) {
-                    dynamicFilters = ImmutableList.of(descriptors);
-                }
-                else {
-                    dynamicFilters = ImmutableList.of();
-                }
-            }
-            Supplier<List<Set<DynamicFilter>>> dynamicFilterSupplier = null;
-            if (dynamicFilters != null && !dynamicFilters.isEmpty() && !stageExecutionDescriptor.isScanGroupedExecution(nodeId)) {
+            List<DynamicFilters.Descriptor> dynamicFilters = filter
+                    .map(FilterNode::getPredicate)
+                    .map(DynamicFilters::extractDynamicFilters)
+                    .map(DynamicFilters.ExtractResult::getDynamicConjuncts)
+                    .orElse(ImmutableList.of());
+
+            Supplier<Set<DynamicFilter>> dynamicFilterSupplier = null;
+            if (!dynamicFilters.isEmpty() && !stageExecutionDescriptor.isScanGroupedExecution(nodeId)) {
                 dynamicFilterSupplier = DynamicFilterService.getDynamicFilterSupplier(session.getQueryId(), dynamicFilters, assignments);
             }
 
@@ -362,8 +219,7 @@ public class DistributedExecutionPlanner
                     queryType,
                     queryInfo,
                     userDefinedCachePredicates,
-                    partOfReuse,
-                    nodeId);
+                    partOfReuse);
 
             splitSources.add(splitSource);
 
@@ -578,26 +434,7 @@ public class DistributedExecutionPlanner
         }
 
         @Override
-        public Map<PlanNodeId, SplitSource> visitUpdate(UpdateNode node, Void context)
-        {
-            return node.getSource().accept(this, context);
-        }
-
-        @Override
-        public Map<PlanNodeId, SplitSource> visitUpdateIndex(UpdateIndexNode node, Void context)
-        {
-            return node.getSource().accept(this, context);
-        }
-
-        @Override
         public Map<PlanNodeId, SplitSource> visitTableDelete(TableDeleteNode node, Void context)
-        {
-            // node does not have splits
-            return ImmutableMap.of();
-        }
-
-        @Override
-        public Map<PlanNodeId, SplitSource> visitTableUpdate(TableUpdateNode node, Void context)
         {
             // node does not have splits
             return ImmutableMap.of();
@@ -638,185 +475,21 @@ public class DistributedExecutionPlanner
         }
 
         @Override
+        public Map<PlanNodeId, SplitSource> visitRouter(RouterNode node, Void context)
+        {
+            return processSources(node.getSources(), context);
+        }
+
+        @Override
+        public Map<PlanNodeId, SplitSource> visitStoreForward(StoreForwardNode node, Void context)
+        {
+            return processSources(node.getSources(), context);
+        }
+
+        @Override
         public Map<PlanNodeId, SplitSource> visitPlan(PlanNode node, Void context)
         {
             throw new UnsupportedOperationException("not yet implemented: " + node.getClass().getName());
-        }
-    }
-
-    private class UpdateValuesVisitor
-            extends Visitor
-    {
-        private final Long resumeSnapshotId;
-        private final long nextSnapshotId;
-
-        private UpdateValuesVisitor(
-                Session session,
-                StageExecutionDescriptor stageExecutionDescriptor,
-                Long resumeSnapshotId,
-                long nextSnapshotId,
-                ImmutableList.Builder<SplitSource> allSplitSources)
-        {
-            super(session, stageExecutionDescriptor, allSplitSources);
-            this.resumeSnapshotId = resumeSnapshotId;
-            this.nextSnapshotId = nextSnapshotId;
-        }
-
-        @Override
-        public Map<PlanNodeId, SplitSource> visitValues(ValuesNode node, Void context)
-        {
-            node.setupSnapshot(resumeSnapshotId, nextSnapshotId);
-            return super.visitValues(node, context);
-        }
-    }
-
-    private class SnapshotAwareVisitor
-            extends Visitor
-    {
-        private final Multimap<Object, Object> sourceDependencies;
-        private final List<List<Object>> unionSources;
-        private final long nextSnapshotId;
-        // Which are the corresponding "left" sources from join nodes while visiting the "right" nodes.
-        // Value can be SplitSource, ValuesNode, or RemoteSourceNode
-        private Stack<Object> sourceStack;
-        private Object leftmostSource;
-        private int pendingJoins;
-
-        private SnapshotAwareVisitor(
-                Session session,
-                StageExecutionDescriptor stageExecutionDescriptor,
-                long nextSnapshotId,
-                ImmutableList.Builder<SplitSource> allSplitSources,
-                Multimap<Object, Object> sourceDependencies,
-                List<List<Object>> unionSources)
-        {
-            super(session, stageExecutionDescriptor, allSplitSources);
-            this.sourceDependencies = sourceDependencies;
-            this.unionSources = unionSources;
-            this.nextSnapshotId = nextSnapshotId;
-            sourceStack = new Stack<>();
-        }
-
-        @Override
-        public Map<PlanNodeId, SplitSource> visitExchange(ExchangeNode node, Void context)
-        {
-            if (node.getScope() == ExchangeNode.Scope.REMOTE ||
-                    node.getType() == ExchangeNode.Type.REPLICATE ||
-                    node.getSources().size() <= 1) {
-                return super.visitExchange(node, context);
-            }
-
-            // This is a unions with local sources, as an ExchangeNode with GATHER or REPARTITION types.
-            // (Unions with remote sources are handled by RemoteSourceNode.)
-            // Collect all (left-most) "leaf" sources, so that their corresponding MarkerSplitSources
-            // can be associated later.
-            List<Object> sources = new ArrayList<>();
-            unionSources.add(sources);
-
-            ImmutableMap.Builder<PlanNodeId, SplitSource> result = ImmutableMap.builder();
-            boolean isLeft = true;
-            for (PlanNode child : node.getSources()) {
-                // Backup the current left-most source
-                Object prevLeftmost = leftmostSource;
-                leftmostSource = null;
-                // Save our sourceStack and recurse with empty stack if this is not the left child
-                Stack<Object> savedSourceStack = sourceStack;
-                if (!isLeft) {
-                    sourceStack = new Stack<>();
-                }
-                result.putAll(child.accept(this, context));
-                // Collect left-most source of this union member
-                sources.add(leftmostSource);
-                // Restore original left-most source if necessary
-                if (prevLeftmost != null) {
-                    leftmostSource = prevLeftmost;
-                }
-                // Recover original stack
-                sourceStack = savedSourceStack;
-                isLeft = false;
-            }
-
-            return result.build();
-        }
-
-        @Override
-        public Map<PlanNodeId, SplitSource> visitJoin(JoinNode node, Void context)
-        {
-            pendingJoins++;
-            Map<PlanNodeId, SplitSource> ret = super.visitJoin(node, context);
-            sourceStack.pop();
-            return ret;
-        }
-
-        @Override
-        public Map<PlanNodeId, SplitSource> visitSemiJoin(SemiJoinNode node, Void context)
-        {
-            pendingJoins++;
-            Map<PlanNodeId, SplitSource> ret = super.visitSemiJoin(node, context);
-            sourceStack.pop();
-            return ret;
-        }
-
-        @Override
-        public Map<PlanNodeId, SplitSource> visitSpatialJoin(SpatialJoinNode node, Void context)
-        {
-            pendingJoins++;
-            Map<PlanNodeId, SplitSource> ret = super.visitSpatialJoin(node, context);
-            sourceStack.pop();
-            return ret;
-        }
-
-        @Override
-        Map<PlanNodeId, SplitSource> visitScanAndFilter(PlanNodeId nodeId,
-                TableHandle tableHandle,
-                Optional<FilterNode> filter,
-                Map<Symbol, ColumnHandle> assignments,
-                Optional<QueryType> queryType,
-                Map<String, Object> queryInfo,
-                boolean partOfReuse)
-        {
-            Map<PlanNodeId, SplitSource> ret = super.visitScanAndFilter(nodeId, tableHandle, filter, assignments, queryType, queryInfo, partOfReuse);
-            handleLeafNode(ret.values().iterator().next());
-            return ret;
-        }
-
-        @Override
-        public Map<PlanNodeId, SplitSource> visitRemoteSource(RemoteSourceNode node, Void context)
-        {
-            handleLeafNode(node);
-            return super.visitRemoteSource(node, context);
-        }
-
-        @Override
-        public Map<PlanNodeId, SplitSource> visitValues(ValuesNode node, Void context)
-        {
-            node.setupSnapshot(null, nextSnapshotId);
-            handleLeafNode(node);
-            return super.visitValues(node, context);
-        }
-
-        private void handleLeafNode(Object source)
-        {
-            if (leftmostSource == null) {
-                leftmostSource = source;
-            }
-
-            if (!sourceStack.empty()) {
-                // this source is part of the "right" table of a join
-                Object left = sourceStack.peek();
-                // Current leftmost source depend on remote sources from these fragments
-                sourceDependencies.put(left, source);
-            }
-
-            if (pendingJoins > 0) {
-                // This source serves as the "left" table for all the pending joins.
-                // e.g. 2 level join: (A + B) + C, where A is the left for both joins,
-                // and only A->B and A->C dependencies need to be recorded
-                while (pendingJoins > 0) {
-                    sourceStack.push(source);
-                    pendingJoins--;
-                }
-            }
         }
     }
 }

@@ -1,5 +1,5 @@
 /*
- * Copyright (C) 2018-2021. Huawei Technologies Co., Ltd. All rights reserved.
+ * Copyright (C) 2018-2020. Huawei Technologies Co., Ltd. All rights reserved.
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
  * You may obtain a copy of the License at
@@ -28,41 +28,41 @@ import static io.prestosql.spi.StandardErrorCode.NOT_SUPPORTED;
 /**
  * Convert RowExpression to a formatted String used for make a sql statement in PushDown
  */
-public interface RowExpressionConverter<C>
-        extends RowExpressionVisitor<String, C>
+public interface RowExpressionConverter
+        extends RowExpressionVisitor<String, Void>
 {
     @Override
-    default String visitCall(CallExpression call, C context)
+    default String visitCall(CallExpression call, Void context)
     {
         throw new PrestoException(NOT_SUPPORTED, "Not support convert CallExpression");
     }
 
     @Override
-    default String visitSpecialForm(SpecialForm specialForm, C context)
+    default String visitSpecialForm(SpecialForm specialForm, Void context)
     {
         throw new PrestoException(NOT_SUPPORTED, "Not support convert SpecialForm");
     }
 
     @Override
-    default String visitConstant(ConstantExpression literal, C context)
+    default String visitConstant(ConstantExpression literal, Void context)
     {
         throw new PrestoException(NOT_SUPPORTED, "Not support convert ConstantExpression");
     }
 
     @Override
-    default String visitVariableReference(VariableReferenceExpression reference, C context)
+    default String visitVariableReference(VariableReferenceExpression reference, Void context)
     {
         throw new PrestoException(NOT_SUPPORTED, "Not support convert VariableReference");
     }
 
     @Override
-    default String visitInputReference(InputReferenceExpression reference, C context)
+    default String visitInputReference(InputReferenceExpression reference, Void context)
     {
         throw new PrestoException(NOT_SUPPORTED, "Not support convert InputReference");
     }
 
     @Override
-    default String visitLambda(LambdaDefinitionExpression lambda, C context)
+    default String visitLambda(LambdaDefinitionExpression lambda, Void context)
     {
         throw new PrestoException(NOT_SUPPORTED, "Not support convert Lambda");
     }

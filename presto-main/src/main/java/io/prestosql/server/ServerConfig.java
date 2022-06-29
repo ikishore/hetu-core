@@ -27,7 +27,6 @@ import java.util.HashSet;
 import java.util.Set;
 
 import static java.util.concurrent.TimeUnit.MINUTES;
-import static java.util.concurrent.TimeUnit.SECONDS;
 
 public class ServerConfig
 {
@@ -38,12 +37,6 @@ public class ServerConfig
     private boolean includeExceptionInResponse = true;
     private Duration gracePeriod = new Duration(2, MINUTES);
     private boolean enhancedErrorReporting = true;
-    private Duration httpClientIdleTimeout = new Duration(30, SECONDS);
-    private Duration httpClientRequestTimeout = new Duration(10, SECONDS);
-
-    public static final String GOSSIP = "gossip";
-    public static final String HEARTBEAT = "heartbeat";
-    private String failureDetectionProtocol = HEARTBEAT;
     // Main coordinator TODO: remove this when main coordinator election is implemented
 
     private final Set<String> admins = new HashSet<>();
@@ -56,20 +49,6 @@ public class ServerConfig
     public Set<String> getAdmins()
     {
         return ImmutableSet.copyOf(admins);
-    }
-
-    @Config("failure-detection-protocol")
-    public ServerConfig setFailureDetectionProtocol(String protocol)
-    {
-        if (GOSSIP.equalsIgnoreCase(protocol) || HEARTBEAT.equalsIgnoreCase(protocol)) {
-            failureDetectionProtocol = protocol;
-        }
-        return this;
-    }
-
-    public String getFailureDetectionProtocol()
-    {
-        return failureDetectionProtocol;
     }
 
     @Config("openlookeng.admins")
@@ -147,37 +126,5 @@ public class ServerConfig
     {
         this.enhancedErrorReporting = value;
         return this;
-    }
-
-    @Config("http.client.idle-timeout")
-    public ServerConfig setHttpClientIdleTimeout(Duration httpClientIdleTimeout)
-    {
-        this.httpClientIdleTimeout = httpClientIdleTimeout;
-        return this;
-    }
-
-    @MinDuration("30s")
-    public Duration getHttpClientIdleTimeout()
-    {
-        return httpClientIdleTimeout;
-    }
-
-    @Config("http.client.request-timeout")
-    public ServerConfig setHttpClientRequestTimeout(Duration httpClientRequestTimeout)
-    {
-        this.httpClientRequestTimeout = httpClientRequestTimeout;
-        return this;
-    }
-
-    @MinDuration("10s")
-    public Duration getHttpClientRequestTimeout()
-    {
-        return httpClientRequestTimeout;
-    }
-
-    public static boolean isGossip(ServerConfig serverConfig)
-    {
-        String protocol = serverConfig.getFailureDetectionProtocol();
-        return ServerConfig.GOSSIP.equalsIgnoreCase(protocol);
     }
 }

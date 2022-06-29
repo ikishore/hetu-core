@@ -24,7 +24,6 @@ import io.prestosql.queryeditorui.protocol.Table;
 import io.prestosql.security.AccessControl;
 import io.prestosql.security.AccessControlUtil;
 import io.prestosql.server.HttpRequestSessionContext;
-import io.prestosql.spi.security.GroupProvider;
 
 import javax.servlet.http.HttpServletRequest;
 import javax.ws.rs.GET;
@@ -36,7 +35,6 @@ import javax.ws.rs.core.MediaType;
 import javax.ws.rs.core.Response;
 
 import java.util.List;
-import java.util.Set;
 import java.util.concurrent.ExecutionException;
 
 @Path("/api/metadata")
@@ -46,21 +44,18 @@ public class MetadataResource
     private final ColumnService columnService;
     private final AccessControl accessControl;
     private final PreviewTableService previewTableService;
-    private final GroupProvider groupProvider;
 
     @Inject
     public MetadataResource(
             final SchemaService schemaService,
             final ColumnService columnService,
             final AccessControl accessControl,
-            final PreviewTableService previewTableService,
-            final GroupProvider groupProvider)
+            final PreviewTableService previewTableService)
     {
         this.schemaService = schemaService;
         this.columnService = columnService;
         this.accessControl = accessControl;
         this.previewTableService = previewTableService;
-        this.groupProvider = groupProvider;
     }
 
     @GET
@@ -71,7 +66,7 @@ public class MetadataResource
             @PathParam("schema") String schemaName,
             @Context HttpServletRequest servletRequest)
     {
-        String user = AccessControlUtil.getUser(accessControl, new HttpRequestSessionContext(servletRequest, groupProvider));
+        String user = AccessControlUtil.getUser(accessControl, new HttpRequestSessionContext(servletRequest));
         ImmutableList<Table> result = schemaService.queryTables(catalogName, schemaName, user);
         return Response.ok(result).build();
     }
@@ -86,7 +81,7 @@ public class MetadataResource
             @Context HttpServletRequest servletRequest)
             throws ExecutionException
     {
-        String user = AccessControlUtil.getUser(accessControl, new HttpRequestSessionContext(servletRequest, groupProvider));
+        String user = AccessControlUtil.getUser(accessControl, new HttpRequestSessionContext(servletRequest));
         List<Column> columnList = columnService.getColumns(catalogName, schemaName, tableName, user);
         return Response.ok(columnList).build();
     }
@@ -101,21 +96,9 @@ public class MetadataResource
             @Context HttpServletRequest servletRequest)
             throws ExecutionException
     {
-        String user = AccessControlUtil.getUser(accessControl, new HttpRequestSessionContext(servletRequest, groupProvider));
+        String user = AccessControlUtil.getUser(accessControl, new HttpRequestSessionContext(servletRequest));
         List<List<Object>> preview = previewTableService.getPreview(catalogName, schemaName, tableName, user);
         return Response.ok(preview).build();
-    }
-
-    @GET
-    @Produces(MediaType.APPLICATION_JSON)
-    @Path("catalogs")
-    public Response getCatalogs(
-            @Context HttpServletRequest servletRequest)
-            throws ExecutionException
-    {
-        String user = AccessControlUtil.getUser(accessControl, new HttpRequestSessionContext(servletRequest, groupProvider));
-        Set<String> result = schemaService.queryCatalogs(user);
-        return Response.ok(result).build();
     }
 
     @GET
@@ -125,7 +108,7 @@ public class MetadataResource
             @Context HttpServletRequest servletRequest)
             throws ExecutionException
     {
-        String user = AccessControlUtil.getUser(accessControl, new HttpRequestSessionContext(servletRequest, groupProvider));
+        String user = AccessControlUtil.getUser(accessControl, new HttpRequestSessionContext(servletRequest));
         ImmutableList<CatalogSchema> result = schemaService.querySchemas(user);
         return Response.ok(result).build();
     }
@@ -138,7 +121,7 @@ public class MetadataResource
             @Context HttpServletRequest servletRequest)
             throws ExecutionException
     {
-        String user = AccessControlUtil.getUser(accessControl, new HttpRequestSessionContext(servletRequest, groupProvider));
+        String user = AccessControlUtil.getUser(accessControl, new HttpRequestSessionContext(servletRequest));
         CatalogSchema catalogSchema = schemaService.querySchemas(catalogName, user);
         return Response.ok(catalogSchema).build();
     }

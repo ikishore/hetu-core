@@ -73,9 +73,7 @@ public class Pager
             throws IOException
     {
         try {
-            if (b != 0) {
-                super.write(b);
-            }
+            super.write(b);
         }
         catch (IOException e) {
             throw propagateIOException(e);
@@ -150,12 +148,12 @@ public class Pager
     public static Pager create(List<String> command)
     {
         try {
-            Process start = new ProcessBuilder()
+            Process process = new ProcessBuilder()
                     .command(command)
                     .redirectOutput(ProcessBuilder.Redirect.INHERIT)
                     .redirectError(ProcessBuilder.Redirect.INHERIT)
                     .start();
-            return new Pager(start.getOutputStream(), start);
+            return new Pager(process.getOutputStream(), process);
         }
         catch (IOException e) {
             System.err.println("ERROR: failed to open pager: " + e.getMessage());

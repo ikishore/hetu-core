@@ -1,5 +1,5 @@
 /*
- * Copyright (C) 2018-2021. Huawei Technologies Co., Ltd. All rights reserved.
+ * Copyright (C) 2018-2020. Huawei Technologies Co., Ltd. All rights reserved.
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
  * You may obtain a copy of the License at
@@ -51,7 +51,6 @@ import java.util.Map;
 import java.util.Set;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicReference;
-import java.util.function.Function;
 
 import static io.prestosql.spi.type.BigintType.BIGINT;
 import static org.mockito.Matchers.any;
@@ -110,11 +109,11 @@ public class TestSplitCacheStateInitializer
     public void setup()
     {
         Metadata metadata = MetadataManager.createTestMetadataManager();
-        BlockEncodingSerde encodingSerde = metadata.getFunctionAndTypeManager().getBlockEncodingSerde();
+        BlockEncodingSerde blockEncodingSerde = metadata.getBlockEncodingSerde();
         objectMapper = new ObjectMapperProvider().get().registerModule(new SimpleModule()
                 .addDeserializer(Type.class, new TypeDeserializer(metadata))
-                .addSerializer(Block.class, new BlockJsonSerde.Serializer(encodingSerde))
-                .addDeserializer(Block.class, new BlockJsonSerde.Deserializer(encodingSerde))
+                .addSerializer(Block.class, new BlockJsonSerde.Serializer(blockEncodingSerde))
+                .addDeserializer(Block.class, new BlockJsonSerde.Deserializer(blockEncodingSerde))
                 .addKeyDeserializer(SplitKey.class, new SplitKey.KeyDeserializer()));
     }
 
@@ -324,12 +323,6 @@ public class TestSplitCacheStateInitializer
 
         @Override
         public void removeEntryListener(MapListener listener) {}
-
-        @Override
-        public V computeIfAbsent(K key, Function<? super K, ? extends V> mappingFunction)
-        {
-            return null;
-        }
 
         @Override
         public String getName()

@@ -1,5 +1,5 @@
 /*
- * Copyright (C) 2018-2021. Huawei Technologies Co., Ltd. All rights reserved.
+ * Copyright (C) 2018-2020. Huawei Technologies Co., Ltd. All rights reserved.
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
  * You may obtain a copy of the License at
@@ -21,7 +21,6 @@ import com.google.common.collect.ImmutableSet;
 import com.google.common.io.Resources;
 import com.google.inject.Injector;
 import io.airlift.bootstrap.Bootstrap;
-import io.airlift.log.Logger;
 import io.hetu.core.filesystem.HetuLocalFileSystemClient;
 import io.hetu.core.filesystem.LocalConfig;
 import io.prestosql.plugin.base.jmx.MBeanServerModule;
@@ -51,7 +50,6 @@ import java.util.Map;
 import java.util.Optional;
 
 import static com.google.common.base.Throwables.throwIfUnchecked;
-import static io.hetu.core.metastore.MetaStoreConstants.LOCAL;
 import static io.prestosql.spi.StandardErrorCode.ALREADY_EXISTS;
 import static io.prestosql.spi.StandardErrorCode.CATALOG_NOT_EMPTY;
 import static io.prestosql.spi.StandardErrorCode.NOT_FOUND;
@@ -68,7 +66,6 @@ import static org.testng.Assert.fail;
 
 public class TestHetuFsMetastore
 {
-    private static final Logger LOG = Logger.get(TestHetuFsMetastore.class);
     private HetuMetastore metastore;
     private HetuFileSystemClient client;
     private CatalogEntity defaultCatalog;
@@ -104,12 +101,10 @@ public class TestHetuFsMetastore
                 client.createDirectories(Paths.get(path));
             }
             client.deleteRecursively(Paths.get(path));
-
-            String type = LOCAL;
             Bootstrap app = new Bootstrap(
                     new MBeanModule(),
                     new MBeanServerModule(),
-                    new HetuFsMetastoreModule(client, type));
+                    new HetuFsMetastoreModule(client));
 
             Injector injector = app
                     .strictConfig()
@@ -146,7 +141,7 @@ public class TestHetuFsMetastore
             client.deleteRecursively(Paths.get(path));
         }
         catch (IOException e) {
-            LOG.info("Error message: " + e.getStackTrace());
+            e.printStackTrace();
         }
     }
 
@@ -1198,109 +1193,5 @@ public class TestHetuFsMetastore
         assertEquals(actual.getComment(), expected.getComment());
         assertEquals(actual.getParameters(), expected.getParameters());
         assertEquals(actual.getColumns(), expected.getColumns());
-    }
-
-    @Test
-    public void testAlterCatalogParametersParallel()
-            throws InterruptedException
-    {
-        String catalogName = "catalog2000";
-        metastore.createCatalog(CatalogEntity.builder()
-                .setCatalogName(catalogName)
-                .build());
-
-        int num = 100;
-        Thread[] threads = new Thread[num];
-        for (int i = 0; i < num; i++) {
-            int finalI = i;
-            threads[i] = new Thread(() -> {
-                try {
-                    metastore.alterCatalogParameter(catalogName, String.valueOf(finalI), String.valueOf(finalI));
-                }
-                catch (Exception e) {
-                    testResult = false;
-                }
-            });
-            threads[i].start();
-        }
-        for (Thread thread : threads) {
-            thread.join();
-        }
-
-        Map<String, String> res = metastore.getCatalog(catalogName).get().getParameters();
-        assertEquals(num, res.size());
-
-        metastore.dropCatalog(catalogName);
-    }
-
-    @Test
-    public void testAlterDatabaseParametersParallel()
-            throws InterruptedException
-    {
-        String databaseName = "database2000";
-        metastore.createDatabase(DatabaseEntity.builder()
-                .setCatalogName(defaultCatalog.getName())
-                .setDatabaseName(databaseName)
-                .build());
-
-        int num = 100;
-        Thread[] threads = new Thread[num];
-        for (int i = 0; i < num; i++) {
-            int finalI = i;
-            threads[i] = new Thread(() -> {
-                try {
-                    metastore.alterDatabaseParameter(defaultCatalog.getName(), databaseName, String.valueOf(finalI), String.valueOf(finalI));
-                }
-                catch (Exception e) {
-                    testResult = false;
-                }
-            });
-            threads[i].start();
-        }
-        for (Thread thread : threads) {
-            thread.join();
-        }
-
-        Map<String, String> res = metastore.getDatabase(defaultCatalog.getName(), databaseName).get().getParameters();
-        assertEquals(num, res.size());
-
-        metastore.dropDatabase(defaultCatalog.getName(), databaseName);
-    }
-
-    @Test
-    public void testAlterTableParametersParallel()
-            throws InterruptedException
-    {
-        String tableName = "table2000";
-        TableEntity tableEntity = TableEntity.builder()
-                .setCatalogName(defaultDatabase.getCatalogName())
-                .setDatabaseName(defaultDatabase.getName())
-                .setTableName(tableName)
-                .setTableType(TableEntityType.TABLE.toString())
-                .build();
-        metastore.createTable(tableEntity);
-
-        int num = 100;
-        Thread[] threads = new Thread[num];
-        for (int i = 0; i < num; i++) {
-            int finalI = i;
-            threads[i] = new Thread(() -> {
-                try {
-                    metastore.alterTableParameter(defaultDatabase.getCatalogName(), defaultDatabase.getName(), tableName, String.valueOf(finalI), String.valueOf(finalI));
-                }
-                catch (Exception e) {
-                    testResult = false;
-                }
-            });
-            threads[i].start();
-        }
-        for (Thread thread : threads) {
-            thread.join();
-        }
-
-        Map<String, String> res = metastore.getTable(defaultDatabase.getCatalogName(), defaultDatabase.getName(), tableName).get().getParameters();
-        assertEquals(num, res.size());
-
-        metastore.dropTable(defaultDatabase.getCatalogName(), defaultDatabase.getName(), tableName);
     }
 }

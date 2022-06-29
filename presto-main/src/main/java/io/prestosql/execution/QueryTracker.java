@@ -20,11 +20,6 @@ import io.prestosql.Session;
 import io.prestosql.execution.QueryTracker.TrackedQuery;
 import io.prestosql.spi.PrestoException;
 import io.prestosql.spi.QueryId;
-import io.prestosql.spi.statestore.StateCollection;
-import io.prestosql.spi.statestore.StateMap;
-import io.prestosql.spi.statestore.StateStore;
-import io.prestosql.statestore.StateStoreConstants;
-import io.prestosql.statestore.StateStoreProvider;
 import org.joda.time.DateTime;
 
 import javax.annotation.concurrent.GuardedBy;
@@ -64,12 +59,10 @@ public class QueryTracker<T extends TrackedQuery>
 
     private final ScheduledExecutorService queryManagementExecutor;
 
-    private final StateStoreProvider stateStoreProvider;
-
     @GuardedBy("this")
     private ScheduledFuture<?> backgroundTask;
 
-    public QueryTracker(QueryManagerConfig queryManagerConfig, ScheduledExecutorService queryManagementExecutor, StateStoreProvider stateStoreProvider)
+    public QueryTracker(QueryManagerConfig queryManagerConfig, ScheduledExecutorService queryManagementExecutor)
     {
         requireNonNull(queryManagerConfig, "queryManagerConfig is null");
         this.minQueryExpireAge = queryManagerConfig.getMinQueryExpireAge();
@@ -77,7 +70,6 @@ public class QueryTracker<T extends TrackedQuery>
         this.clientTimeout = queryManagerConfig.getClientTimeout();
 
         this.queryManagementExecutor = requireNonNull(queryManagementExecutor, "queryManagementExecutor is null");
-        this.stateStoreProvider = stateStoreProvider;
     }
 
     public synchronized void start()
@@ -248,20 +240,6 @@ public class QueryTracker<T extends TrackedQuery>
             log.debug("Remove query %s", queryId);
             queries.remove(queryId);
             expirationQueue.remove(query);
-
-            removeQueryInStateStore(queryId);
-        }
-    }
-
-    private void removeQueryInStateStore(QueryId queryId)
-    {
-        StateStore stateStore = stateStoreProvider.getStateStore();
-        if (stateStore == null) {
-            return;
-        }
-        StateCollection stateCollection = stateStore.getStateCollection(StateStoreConstants.FINISHED_QUERY_STATE_COLLECTION_NAME);
-        if (stateCollection != null && stateCollection.getType().equals(StateCollection.Type.MAP)) {
-            ((StateMap<String, String>) stateCollection).remove(queryId.getId());
         }
     }
 
@@ -303,11 +281,7 @@ public class QueryTracker<T extends TrackedQuery>
 
     public void removeQuery(QueryId queryId)
     {
-        tryGetQuery(queryId).ifPresent(query ->
-        {
-            queries.remove(query.getQueryId());
-            removeQueryInStateStore(query.getQueryId());
-        });
+        tryGetQuery(queryId).ifPresent(query -> queries.remove(query.getQueryId()));
     }
 
     public interface TrackedQuery

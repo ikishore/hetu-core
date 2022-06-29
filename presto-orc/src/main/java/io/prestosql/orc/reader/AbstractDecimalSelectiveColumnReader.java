@@ -95,7 +95,7 @@ public abstract class AbstractDecimalSelectiveColumnReader<T>
     }
 
     @Override
-    public void startStripe(ZoneId fileTimeZone, InputStreamSources dictionaryStreamSources, ColumnMetadata<ColumnEncoding> encoding)
+    public void startStripe(ZoneId fileTimeZone, ZoneId storageTimeZone, InputStreamSources dictionaryStreamSources, ColumnMetadata<ColumnEncoding> encoding)
     {
         presentStreamSource = missingStreamSource(BooleanInputStream.class);
         dataStreamSource = missingStreamSource(DecimalInputStream.class);
@@ -201,9 +201,6 @@ public abstract class AbstractDecimalSelectiveColumnReader<T>
 
         if (nullsAllowed) {
             outputPositionCount = positionCount;
-            if (outputPositions != positions) {
-                System.arraycopy(positions, 0, outputPositions, 0, outputPositionCount);
-            }
         }
         else {
             outputPositionCount = 0;

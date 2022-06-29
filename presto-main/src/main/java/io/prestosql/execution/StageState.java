@@ -42,10 +42,6 @@ public enum StageState
     /**
      * Stage is running.
      */
-    SUSPENDED(false, false),
-    /**
-     * Stage is running.
-     */
     RUNNING(false, false),
     /**
      * Stage has finished executing and all output has been consumed.
@@ -63,11 +59,7 @@ public enum StageState
     /**
      * Stage execution failed.
      */
-    FAILED(true, true),
-    /**
-     * State indicating that recovery is in progress
-     */
-    RECOVERING(true, false);
+    FAILED(true, true);
 
     public static final Set<StageState> TERMINAL_STAGE_STATES = Stream.of(StageState.values()).filter(StageState::isDone).collect(toImmutableSet());
 

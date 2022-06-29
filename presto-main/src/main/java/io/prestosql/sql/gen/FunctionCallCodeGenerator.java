@@ -14,10 +14,9 @@
 package io.prestosql.sql.gen;
 
 import io.airlift.bytecode.BytecodeNode;
-import io.prestosql.metadata.FunctionAndTypeManager;
-import io.prestosql.spi.function.BuiltInScalarFunctionImplementation;
-import io.prestosql.spi.function.FunctionHandle;
+import io.prestosql.metadata.Metadata;
 import io.prestosql.spi.function.ScalarFunctionImplementation;
+import io.prestosql.spi.function.Signature;
 import io.prestosql.spi.relation.RowExpression;
 import io.prestosql.spi.type.Type;
 
@@ -25,25 +24,22 @@ import java.util.ArrayList;
 import java.util.List;
 import java.util.Optional;
 
-import static io.prestosql.spi.function.BuiltInScalarFunctionImplementation.ArgumentType.VALUE_TYPE;
-import static io.prestosql.sql.gen.BytecodeUtils.getAllScalarFunctionImplementationChoices;
+import static io.prestosql.spi.function.ScalarFunctionImplementation.ArgumentType.VALUE_TYPE;
 
 public class FunctionCallCodeGenerator
         implements BytecodeGenerator
 {
     @Override
-    public BytecodeNode generateExpression(FunctionHandle functionHandle, BytecodeGeneratorContext context, Type returnType, List<RowExpression> arguments)
+    public BytecodeNode generateExpression(Signature signature, BytecodeGeneratorContext context, Type returnType, List<RowExpression> arguments)
     {
-        FunctionAndTypeManager functionAndTypeManager = context.getFunctionManager();
+        Metadata metadata = context.getMetadata();
 
-        ScalarFunctionImplementation function = functionAndTypeManager.getScalarFunctionImplementation(functionHandle);
+        ScalarFunctionImplementation function = metadata.getScalarFunctionImplementation(signature);
 
         List<BytecodeNode> argumentsBytecode = new ArrayList<>();
-        BuiltInScalarFunctionImplementation.ScalarImplementationChoice choice = getAllScalarFunctionImplementationChoices(function).get(0);
-
         for (int i = 0; i < arguments.size(); i++) {
             RowExpression argument = arguments.get(i);
-            BuiltInScalarFunctionImplementation.ArgumentProperty argumentProperty = choice.getArgumentProperty(i);
+            ScalarFunctionImplementation.ArgumentProperty argumentProperty = function.getArgumentProperty(i);
             if (argumentProperty.getArgumentType() == VALUE_TYPE) {
                 argumentsBytecode.add(context.generate(argument));
             }
@@ -52,6 +48,6 @@ public class FunctionCallCodeGenerator
             }
         }
 
-        return context.generateCall(functionAndTypeManager.getFunctionMetadata(functionHandle).getName().getObjectName(), function, argumentsBytecode);
+        return context.generateCall(signature.getName(), function, argumentsBytecode);
     }
 }

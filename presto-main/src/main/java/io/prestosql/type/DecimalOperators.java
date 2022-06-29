@@ -24,7 +24,6 @@ import io.prestosql.spi.PrestoException;
 import io.prestosql.spi.annotation.UsedByGeneratedCode;
 import io.prestosql.spi.function.IsNull;
 import io.prestosql.spi.function.LiteralParameters;
-import io.prestosql.spi.function.OperatorType;
 import io.prestosql.spi.function.ScalarOperator;
 import io.prestosql.spi.function.Signature;
 import io.prestosql.spi.function.SignatureBuilder;
@@ -94,7 +93,7 @@ public final class DecimalOperators
                 .argumentTypes(decimalLeftSignature, decimalRightSignature)
                 .returnType(decimalResultSignature)
                 .build();
-        return SqlScalarFunction.builder(DecimalOperators.class, ADD)
+        return SqlScalarFunction.builder(DecimalOperators.class)
                 .signature(signature)
                 .deterministic(true)
                 .choice(choice -> choice
@@ -176,7 +175,7 @@ public final class DecimalOperators
                 .argumentTypes(decimalLeftSignature, decimalRightSignature)
                 .returnType(decimalResultSignature)
                 .build();
-        return SqlScalarFunction.builder(DecimalOperators.class, SUBTRACT)
+        return SqlScalarFunction.builder(DecimalOperators.class)
                 .signature(signature)
                 .deterministic(true)
                 .choice(choice -> choice
@@ -254,7 +253,7 @@ public final class DecimalOperators
                 .argumentTypes(decimalLeftSignature, decimalRightSignature)
                 .returnType(decimalResultSignature)
                 .build();
-        return SqlScalarFunction.builder(DecimalOperators.class, MULTIPLY)
+        return SqlScalarFunction.builder(DecimalOperators.class)
                 .signature(signature)
                 .deterministic(true)
                 .choice(choice -> choice
@@ -319,7 +318,7 @@ public final class DecimalOperators
                 .argumentTypes(decimalLeftSignature, decimalRightSignature)
                 .returnType(decimalResultSignature)
                 .build();
-        return SqlScalarFunction.builder(DecimalOperators.class, DIVIDE)
+        return SqlScalarFunction.builder(DecimalOperators.class)
                 .signature(signature)
                 .deterministic(true)
                 .choice(choice -> choice
@@ -455,19 +454,7 @@ public final class DecimalOperators
         Signature signature = modulusSignatureBuilder()
                 .operatorType(MODULUS)
                 .build();
-        return modulusScalarFunction(signature, MODULUS);
-    }
-
-    public static SqlScalarFunction modulusScalarFunction(Signature signature, OperatorType operatorType)
-    {
-        return SqlScalarFunction.builder(DecimalOperators.class, operatorType)
-                .signature(signature)
-                .deterministic(true)
-                .choice(choice -> choice
-                        .implementation(methodsGroup -> methodsGroup
-                                .methods("modulusShortShortShort", "modulusLongLongLong", "modulusShortLongLong", "modulusShortLongShort", "modulusLongShortShort", "modulusLongShortLong")
-                                .withExtraParameters(DecimalOperators::modulusRescaleParameters)))
-                .build();
+        return modulusScalarFunction(signature);
     }
 
     public static SqlScalarFunction modulusScalarFunction(Signature signature)

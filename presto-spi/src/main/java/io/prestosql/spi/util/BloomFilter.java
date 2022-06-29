@@ -25,9 +25,7 @@ import java.io.DataOutputStream;
 import java.io.IOException;
 import java.io.InputStream;
 import java.io.OutputStream;
-import java.io.Serializable;
 import java.math.RoundingMode;
-import java.util.Arrays;
 
 import static com.google.common.base.MoreObjects.toStringHelper;
 import static com.google.common.base.Preconditions.checkArgument;
@@ -56,7 +54,6 @@ import static java.lang.Double.doubleToLongBits;
  * This class was forked from {@code org.apache.orc.util.BloomFilter}.
  */
 public class BloomFilter
-        implements Serializable
 {
     private static final int INSTANCE_SIZE = ClassLayout.parseClass(BloomFilter.class).instanceSize() + ClassLayout.parseClass(BitSet.class).instanceSize();
 
@@ -103,9 +100,8 @@ public class BloomFilter
 
     // Thomas Wang's integer hash function
     // http://web.archive.org/web/20071223173210/http://www.concentric.net/~Ttwang/tech/inthash.htm
-    private static long getLongHash(long inputKey)
+    private static long getLongHash(long key)
     {
-        long key = inputKey;
         key = (~key) + (key << 21); // key = (key << 21) - key - 1;
         key ^= (key >> 24);
         key = (key + (key << 3)) + (key << 8); // key * 265
@@ -126,24 +122,24 @@ public class BloomFilter
     public static BloomFilter readFrom(InputStream in)
             throws IOException
     {
-        int localNumHashFunctions = 0;
-        int localNumBits = 0;
+        int numHashFunctions = 0;
+        int numBits = 0;
         try {
             DataInputStream dataInputStream = new DataInputStream(in);
-            localNumHashFunctions = dataInputStream.readInt();
-            localNumBits = dataInputStream.readInt();
+            numHashFunctions = dataInputStream.readInt();
+            numBits = dataInputStream.readInt();
 
-            long[] bits = new long[localNumBits];
-            for (int i = 0; i < localNumBits; i++) {
+            long[] bits = new long[numBits];
+            for (int i = 0; i < numBits; i++) {
                 bits[i] = dataInputStream.readLong();
             }
-            return new BloomFilter(bits, localNumHashFunctions);
+            return new BloomFilter(bits, numHashFunctions);
         }
         catch (IOException e) {
             throw new IOException("Failed to deserialize BloomFilter, numHashFunctions: "
-                    + localNumHashFunctions
+                    + numHashFunctions
                     + ", numBits: "
-                    + localNumBits
+                    + numBits
                     + ", cause: "
                     + e.getLocalizedMessage());
         }
@@ -375,7 +371,6 @@ public class BloomFilter
      * for index bounds nor expand the bit set size if the specified index is greater than the size.
      */
     public static class BitSet
-            implements Serializable
     {
         private final long[] data;
         private long bitCount;
@@ -397,21 +392,6 @@ public class BloomFilter
             for (long value : data) {
                 bitCount += Long.bitCount(value);
             }
-        }
-
-        @Override
-        public boolean equals(Object other)
-        {
-            return (other != null) &&
-                    (other.getClass() == getClass()) &&
-                    Arrays.equals(this.getData(), ((BitSet) other).getData()) &&
-                    (this.bitCount() == ((BitSet) other).bitCount());
-        }
-
-        @Override
-        public int hashCode()
-        {
-            return Arrays.hashCode(this.data) + (int) this.bitCount * 5;
         }
 
         /**
@@ -522,31 +502,22 @@ public class BloomFilter
             switch (data.length - current) {
                 case 7:
                     k ^= ((long) data[current + 6] & 0xff) << 48;
-                    // $FALL-THROUGH$
                 case 6:
                     k ^= ((long) data[current + 5] & 0xff) << 40;
-                    // $FALL-THROUGH$
                 case 5:
                     k ^= ((long) data[current + 4] & 0xff) << 32;
-                    // $FALL-THROUGH$
                 case 4:
                     k ^= ((long) data[current + 3] & 0xff) << 24;
-                    // $FALL-THROUGH$
                 case 3:
                     k ^= ((long) data[current + 2] & 0xff) << 16;
-                    // $FALL-THROUGH$
                 case 2:
                     k ^= ((long) data[current + 1] & 0xff) << 8;
-                    // $FALL-THROUGH$
                 case 1:
                     k ^= ((long) data[current] & 0xff);
                     k *= C1;
                     k = Long.rotateLeft(k, R1);
                     k *= C2;
                     hash ^= k;
-                    // $FALL-THROUGH$
-                default:
-                    // do nothing
             }
 
             // finalization
@@ -581,31 +552,22 @@ public class BloomFilter
             switch (data.length() - current) {
                 case 7:
                     k ^= ((long) UnsafeSlice.getByteUnchecked(data, current + 6) & 0xff) << 48;
-                    // $FALL-THROUGH$
                 case 6:
                     k ^= ((long) UnsafeSlice.getByteUnchecked(data, current + 5) & 0xff) << 40;
-                    // $FALL-THROUGH$
                 case 5:
                     k ^= ((long) UnsafeSlice.getByteUnchecked(data, current + 4) & 0xff) << 32;
-                    // $FALL-THROUGH$
                 case 4:
                     k ^= ((long) UnsafeSlice.getByteUnchecked(data, current + 3) & 0xff) << 24;
-                    // $FALL-THROUGH$
                 case 3:
                     k ^= ((long) UnsafeSlice.getByteUnchecked(data, current + 2) & 0xff) << 16;
-                    // $FALL-THROUGH$
                 case 2:
                     k ^= ((long) UnsafeSlice.getByteUnchecked(data, current + 1) & 0xff) << 8;
-                    // $FALL-THROUGH$
                 case 1:
                     k ^= ((long) UnsafeSlice.getByteUnchecked(data, current) & 0xff);
                     k *= C1;
                     k = Long.rotateLeft(k, R1);
                     k *= C2;
                     hash ^= k;
-                    // $FALL-THROUGH$
-                default:
-                    // do noting
             }
 
             // finalization
@@ -615,9 +577,8 @@ public class BloomFilter
             return hash;
         }
 
-        private static long fmix64(long inputValue)
+        private static long fmix64(long h)
         {
-            long h = inputValue;
             h ^= (h >>> 33);
             h *= 0xff51afd7ed558ccdL;
             h ^= (h >>> 33);

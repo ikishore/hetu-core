@@ -41,7 +41,6 @@ import io.prestosql.sql.analyzer.FeaturesConfig;
 import io.prestosql.sql.planner.plan.SemiJoinNode;
 import io.prestosql.statestore.StateStoreProvider;
 
-import java.nio.charset.StandardCharsets;
 import java.util.HashMap;
 import java.util.HashSet;
 import java.util.List;
@@ -121,31 +120,31 @@ public class LocalDynamicFilter
     {
         Set<String> joinDynamicFilters = planNode.getDynamicFilters().keySet();
         // Mapping from probe-side dynamic filters' IDs to their matching probe symbols.
-        Multimap<String, Symbol> localProbeSymbols = MultimapBuilder.treeKeys().arrayListValues().build();
+        Multimap<String, Symbol> probeSymbols = MultimapBuilder.treeKeys().arrayListValues().build();
         PlanNode buildNode;
-        DynamicFilter.Type localType = DynamicFilter.Type.LOCAL;
+        DynamicFilter.Type type = DynamicFilter.Type.LOCAL;
 
         List<FilterNode> filterNodes = findFilterNodeInStage(planNode);
         if (filterNodes.isEmpty()) {
             buildNode = planNode.getRight();
-            mapProbeSymbolsFromCriteria(planNode.getDynamicFilters(), localProbeSymbols, planNode.getCriteria());
-            localType = DynamicFilter.Type.GLOBAL;
+            mapProbeSymbolsFromCriteria(planNode.getDynamicFilters(), probeSymbols, planNode.getCriteria());
+            type = DynamicFilter.Type.GLOBAL;
         }
         else {
             buildNode = planNode.getRight();
             for (FilterNode filterNode : filterNodes) {
-                mapProbeSymbols(filterNode.getPredicate(), joinDynamicFilters, localProbeSymbols);
+                mapProbeSymbols(filterNode.getPredicate(), joinDynamicFilters, probeSymbols);
             }
         }
 
         final List<Symbol> buildSideSymbols = buildNode.getOutputSymbols();
 
-        Map<String, Integer> localBuildChannels = planNode
+        Map<String, Integer> buildChannels = planNode
                 .getDynamicFilters()
                 .entrySet()
                 .stream()
                 // Skip build channels that don't match local probe dynamic filters.
-                .filter(entry -> localProbeSymbols.containsKey(entry.getKey()))
+                .filter(entry -> probeSymbols.containsKey(entry.getKey()))
                 .collect(toMap(
                         // Dynamic filter ID
                         entry -> entry.getKey(),
@@ -157,10 +156,10 @@ public class LocalDynamicFilter
                             return buildChannelIndex;
                         }));
 
-        if (localBuildChannels.isEmpty()) {
+        if (buildChannels.isEmpty()) {
             return Optional.empty();
         }
-        return Optional.of(new LocalDynamicFilter(localProbeSymbols, localBuildChannels, partitionCount, localType, session, taskId, stateStoreProvider));
+        return Optional.of(new LocalDynamicFilter(probeSymbols, buildChannels, partitionCount, type, session, taskId, stateStoreProvider));
     }
 
     public static Optional<LocalDynamicFilter> create(SemiJoinNode semiJoinNode, Session session, TaskId taskId, StateStoreProvider stateStoreProvider)
@@ -169,17 +168,17 @@ public class LocalDynamicFilter
             return Optional.empty();
         }
         String dynamicFilterId = semiJoinNode.getDynamicFilterId().get();
-        DynamicFilter.Type localType;
+        DynamicFilter.Type type;
         List<FilterNode> localFilterNodeWithThisDynamicFiltering = findFilterNodeInStage(semiJoinNode);
         if (localFilterNodeWithThisDynamicFiltering.isEmpty()) {
-            localType = DynamicFilter.Type.GLOBAL;
+            type = DynamicFilter.Type.GLOBAL;
         }
         else {
-            localType = DynamicFilter.Type.LOCAL;
+            type = DynamicFilter.Type.LOCAL;
         }
-        Multimap<String, Symbol> probeSymbolMultiMap = ImmutableMultimap.of(dynamicFilterId, semiJoinNode.getSourceJoinSymbol());
-        Map<String, Integer> localChannels = ImmutableMap.of(dynamicFilterId, semiJoinNode.getFilteringSource().getOutputSymbols().indexOf(semiJoinNode.getFilteringSourceJoinSymbol()));
-        return Optional.of(new LocalDynamicFilter(probeSymbolMultiMap, localChannels, 1, localType, session, taskId, stateStoreProvider));
+        Multimap<String, Symbol> probeSymbols = ImmutableMultimap.of(dynamicFilterId, semiJoinNode.getSourceJoinSymbol());
+        Map<String, Integer> buildChannels = ImmutableMap.of(dynamicFilterId, semiJoinNode.getFilteringSource().getOutputSymbols().indexOf(semiJoinNode.getFilteringSourceJoinSymbol()));
+        return Optional.of(new LocalDynamicFilter(probeSymbols, buildChannels, 1, type, session, taskId, stateStoreProvider));
     }
 
     private static void mapProbeSymbols(RowExpression predicate, Set<String> joinDynamicFilters, Multimap<String, Symbol> probeSymbols)
@@ -241,12 +240,7 @@ public class LocalDynamicFilter
                 for (Map.Entry<String, Set> entry : result.entrySet()) {
                     dynamicFilterResult.put(entry.getKey(), entry.getValue());
                 }
-                try {
-                    addPartialFilterToStateStore();
-                }
-                catch (RuntimeException e) {
-                    log.warn("Cannot add partial filter to state store with following message: " + e.getMessage());
-                }
+                addPartialFilterToStateStore();
             }
             dynamicFilterResultFuture.set(dynamicFilterResult);
         }
@@ -302,7 +296,7 @@ public class LocalDynamicFilter
         }
         else {
             for (Object value : values) {
-                bloomFilter.add(String.valueOf(value).getBytes(StandardCharsets.UTF_8));
+                bloomFilter.add(String.valueOf(value).getBytes());
             }
         }
         return bloomFilter;

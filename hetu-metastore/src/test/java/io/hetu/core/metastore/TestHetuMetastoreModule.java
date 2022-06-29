@@ -1,5 +1,5 @@
 /*
- * Copyright (C) 2018-2021. Huawei Technologies Co., Ltd. All rights reserved.
+ * Copyright (C) 2018-2020. Huawei Technologies Co., Ltd. All rights reserved.
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
  * You may obtain a copy of the License at
@@ -30,7 +30,6 @@ import org.weakref.jmx.guice.MBeanModule;
 import java.util.Map;
 
 import static com.google.common.base.Throwables.throwIfUnchecked;
-import static io.hetu.core.metastore.MetaStoreConstants.LOCAL;
 import static io.prestosql.spi.metastore.HetuErrorCode.HETU_METASTORE_CODE;
 import static org.testng.Assert.assertTrue;
 
@@ -80,14 +79,12 @@ public class TestHetuMetastoreModule
                 .put("hetu.metastore.db.url", database.getUrl())
                 .put("hetu.metastore.db.user", user)
                 .put("hetu.metastore.db.password", password)
-                .put("hetu.metastore.cache.ttl", "0s")
                 .build();
         try {
-            String type = LOCAL;
             Bootstrap app = new Bootstrap(
                     new MBeanModule(),
                     new MBeanServerModule(),
-                    new JdbcMetastoreModule(type));
+                    new JdbcMetastoreModule());
 
             Injector injector = app
                     .strictConfig()

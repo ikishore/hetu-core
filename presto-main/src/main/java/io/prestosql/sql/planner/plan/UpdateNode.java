@@ -1,5 +1,5 @@
 /*
- * Copyright (C) 2018-2021. Huawei Technologies Co., Ltd. All rights reserved.
+ * Copyright (C) 2018-2020. Huawei Technologies Co., Ltd. All rights reserved.
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
  * You may obtain a copy of the License at
@@ -22,14 +22,12 @@ import io.prestosql.spi.plan.PlanNode;
 import io.prestosql.spi.plan.PlanNodeId;
 import io.prestosql.spi.plan.Symbol;
 import io.prestosql.sql.planner.plan.TableWriterNode.UpdateTarget;
-import io.prestosql.sql.tree.Expression;
+import io.prestosql.sql.tree.AssignmentItem;
 
 import javax.annotation.concurrent.Immutable;
 
 import java.util.List;
-import java.util.Map;
 
-import static com.google.common.base.Preconditions.checkArgument;
 import static java.util.Objects.requireNonNull;
 
 @Immutable
@@ -39,9 +37,8 @@ public class UpdateNode
     private final PlanNode source;
     private final UpdateTarget target;
     private final Symbol rowId;
-    private final List<Symbol> columnValueAndRowIdSymbols;
+    private final List<AssignmentItem> assignmentItems;
     private final List<Symbol> outputs;
-    private final Map<String, Expression> updateColumnExpression;
 
     @JsonCreator
     public UpdateNode(
@@ -49,21 +46,16 @@ public class UpdateNode
             @JsonProperty("source") PlanNode source,
             @JsonProperty("target") UpdateTarget target,
             @JsonProperty("rowId") Symbol rowId,
-            @JsonProperty("columnValueAndRowIdSymbols") List<Symbol> columnValueAndRowIdSymbols,
-            @JsonProperty("outputs") List<Symbol> outputs,
-            @JsonProperty("updateColumnExpression") Map<String, Expression> updateColumnExpression)
+            @JsonProperty("assignmentItems") List<AssignmentItem> assignmentItems,
+            @JsonProperty("outputs") List<Symbol> outputs)
     {
         super(id);
 
         this.source = requireNonNull(source, "source is null");
         this.target = requireNonNull(target, "target is null");
         this.rowId = requireNonNull(rowId, "rowId is null");
-        this.columnValueAndRowIdSymbols = ImmutableList.copyOf(requireNonNull(columnValueAndRowIdSymbols, "columnValueAndRowIdSymbols is null"));
+        this.assignmentItems = requireNonNull(assignmentItems, "assignmentItems is null");
         this.outputs = ImmutableList.copyOf(requireNonNull(outputs, "outputs is null"));
-        this.updateColumnExpression = requireNonNull(updateColumnExpression, "outputs is null");
-        int symbolsSize = columnValueAndRowIdSymbols.size();
-        int columnsSize = target.getUpdatedColumns().size();
-        checkArgument(symbolsSize == columnsSize + 1, "The symbol count %s must be one greater than updated columns count %s", symbolsSize, columnsSize);
     }
 
     @JsonProperty
@@ -85,9 +77,9 @@ public class UpdateNode
     }
 
     @JsonProperty
-    public List<Symbol> getColumnValueAndRowIdSymbols()
+    public List<AssignmentItem> getAssignmentItems()
     {
-        return columnValueAndRowIdSymbols;
+        return assignmentItems;
     }
 
     @JsonProperty("outputs")
@@ -95,12 +87,6 @@ public class UpdateNode
     public List<Symbol> getOutputSymbols()
     {
         return outputs;
-    }
-
-    @JsonProperty
-    public Map<String, Expression> getUpdateColumnExpression()
-    {
-        return updateColumnExpression;
     }
 
     @Override
@@ -118,6 +104,6 @@ public class UpdateNode
     @Override
     public PlanNode replaceChildren(List<PlanNode> newChildren)
     {
-        return new UpdateNode(getId(), Iterables.getOnlyElement(newChildren), target, rowId, columnValueAndRowIdSymbols, outputs, updateColumnExpression);
+        return new UpdateNode(getId(), Iterables.getOnlyElement(newChildren), target, rowId, assignmentItems, outputs);
     }
 }

@@ -21,7 +21,6 @@ import java.io.IOException;
 import java.io.InputStream;
 import java.io.InputStreamReader;
 import java.io.UncheckedIOException;
-import java.nio.charset.StandardCharsets;
 import java.time.ZonedDateTime;
 import java.util.ArrayList;
 import java.util.List;
@@ -52,7 +51,7 @@ public class TestingAtopFactory
         private TestingAtop(InputStream dataStream, ZonedDateTime date)
         {
             this.date = date;
-            this.reader = new BufferedReader(new InputStreamReader(dataStream, StandardCharsets.UTF_8));
+            this.reader = new BufferedReader(new InputStreamReader(dataStream));
             try {
                 line = reader.readLine();
             }

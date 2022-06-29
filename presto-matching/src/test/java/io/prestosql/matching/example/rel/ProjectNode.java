@@ -23,7 +23,6 @@ public class ProjectNode
         this.source = source;
     }
 
-    @Override
     public RelNode getSource()
     {
         return source;

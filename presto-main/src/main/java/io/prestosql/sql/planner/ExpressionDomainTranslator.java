@@ -19,11 +19,10 @@ import com.google.common.collect.PeekingIterator;
 import io.airlift.slice.Slice;
 import io.airlift.slice.Slices;
 import io.prestosql.Session;
-import io.prestosql.metadata.CastType;
 import io.prestosql.metadata.Metadata;
-import io.prestosql.metadata.OperatorNotFoundException;
+import io.prestosql.spi.PrestoException;
 import io.prestosql.spi.block.Block;
-import io.prestosql.spi.function.FunctionHandle;
+import io.prestosql.spi.function.Signature;
 import io.prestosql.spi.plan.Symbol;
 import io.prestosql.spi.predicate.DiscreteValues;
 import io.prestosql.spi.predicate.Domain;
@@ -76,7 +75,8 @@ import static io.airlift.slice.SliceUtf8.countCodePoints;
 import static io.airlift.slice.SliceUtf8.getCodePointAt;
 import static io.airlift.slice.SliceUtf8.lengthOfCodePoint;
 import static io.airlift.slice.SliceUtf8.setCodePointAt;
-import static io.prestosql.metadata.CastType.CAST;
+import static io.prestosql.spi.StandardErrorCode.FUNCTION_IMPLEMENTATION_MISSING;
+import static io.prestosql.spi.function.OperatorType.SATURATED_FLOOR_CAST;
 import static io.prestosql.sql.ExpressionUtils.and;
 import static io.prestosql.sql.ExpressionUtils.combineConjuncts;
 import static io.prestosql.sql.ExpressionUtils.combineDisjunctsWithDefault;
@@ -309,7 +309,7 @@ public final class ExpressionDomainTranslator
             this.literalEncoder = new LiteralEncoder(metadata);
             this.session = requireNonNull(session, "session is null");
             this.types = requireNonNull(types, "types is null");
-            this.functionInvoker = new InterpretedFunctionInvoker(metadata.getFunctionAndTypeManager());
+            this.functionInvoker = new InterpretedFunctionInvoker(metadata);
             this.typeAnalyzer = requireNonNull(typeAnalyzer, "typeAnalyzer is null");
             this.typeCoercion = new TypeCoercion(metadata::getType);
         }
@@ -674,19 +674,24 @@ public final class ExpressionDomainTranslator
                     .map((operator) -> functionInvoker.invoke(operator, session.toConnectorSession(), value));
         }
 
-        private Optional<FunctionHandle> getSaturatedFloorCastOperator(Type fromType, Type toType)
+        private Optional<Signature> getSaturatedFloorCastOperator(Type fromType, Type toType)
         {
+            Signature signature = Signature.internalOperator(SATURATED_FLOOR_CAST, toType, ImmutableList.of(fromType));
             try {
-                return Optional.of(metadata.getFunctionAndTypeManager().lookupCast(CastType.SATURATED_FLOOR_CAST, fromType.getTypeSignature(), toType.getTypeSignature()));
+                metadata.getScalarFunctionImplementation(signature);
+                return Optional.of(signature);
             }
-            catch (OperatorNotFoundException e) {
-                return Optional.empty();
+            catch (PrestoException e) {
+                if (e.getErrorCode().getCode() == FUNCTION_IMPLEMENTATION_MISSING.toErrorCode().getCode()) {
+                    return Optional.empty();
+                }
+                throw e;
             }
         }
 
         private int compareOriginalValueToCoerced(Type originalValueType, Object originalValue, Type coercedValueType, Object coercedValue)
         {
-            FunctionHandle castToOriginalTypeOperator = metadata.getFunctionAndTypeManager().lookupCast(CAST, coercedValueType.getTypeSignature(), originalValueType.getTypeSignature());
+            Signature castToOriginalTypeOperator = metadata.getCoercion(coercedValueType.getTypeSignature(), originalValueType.getTypeSignature());
             Object coercedValueInOriginalType = functionInvoker.invoke(castToOriginalTypeOperator, session.toConnectorSession(), coercedValue);
             Block originalValueBlock = Utils.nativeValueToBlock(originalValueType, originalValue);
             Block coercedValueBlock = Utils.nativeValueToBlock(originalValueType, coercedValueInOriginalType);

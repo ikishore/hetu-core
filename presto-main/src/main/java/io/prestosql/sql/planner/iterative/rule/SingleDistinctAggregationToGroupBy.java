@@ -140,9 +140,7 @@ public class SingleDistinctAggregationToGroupBy
                                 ImmutableList.of(),
                                 SINGLE,
                                 Optional.empty(),
-                                Optional.empty(),
-                                aggregation.getAggregationType(),
-                                aggregation.getFinalizeSymbol()),
+                                Optional.empty()),
                         // remove DISTINCT flag from function calls
                         aggregation.getAggregations()
                                 .entrySet().stream()
@@ -153,9 +151,7 @@ public class SingleDistinctAggregationToGroupBy
                         emptyList(),
                         aggregation.getStep(),
                         aggregation.getHashSymbol(),
-                        aggregation.getGroupIdSymbol(),
-                        aggregation.getAggregationType(),
-                        aggregation.getFinalizeSymbol()));
+                        aggregation.getGroupIdSymbol()));
     }
 
     private static Aggregation removeDistinct(Aggregation aggregation)
@@ -163,7 +159,7 @@ public class SingleDistinctAggregationToGroupBy
         checkArgument(aggregation.isDistinct(), "Expected aggregation to have DISTINCT input");
 
         return new Aggregation(
-                aggregation.getFunctionCall(),
+                aggregation.getSignature(),
                 aggregation.getArguments(),
                 false,
                 aggregation.getFilter(),

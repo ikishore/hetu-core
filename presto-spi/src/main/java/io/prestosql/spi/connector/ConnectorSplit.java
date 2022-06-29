@@ -20,11 +20,6 @@ import java.util.List;
 
 public interface ConnectorSplit
 {
-    default boolean isSplitEmpty()
-    {
-        return false;
-    }
-
     boolean isRemotelyAccessible();
 
     List<HostAddress> getAddresses();

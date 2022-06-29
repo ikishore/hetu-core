@@ -16,20 +16,15 @@ package io.prestosql.operator;
 import com.google.common.collect.ImmutableList;
 import com.google.common.util.concurrent.ListenableFuture;
 import io.prestosql.memory.context.LocalMemoryContext;
-import io.prestosql.snapshot.SingleInputSnapshotState;
 import io.prestosql.spi.Page;
 import io.prestosql.spi.PageBuilder;
 import io.prestosql.spi.block.Block;
 import io.prestosql.spi.plan.PlanNodeId;
-import io.prestosql.spi.snapshot.BlockEncodingSerdeProvider;
-import io.prestosql.spi.snapshot.MarkerPage;
-import io.prestosql.spi.snapshot.RestorableConfig;
 import io.prestosql.spi.type.Type;
 import io.prestosql.sql.planner.plan.SpatialJoinNode;
 
 import javax.annotation.Nullable;
 
-import java.io.Serializable;
 import java.util.List;
 import java.util.Optional;
 
@@ -43,8 +38,6 @@ import static io.prestosql.sql.planner.plan.SpatialJoinNode.Type.INNER;
 import static io.prestosql.sql.planner.plan.SpatialJoinNode.Type.LEFT;
 import static java.util.Objects.requireNonNull;
 
-@RestorableConfig(uncapturedFields = {"probeTypes", "probeOutputChannels", "partitionChannel", "pagesSpatialIndexFactory", "onClose",
-        "pagesSpatialIndexFuture", "probe", "probePosition", "joinPositions", "snapshotState", "finished", "finishing", "closed"})
 public class SpatialJoinOperator
         implements Operator
 {
@@ -105,13 +98,13 @@ public class SpatialJoinOperator
         public Operator createOperator(DriverContext driverContext)
         {
             checkState(!closed, "Factory is already closed");
-            OperatorContext addOperatorContext = driverContext.addOperatorContext(
+            OperatorContext operatorContext = driverContext.addOperatorContext(
                     operatorId,
                     planNodeId,
                     SpatialJoinOperator.class.getSimpleName());
             referenceCount.retain();
             return new SpatialJoinOperator(
-                    addOperatorContext,
+                    operatorContext,
                     joinType,
                     probeTypes,
                     probeOutputChannels,
@@ -167,8 +160,6 @@ public class SpatialJoinOperator
     private boolean finished;
     private boolean closed;
 
-    private final SingleInputSnapshotState snapshotState;
-
     public SpatialJoinOperator(
             OperatorContext operatorContext,
             SpatialJoinNode.Type joinType,
@@ -195,7 +186,6 @@ public class SpatialJoinOperator
                         .iterator())
                 .addAll(pagesSpatialIndexFactory.getOutputTypes())
                 .build());
-        this.snapshotState = operatorContext.isSnapshotEnabled() ? SingleInputSnapshotState.forOperator(this, operatorContext) : null;
     }
 
     @Override
@@ -207,24 +197,12 @@ public class SpatialJoinOperator
     @Override
     public boolean needsInput()
     {
-        return allowMarker() && pagesSpatialIndexFuture.isDone();
-    }
-
-    @Override
-    public boolean allowMarker()
-    {
-        return !finished && !pageBuilder.isFull() && probe == null;
+        return !finished && pagesSpatialIndexFuture.isDone() && !pageBuilder.isFull() && probe == null;
     }
 
     @Override
     public void addInput(Page page)
     {
-        if (snapshotState != null) {
-            if (snapshotState.processPage(page)) {
-                return;
-            }
-        }
-
         verify(probe == null);
         probe = page;
         probePosition = 0;
@@ -236,13 +214,6 @@ public class SpatialJoinOperator
     public Page getOutput()
     {
         verify(!finished);
-        if (snapshotState != null) {
-            Page marker = snapshotState.nextMarker();
-            if (marker != null) {
-                return marker;
-            }
-        }
-
         if (!pageBuilder.isFull() && probe != null) {
             processProbe();
         }
@@ -265,12 +236,6 @@ public class SpatialJoinOperator
         }
 
         return null;
-    }
-
-    @Override
-    public MarkerPage pollMarker()
-    {
-        return snapshotState.nextMarker();
     }
 
     private void processProbe()
@@ -353,11 +318,6 @@ public class SpatialJoinOperator
     @Override
     public boolean isFinished()
     {
-        if (snapshotState != null && snapshotState.hasMarker()) {
-            // Snapshot: there are pending markers. Need to send them out before finishing this operator.
-            return false;
-        }
-
         return finished;
     }
 
@@ -368,43 +328,8 @@ public class SpatialJoinOperator
             return;
         }
         closed = true;
-        if (snapshotState != null) {
-            snapshotState.close();
-        }
+
         pagesSpatialIndexFuture = null;
         onClose.run();
-    }
-
-    @Override
-    public Object capture(BlockEncodingSerdeProvider serdeProvider)
-    {
-        SpatialJoinOperatorState myState = new SpatialJoinOperatorState();
-        myState.operatorContext = operatorContext.capture(serdeProvider);
-        myState.localUserMemoryContext = localUserMemoryContext.getBytes();
-        myState.pageBuilder = pageBuilder.capture(serdeProvider);
-        myState.nextJoinPositionIndex = nextJoinPositionIndex;
-        myState.matchFound = matchFound;
-        return myState;
-    }
-
-    @Override
-    public void restore(Object state, BlockEncodingSerdeProvider serdeProvider)
-    {
-        SpatialJoinOperatorState myState = (SpatialJoinOperatorState) state;
-        this.operatorContext.restore(myState.operatorContext, serdeProvider);
-        this.localUserMemoryContext.setBytes(myState.localUserMemoryContext);
-        this.pageBuilder.restore(myState.pageBuilder, serdeProvider);
-        this.nextJoinPositionIndex = myState.nextJoinPositionIndex;
-        this.matchFound = myState.matchFound;
-    }
-
-    private static class SpatialJoinOperatorState
-            implements Serializable
-    {
-        private Object operatorContext;
-        private long localUserMemoryContext;
-        private Object pageBuilder;
-        private int nextJoinPositionIndex;
-        private boolean matchFound;
     }
 }

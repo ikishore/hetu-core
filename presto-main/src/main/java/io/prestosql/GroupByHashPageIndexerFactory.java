@@ -16,7 +16,6 @@ package io.prestosql;
 import io.prestosql.spi.Page;
 import io.prestosql.spi.PageIndexer;
 import io.prestosql.spi.PageIndexerFactory;
-import io.prestosql.spi.snapshot.BlockEncodingSerdeProvider;
 import io.prestosql.spi.type.Type;
 import io.prestosql.sql.gen.JoinCompiler;
 
@@ -59,17 +58,6 @@ public class GroupByHashPageIndexerFactory
         public int getMaxIndex()
         {
             return 0;
-        }
-
-        @Override
-        public Object capture(BlockEncodingSerdeProvider serdeProvider)
-        {
-            return null;
-        }
-
-        @Override
-        public void restore(Object state, BlockEncodingSerdeProvider serdeProvider)
-        {
         }
     }
 }

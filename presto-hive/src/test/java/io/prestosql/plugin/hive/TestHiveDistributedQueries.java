@@ -37,7 +37,6 @@ public class TestHiveDistributedQueries
         // Hive connector currently does not support row-by-row delete
     }
 
-    @Override
     protected boolean supportsPushdown()
     {
         return true;

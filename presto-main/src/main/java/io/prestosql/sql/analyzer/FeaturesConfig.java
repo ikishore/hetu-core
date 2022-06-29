@@ -48,6 +48,8 @@ import static java.util.concurrent.TimeUnit.MILLISECONDS;
 import static java.util.concurrent.TimeUnit.MINUTES;
 
 @DefunctConfig({
+        "deprecated.legacy-char-to-varchar-coercion",
+        "deprecated.legacy-map-subscript",
         "deprecated.group-by-uses-equal",
         "deprecated.legacy-row-field-ordinal-access",
         "deprecated.legacy-unnest-array-rows",
@@ -57,19 +59,13 @@ import static java.util.concurrent.TimeUnit.MINUTES;
         "analyzer.experimental-syntax-enabled",
         "optimizer.processing-optimization",
         "deprecated.legacy-order-by",
-        "deprecated.legacy-join-using",
-        "deprecated.legacy-timestamp",
-})
+        "deprecated.legacy-join-using"})
 public class FeaturesConfig
 {
     @VisibleForTesting
     static final String SPILL_ENABLED = "experimental.spill-enabled";
     @VisibleForTesting
     static final String SPILLER_SPILL_PATH = "experimental.spiller-spill-path";
-    @VisibleForTesting
-    static final String SPILLER_SPILL_TO_HDFS = "experimental.spiller-spill-to-hdfs";
-    @VisibleForTesting
-    static final String SPILLER_SPILL_PROFILE = "experimental.spiller-spill-profile";
 
     private double cpuCostWeight = 75;
     private double memoryCostWeight = 10;
@@ -98,7 +94,7 @@ public class FeaturesConfig
     private boolean pushLimitThroughSemiJoin = true;
     private boolean pushLimitThroughOuterJoin = true;
     private boolean exchangeCompressionEnabled;
-    private boolean legacyMapSubscript;
+    private boolean legacyTimestamp = true;
     private boolean optimizeMixedDistinctAggregations;
     private boolean unwrapCasts = true;
     private boolean forceSingleNodeOutput = true;
@@ -107,8 +103,6 @@ public class FeaturesConfig
     private boolean queryPushDown = true;
     private boolean pushLimitDown = true;
     private boolean implicitConversion;
-    private boolean legacyCharToVarcharCoercion;
-    private boolean legacyDateTimestampToVarcharCoercion;
 
     private boolean dictionaryAggregation;
 
@@ -120,19 +114,14 @@ public class FeaturesConfig
     private MultimapAggGroupImplementation multimapAggGroupImplementation = MultimapAggGroupImplementation.NEW;
     private boolean spillEnabled;
     private boolean spillOrderBy = true;
-    private boolean nonBlockingSpill;
     private boolean spillWindowOperator = true;
-    private boolean spillBuildForOuterJoinEnabled;
-    private boolean innerJoinSpillFilterEnabled;
     private DataSize aggregationOperatorUnspillMemoryLimit = new DataSize(4, DataSize.Unit.MEGABYTE);
     private List<Path> spillerSpillPaths = ImmutableList.of();
-    private boolean spillToHdfs;
-    private String spillProfile;
     private int spillerThreads = 4;
     private double spillMaxUsedSpaceThreshold = 0.9;
     private boolean iterativeOptimizerEnabled = true;
     private boolean enableStatsCalculator = true;
-    private boolean ignoreStatsCalculatorFailures = true;
+    private boolean ignoreStatsCalculatorFailures = false;
     private boolean defaultFilterFactorEnabled;
     private boolean enableForcedExchangeBelowGroupId = true;
     private boolean pushAggregationThroughJoin = true;
@@ -151,7 +140,7 @@ public class FeaturesConfig
     private boolean spillReuseTableScan;
     private int spillOperatorThresholdReuseExchange = 10;
 
-    private Duration iterativeOptimizerTimeout = new Duration(3, MINUTES); // by default let optimizer wait a long time in case it retrieves some data from ConnectorMetadata
+    private Duration iterativeOptimizerTimeout = new Duration(30, MINUTES); // by default let optimizer wait a long time in case it retrieves some data from ConnectorMetadata
     private boolean enableDynamicFiltering = true;
     private Duration dynamicFilteringWaitTime = new Duration(1000, MILLISECONDS);
     private int dynamicFilteringMaxSize = 1000000;
@@ -172,17 +161,22 @@ public class FeaturesConfig
     private boolean cteReuseEnabled;
     private int maxQueueSize = 1024;
     private int maxPrefetchQueueSize = 512;
-    private boolean listBuiltInFunctionsOnly = true;
+
+    //BQO optimization parameters
+    private boolean batchEnabled = false;
+    private int batchSize = 16;
+    private int CMParameter = 2;
+    private  int SchedulerParameter = 4;
+    private int singleQueryCostThreshold = 2;
+    private boolean DPEnabled = false;
+    private boolean OverlapOpt = false;
+    private boolean CachingPartitioning = false;
+    private boolean OnlyPartitioning = false;
+
 
     private boolean enableStarTreeIndex;
     private long cubeMetadataCacheSize = 5;
     private Duration cubeMetadataCacheTtl = new Duration(1, HOURS);
-    private boolean sortBasedAggregationEnabled;
-    private int prcntDriversForPartialAggr = 5;
-    private boolean skipAttachingStatsWithPlan = true;
-    private boolean skipNonApplicableRulesEnabled;
-    private boolean prioritizeLargerSpiltsMemoryRevoke = true;
-    private DataSize revocableMemorySelectionThreshold = new DataSize(512, MEGABYTE);
 
     public enum JoinReorderingStrategy
     {
@@ -269,16 +263,16 @@ public class FeaturesConfig
         return this;
     }
 
-    @Config("deprecated.legacy-map-subscript")
-    public FeaturesConfig setLegacyMapSubscript(boolean value)
+    @Config("deprecated.legacy-timestamp")
+    public FeaturesConfig setLegacyTimestamp(boolean value)
     {
-        this.legacyMapSubscript = value;
+        this.legacyTimestamp = value;
         return this;
     }
 
-    public boolean isLegacyMapSubscript()
+    public boolean isLegacyTimestamp()
     {
-        return legacyMapSubscript;
+        return legacyTimestamp;
     }
 
     public JoinDistributionType getJoinDistributionType()
@@ -344,30 +338,6 @@ public class FeaturesConfig
     public FeaturesConfig setConcurrentLifespansPerTask(int concurrentLifespansPerTask)
     {
         this.concurrentLifespansPerTask = concurrentLifespansPerTask;
-        return this;
-    }
-
-    public boolean isLegacyCharToVarcharCoercion()
-    {
-        return legacyCharToVarcharCoercion;
-    }
-
-    @Config("deprecated.legacy-char-to-varchar-coercion")
-    public FeaturesConfig setLegacyCharToVarcharCoercion(boolean value)
-    {
-        this.legacyCharToVarcharCoercion = value;
-        return this;
-    }
-
-    public boolean isLegacyDateTimestampToVarcharCoercion()
-    {
-        return legacyDateTimestampToVarcharCoercion;
-    }
-
-    @Config("deprecated.legacy-date-timestamp-to-varchar-coercion")
-    public FeaturesConfig setLegacyDateTimestampToVarcharCoercion(boolean legacyDateTimestampToVarcharCoercion)
-    {
-        this.legacyDateTimestampToVarcharCoercion = legacyDateTimestampToVarcharCoercion;
         return this;
     }
 
@@ -723,42 +693,6 @@ public class FeaturesConfig
         return spillOrderBy;
     }
 
-    @Config("experimental.spill-non-blocking-orderby")
-    public FeaturesConfig setNonBlockingSpill(boolean nonBlockingSpill)
-    {
-        this.nonBlockingSpill = nonBlockingSpill;
-        return this;
-    }
-
-    public boolean isNonBlockingSpill()
-    {
-        return nonBlockingSpill;
-    }
-
-    public boolean isSpillBuildForOuterJoinEnabled()
-    {
-        return spillBuildForOuterJoinEnabled;
-    }
-
-    @Config("experimental.spill-build-for-outer-join-enabled")
-    public FeaturesConfig setSpillBuildForOuterJoinEnabled(boolean spillBuildForOuterJoinEnabled)
-    {
-        this.spillBuildForOuterJoinEnabled = spillBuildForOuterJoinEnabled;
-        return this;
-    }
-
-    public boolean isInnerJoinSpillFilterEnabled()
-    {
-        return innerJoinSpillFilterEnabled;
-    }
-
-    @Config("experimental.inner-join-spill-filter-enabled")
-    public FeaturesConfig setInnerJoinSpillFilterEnabled(boolean innerJoinSpillFilterEnabled)
-    {
-        this.innerJoinSpillFilterEnabled = innerJoinSpillFilterEnabled;
-        return this;
-    }
-
     @Config("experimental.spill-order-by")
     public FeaturesConfig setSpillOrderBy(boolean spillOrderBy)
     {
@@ -880,42 +814,6 @@ public class FeaturesConfig
     public boolean isSpillerSpillPathsConfiguredIfSpillEnabled()
     {
         return !isSpillEnabled() || !spillerSpillPaths.isEmpty();
-    }
-
-    public boolean isSpillToHdfs()
-    {
-        return spillToHdfs;
-    }
-
-    @Config(SPILLER_SPILL_TO_HDFS)
-    public FeaturesConfig setSpillToHdfs(boolean spillToHdfs)
-    {
-        this.spillToHdfs = spillToHdfs;
-        return this;
-    }
-
-    public String getSpillProfile()
-    {
-        return spillProfile;
-    }
-
-    @Config(SPILLER_SPILL_PROFILE)
-    public FeaturesConfig setSpillProfile(String spillProfile)
-    {
-        this.spillProfile = spillProfile;
-        return this;
-    }
-
-    @AssertTrue(message = SPILLER_SPILL_PATH + " must be only contain single path when " + SPILLER_SPILL_TO_HDFS + " is set to true")
-    public boolean isSpillerSpillPathConfiguredIfSpillToHdfsEnabled()
-    {
-        return !isSpillToHdfs() || spillerSpillPaths.size() == 1;
-    }
-
-    @AssertTrue(message = SPILLER_SPILL_PROFILE + " must be configured when " + SPILLER_SPILL_TO_HDFS + " is set to true")
-    public boolean isSpillerSpillProfileConfiguredIfSpillToHdfsEnabled()
-    {
-        return !isSpillToHdfs() || !spillProfile.isEmpty();
     }
 
     @Min(1)
@@ -1339,6 +1237,65 @@ public class FeaturesConfig
         return this;
     }
 
+    public boolean isBatchEnabled()
+    {
+        return batchEnabled;
+    }
+
+    @Config("optimizer.batch-enabled")
+    public FeaturesConfig setBatchEnabled(boolean batchEnabled)
+    {
+        this.batchEnabled = batchEnabled;
+        return this;
+    }
+
+    public int getBatchSize()
+    {
+        return batchSize;
+    }
+
+    @Config("optimizer.batch-size")
+    public FeaturesConfig setBatchSize(int batchSize)
+    {
+        this.batchSize = batchSize;
+        return this;
+    }
+
+    public int getCostModelParameter()
+    {
+        return CMParameter;
+    }
+
+    public int getSchedulerParameter()
+    {
+        return SchedulerParameter;
+    }
+
+    public int getSingleQueryCostThreshold()
+    {
+        return singleQueryCostThreshold;
+    }
+
+    public boolean getDPEnabled()
+    {
+        return DPEnabled;
+    }
+
+    public boolean getOverlapOpt()
+    {
+        return OverlapOpt;
+    }
+
+    public boolean getCachingPartitioning()
+    {
+        return CachingPartitioning;
+    }
+
+    public boolean getOnlyPartitioning()
+    {
+        return OnlyPartitioning;
+    }
+
     public boolean isCteReuseEnabled()
     {
         return cteReuseEnabled;
@@ -1417,95 +1374,10 @@ public class FeaturesConfig
     }
 
     @Config("cube.metadata-cache-ttl")
-    @ConfigDescription("The maximum time to live for cube metadata that were loaded into cache before eviction happens")
+    @ConfigDescription("The maximum time to live that are be loaded into cache before eviction happens")
     public FeaturesConfig setCubeMetadataCacheTtl(Duration cubeMetadataCacheTtl)
     {
         this.cubeMetadataCacheTtl = cubeMetadataCacheTtl;
-        return this;
-    }
-
-    public boolean isListBuiltInFunctionsOnly()
-    {
-        return listBuiltInFunctionsOnly;
-    }
-
-    @Config("list-built-in-functions-only")
-    public FeaturesConfig setListBuiltInFunctionsOnly(boolean listBuiltInFunctionsOnly)
-    {
-        this.listBuiltInFunctionsOnly = listBuiltInFunctionsOnly;
-        return this;
-    }
-
-    public boolean isSortBasedAggregationEnabled()
-    {
-        return sortBasedAggregationEnabled;
-    }
-
-    @Config("optimizer.sort-based-aggregation-enabled")
-    public FeaturesConfig setSortBasedAggregationEnabled(boolean sortBasedAggregationEnabled)
-    {
-        this.sortBasedAggregationEnabled = sortBasedAggregationEnabled;
-        return this;
-    }
-
-    public int getPrcntDriversForPartialAggr()
-    {
-        return this.prcntDriversForPartialAggr;
-    }
-
-    @Config("sort.prcnt-drivers-for-partial-aggr")
-    @ConfigDescription("sort based aggre percentage of number of drivers that are used for unfinalized/partial values")
-    public FeaturesConfig setPrcntDriversForPartialAggr(int prcntDriversForPartialAggr)
-    {
-        this.prcntDriversForPartialAggr = prcntDriversForPartialAggr;
-        return this;
-    }
-
-    public boolean isSkipAttachingStatsWithPlan()
-    {
-        return skipAttachingStatsWithPlan;
-    }
-
-    @Config("optimizer.skip-attaching-stats-with-plan")
-    public FeaturesConfig setSkipAttachingStatsWithPlan(boolean skipAttachingStatsWithPlan)
-    {
-        this.skipAttachingStatsWithPlan = skipAttachingStatsWithPlan;
-        return this;
-    }
-
-    public boolean isSkipNonApplicableRulesEnabled()
-    {
-        return skipNonApplicableRulesEnabled;
-    }
-
-    @Config("optimizer.skip-non-applicable-rules-enabled")
-    public FeaturesConfig setSkipNonApplicableRulesEnabled(boolean skipNonApplicableRulesEnabled)
-    {
-        this.skipNonApplicableRulesEnabled = skipNonApplicableRulesEnabled;
-        return this;
-    }
-
-    public boolean isPrioritizeLargerSpiltsMemoryRevoke()
-    {
-        return prioritizeLargerSpiltsMemoryRevoke;
-    }
-
-    @Config("experimental.prioritize-larger-spilts-memory-revoke")
-    public FeaturesConfig setPrioritizeLargerSpiltsMemoryRevoke(boolean prioritizeLargerSpiltsMemoryRevoke)
-    {
-        this.prioritizeLargerSpiltsMemoryRevoke = prioritizeLargerSpiltsMemoryRevoke;
-        return this;
-    }
-
-    public long getRevocableMemorySelectionThreshold()
-    {
-        return revocableMemorySelectionThreshold.toBytes();
-    }
-
-    @Config("experimental.revocable-memory-selection-threshold")
-    public FeaturesConfig setRevocableMemorySelectionThreshold(DataSize revocableMemorySelectionThreshold)
-    {
-        this.revocableMemorySelectionThreshold = revocableMemorySelectionThreshold;
         return this;
     }
 }

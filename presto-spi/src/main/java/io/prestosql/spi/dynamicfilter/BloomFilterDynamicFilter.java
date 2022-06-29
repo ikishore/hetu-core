@@ -1,5 +1,5 @@
 /*
- * Copyright (C) 2018-2021. Huawei Technologies Co., Ltd. All rights reserved.
+ * Copyright (C) 2018-2020. Huawei Technologies Co., Ltd. All rights reserved.
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
  * You may obtain a copy of the License at
@@ -22,10 +22,7 @@ import io.prestosql.spi.util.BloomFilter;
 import java.io.ByteArrayInputStream;
 import java.io.ByteArrayOutputStream;
 import java.io.IOException;
-import java.nio.charset.StandardCharsets;
-import java.util.List;
 import java.util.Set;
-import java.util.stream.Collectors;
 
 public class BloomFilterDynamicFilter
         extends DynamicFilter
@@ -47,7 +44,10 @@ public class BloomFilterDynamicFilter
 
     public BloomFilterDynamicFilter(String filterId, ColumnHandle columnHandle, BloomFilter bloomFilterDeserialized, Type type)
     {
-        this(filterId, columnHandle, bloomFilterDeserialized, null, type);
+        this.filterId = filterId;
+        this.type = type;
+        this.columnHandle = columnHandle;
+        this.bloomFilterDeserialized = bloomFilterDeserialized;
     }
 
     private BloomFilterDynamicFilter(String filterId, ColumnHandle columnHandle, BloomFilter bloomFilterDeserialized, byte[] bloomFilterSerialized, Type type)
@@ -81,7 +81,7 @@ public class BloomFilterDynamicFilter
                 bloomFilter.add((Slice) value);
             }
             else {
-                bloomFilter.add(String.valueOf(value).getBytes(StandardCharsets.UTF_8));
+                bloomFilter.add(String.valueOf(value).getBytes());
             }
         }
         return bloomFilter;
@@ -100,31 +100,21 @@ public class BloomFilterDynamicFilter
         return finalOutput;
     }
 
-    public static BloomFilterDynamicFilter fromCombinedDynamicFilter(CombinedDynamicFilter df)
-    {
-        List<DynamicFilter> filters = df.getFilters();
-
-        List<BloomFilterDynamicFilter> bloomFilter = filters.stream().filter(f -> f instanceof BloomFilterDynamicFilter)
-                .map(BloomFilterDynamicFilter.class::cast)
-                .collect(Collectors.toList());
-        if (bloomFilter.size() > 0) {
-            return bloomFilter.get(0);
-        }
-
-        List<HashSetDynamicFilter> hashSetDynamicFilters = filters.stream().filter(f -> f instanceof HashSetDynamicFilter)
-                .map(HashSetDynamicFilter.class::cast)
-                .collect(Collectors.toList());
-        if (hashSetDynamicFilters.size() > 0) {
-            return fromHashSetDynamicFilter(hashSetDynamicFilters.get(0));
-        }
-
-        return null;
-    }
-
     @Override
     public boolean contains(Object value)
     {
         // TODO: Only support Long and Slice value for now, fix this and use original value type
+/*<<<<<<< HEAD
+        if (value instanceof Long) {
+            return bloomFilterDeserialized.test((Long) value);
+        }
+        else if (value instanceof Slice) {
+            return bloomFilterDeserialized.test((Slice) value);
+        }
+        else {
+            return bloomFilterDeserialized.test(((String) value).getBytes());
+        }
+=======*/
         if (value == null) {
             return bloomFilterDeserialized.test((byte[]) null);
         }
@@ -138,6 +128,7 @@ public class BloomFilterDynamicFilter
         }
 
         return bloomFilterDeserialized.test(((String) value).getBytes());
+//>>>>>>> df007a2
     }
 
     @Override
@@ -149,7 +140,11 @@ public class BloomFilterDynamicFilter
     @Override
     public DynamicFilter clone()
     {
+//<<<<<<< HEAD
+//        DynamicFilter clone = new BloomFilterDynamicFilter(filterId, columnHandle, bloomFilterDeserialized, type);
+//=======
         DynamicFilter clone = new BloomFilterDynamicFilter(filterId, columnHandle, bloomFilterDeserialized, bloomFilterSerialized, type);
+//>>>>>>> df007a2
         clone.setMax(max);
         clone.setMax(min);
         return clone;

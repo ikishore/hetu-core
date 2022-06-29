@@ -99,7 +99,7 @@ public class PagesSpatialIndexSupplier
 
     private static STRtree buildRTree(LongArrayList addresses, List<List<Block>> channels, int geometryChannel, Optional<Integer> radiusChannel, Optional<Integer> partitionChannel)
     {
-        STRtree stRtree = new STRtree();
+        STRtree rtree = new STRtree();
         Operator relateOperator = OperatorFactoryLocal.getInstance().getOperator(Operator.Type.Relate);
 
         for (int position = 0; position < addresses.size(); position++) {
@@ -136,11 +136,11 @@ public class PagesSpatialIndexSupplier
                 partition = toIntExact(INTEGER.getLong(partitionBlock, blockPosition));
             }
 
-            stRtree.insert(getEnvelope(ogcGeometry, radius), new GeometryWithPosition(ogcGeometry, partition, position));
+            rtree.insert(getEnvelope(ogcGeometry, radius), new GeometryWithPosition(ogcGeometry, partition, position));
         }
 
-        stRtree.build();
-        return stRtree;
+        rtree.build();
+        return rtree;
     }
 
     private static Envelope getEnvelope(OGCGeometry ogcGeometry, double radius)

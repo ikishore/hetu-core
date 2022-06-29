@@ -44,8 +44,6 @@ import static com.google.common.base.Verify.verify;
 import static com.google.common.io.Files.createParentDirs;
 import static com.google.common.io.Files.write;
 import static com.google.common.io.Resources.getResource;
-import static io.prestosql.spi.operator.ReuseExchangeOperator.STRATEGY.REUSE_STRATEGY_CONSUMER;
-import static io.prestosql.spi.operator.ReuseExchangeOperator.STRATEGY.REUSE_STRATEGY_PRODUCER;
 import static io.prestosql.spi.plan.JoinNode.DistributionType.REPLICATED;
 import static io.prestosql.spi.plan.JoinNode.Type.INNER;
 import static io.prestosql.testing.TestngUtils.toDataProvider;
@@ -61,34 +59,12 @@ public abstract class AbstractCostBasedPlanTest
 {
     private final boolean pushdown;
     private final boolean cteReuse;
-    private final boolean reuseExchange;
-    private final boolean sortAggregator;
 
     public AbstractCostBasedPlanTest(LocalQueryRunnerSupplier supplier, boolean pushdown, boolean cteReuse)
     {
         super(supplier);
         this.pushdown = pushdown;
         this.cteReuse = cteReuse;
-        this.reuseExchange = false;
-        this.sortAggregator = false;
-    }
-
-    public AbstractCostBasedPlanTest(LocalQueryRunnerSupplier supplier, boolean pushdown, boolean cteReuse, boolean reuseExchange)
-    {
-        super(supplier);
-        this.pushdown = pushdown;
-        this.cteReuse = cteReuse;
-        this.reuseExchange = reuseExchange;
-        this.sortAggregator = false;
-    }
-
-    public AbstractCostBasedPlanTest(LocalQueryRunnerSupplier supplier, boolean pushdown, boolean cteReuse, boolean reuseExchange, boolean sortAggregator)
-    {
-        super(supplier);
-        this.pushdown = pushdown;
-        this.cteReuse = cteReuse;
-        this.reuseExchange = reuseExchange;
-        this.sortAggregator = sortAggregator;
     }
 
     protected abstract Stream<String> getQueryResourcePaths();
@@ -114,12 +90,6 @@ public abstract class AbstractCostBasedPlanTest
         }
         else if (cteReuse) {
             fileName = ".cte" + fileName;
-        }
-        else if (reuseExchange) {
-            fileName = ".reuse" + fileName;
-        }
-        else if (sortAggregator) {
-            fileName = ".sort_agg" + fileName;
         }
 
         return queryResourcePath.replaceAll("\\.sql$", fileName);
@@ -242,26 +212,14 @@ public abstract class AbstractCostBasedPlanTest
         @Override
         public Void visitAggregation(AggregationNode node, Integer indent)
         {
-            if (node.getAggregationType().equals(AggregationNode.AggregationType.SORT_BASED)) {
-                output(
-                        indent,
-                        "%s sortaggregate over (%s)",
-                        node.getStep().name().toLowerCase(ENGLISH),
-                        node.getGroupingKeys().stream()
-                                .map(Object::toString)
-                                .sorted()
-                                .collect(joining(", ")));
-            }
-            else {
-                output(
-                        indent,
-                        "%s hashaggregation over (%s)",
-                        node.getStep().name().toLowerCase(ENGLISH),
-                        node.getGroupingKeys().stream()
-                                .map(Object::toString)
-                                .sorted()
-                                .collect(joining(", ")));
-            }
+            output(
+                    indent,
+                    "%s aggregation over (%s)",
+                    node.getStep().name().toLowerCase(ENGLISH),
+                    node.getGroupingKeys().stream()
+                            .map(Object::toString)
+                            .sorted()
+                            .collect(joining(", ")));
 
             return visitPlan(node, indent + 1);
         }
@@ -269,15 +227,6 @@ public abstract class AbstractCostBasedPlanTest
         @Override
         public Void visitTableScan(TableScanNode node, Integer indent)
         {
-            String reuseTypeName = null;
-
-            if (node.getStrategy().equals(REUSE_STRATEGY_PRODUCER)) {
-                reuseTypeName = " (Producer)";
-            }
-            else if (node.getStrategy().equals(REUSE_STRATEGY_CONSUMER)) {
-                reuseTypeName = " (Consumer)";
-            }
-
             ConnectorTableHandle connectorTableHandle = node.getTable().getConnectorHandle();
             if (connectorTableHandle instanceof TpcdsTableHandle) {
                 output(indent, "scan %s", ((TpcdsTableHandle) connectorTableHandle).getTableName());
@@ -286,14 +235,8 @@ public abstract class AbstractCostBasedPlanTest
                 output(indent, "scan %s", ((TpchTableHandle) connectorTableHandle).getTableName());
             }
             else if (connectorTableHandle instanceof HiveTableHandle) {
-                if (null != reuseTypeName) {
-                    output(indent, "ReuseTableScan %s%s", ((HiveTableHandle) connectorTableHandle).getTableName(),
-                            reuseTypeName);
-                }
-                else {
-                    output(indent, "scan %s%s", ((HiveTableHandle) connectorTableHandle).getTableName(),
-                            ((HiveTableHandle) connectorTableHandle).isSuitableToPush() ? " (pushdown = true)" : "");
-                }
+                output(indent, "scan %s%s", ((HiveTableHandle) connectorTableHandle).getTableName(),
+                        ((HiveTableHandle) connectorTableHandle).isSuitableToPush() ? " (pushdown = true)" : "");
             }
             else {
                 throw new IllegalStateException(format("Unexpected ConnectorTableHandle: %s", connectorTableHandle.getClass()));

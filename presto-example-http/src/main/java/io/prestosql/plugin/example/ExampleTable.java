@@ -43,11 +43,11 @@ public class ExampleTable
         this.columns = ImmutableList.copyOf(requireNonNull(columns, "columns is null"));
         this.sources = ImmutableList.copyOf(requireNonNull(sources, "sources is null"));
 
-        ImmutableList.Builder<ColumnMetadata> columnMetadataBuilder = ImmutableList.builder();
+        ImmutableList.Builder<ColumnMetadata> columnsMetadata = ImmutableList.builder();
         for (ExampleColumn column : this.columns) {
-            columnMetadataBuilder.add(new ColumnMetadata(column.getName(), column.getType()));
+            columnsMetadata.add(new ColumnMetadata(column.getName(), column.getType()));
         }
-        this.columnsMetadata = columnMetadataBuilder.build();
+        this.columnsMetadata = columnsMetadata.build();
     }
 
     @JsonProperty

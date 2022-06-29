@@ -16,12 +16,8 @@ package io.prestosql.split;
 import com.google.common.collect.ImmutableMap;
 import com.google.common.collect.ImmutableSet;
 import io.prestosql.Session;
-import io.prestosql.SystemSessionProperties;
 import io.prestosql.execution.QueryManagerConfig;
 import io.prestosql.metadata.Metadata;
-import io.prestosql.snapshot.MarkerAnnouncer;
-import io.prestosql.snapshot.RecoveryConfig;
-import io.prestosql.spi.QueryId;
 import io.prestosql.spi.connector.CatalogName;
 import io.prestosql.spi.connector.ColumnMetadata;
 import io.prestosql.spi.connector.ConnectorSession;
@@ -32,13 +28,11 @@ import io.prestosql.spi.connector.ConnectorTableLayoutHandle;
 import io.prestosql.spi.connector.Constraint;
 import io.prestosql.spi.dynamicfilter.DynamicFilter;
 import io.prestosql.spi.metadata.TableHandle;
-import io.prestosql.spi.plan.PlanNodeId;
 import io.prestosql.spi.predicate.TupleDomain;
 import io.prestosql.spi.resourcegroups.QueryType;
 
 import javax.inject.Inject;
 
-import java.util.List;
 import java.util.Map;
 import java.util.Optional;
 import java.util.Set;
@@ -54,10 +48,6 @@ public class SplitManager
 {
     private final ConcurrentMap<CatalogName, ConnectorSplitManager> splitManagers = new ConcurrentHashMap<>();
     private final int minScheduleSplitBatchSize;
-    // Snapshot: marker announcer for each query. Used to create MarkerSplitSource,
-    // and to allow query execution to get a hold of the announcer,
-    // e.g. to ask split sources to resume to a snapshot, or to retrieve snapshot related info to schedule ValueNodes
-    private final Map<QueryId, MarkerAnnouncer> announcers;
 
     // NOTE: This only used for filling in the table layout if none is present by the time we
     // get splits. DO NOT USE IT FOR ANY OTHER PURPOSE, as it will be removed once table layouts
@@ -69,7 +59,6 @@ public class SplitManager
     {
         this.minScheduleSplitBatchSize = config.getMinScheduleSplitBatchSize();
         this.metadata = metadata;
-        this.announcers = new ConcurrentHashMap<>();
     }
 
     public void addConnectorSplitManager(CatalogName catalogName, ConnectorSplitManager connectorSplitManager)
@@ -86,22 +75,13 @@ public class SplitManager
 
     public SplitSource getSplits(Session session, TableHandle table, SplitSchedulingStrategy splitSchedulingStrategy)
     {
-        return getSplits(session, table, splitSchedulingStrategy, null, Optional.empty(), ImmutableMap.of(), ImmutableSet.of(), false, null);
+        return getSplits(session, table, splitSchedulingStrategy, null, Optional.empty(), ImmutableMap.of(), ImmutableSet.of(), false);
     }
 
-    public SplitSource getSplits(Session session, TableHandle table, SplitSchedulingStrategy splitSchedulingStrategy, Supplier<List<Set<DynamicFilter>>> dynamicFilterSupplier,
-            Optional<QueryType> queryType, Map<String, Object> queryInfo, Set<TupleDomain<ColumnMetadata>> userDefinedCachePredicates,
-            boolean partOfReuse, PlanNodeId nodeId)
+    public SplitSource getSplits(Session session, TableHandle table, SplitSchedulingStrategy splitSchedulingStrategy, Supplier<Set<DynamicFilter>> dynamicFilterSupplier,
+                                 Optional<QueryType> queryType, Map<String, Object> queryInfo, Set<TupleDomain<ColumnMetadata>> userDefinedCachePredicates,
+                                 boolean partOfReuse)
     {
-        MarkerAnnouncer announcer = null;
-        if (SystemSessionProperties.isRecoveryEnabled(session)) {
-            announcer = getMarkerAnnouncer(session);
-            SplitSource splitSource = announcer.getSplitSource(nodeId);
-            if (splitSource != null) {
-                return splitSource;
-            }
-        }
-
         CatalogName catalogName = table.getCatalogName();
         ConnectorSplitManager splitManager = getConnectorSplitManager(catalogName);
 
@@ -125,9 +105,6 @@ public class SplitManager
         if (minScheduleSplitBatchSize > 1) {
             splitSource = new BufferingSplitSource(splitSource, minScheduleSplitBatchSize);
         }
-        if (SystemSessionProperties.isRecoveryEnabled(session)) {
-            splitSource = announcer.createMarkerSplitSource(splitSource, nodeId);
-        }
         return splitSource;
     }
 
@@ -136,25 +113,5 @@ public class SplitManager
         ConnectorSplitManager result = splitManagers.get(catalogName);
         checkArgument(result != null, "No split manager for connector '%s'", catalogName);
         return result;
-    }
-
-    public void queryFinished(QueryId queryId)
-    {
-        announcers.remove(queryId);
-    }
-
-    public MarkerAnnouncer getMarkerAnnouncer(Session session)
-    {
-        return announcers.computeIfAbsent(session.getQueryId(), queryId -> {
-            if (!SystemSessionProperties.isSnapshotEnabled(session)) {
-                return new MarkerAnnouncer();
-            }
-            else if (SystemSessionProperties.getSnapshotIntervalType(session) == RecoveryConfig.IntervalType.TIME) {
-                return new MarkerAnnouncer(SystemSessionProperties.getSnapshotTimeInterval(session));
-            }
-            else {
-                return new MarkerAnnouncer(SystemSessionProperties.getSnapshotSplitCountInterval(session));
-            }
-        });
     }
 }

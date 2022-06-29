@@ -27,6 +27,7 @@ import io.prestosql.execution.TaskStateMachine;
 import io.prestosql.memory.MemoryPool;
 import io.prestosql.memory.QueryContext;
 import io.prestosql.metadata.Metadata;
+import io.prestosql.metadata.QualifiedObjectName;
 import io.prestosql.metadata.Split;
 import io.prestosql.operator.Driver;
 import io.prestosql.operator.DriverContext;
@@ -44,7 +45,6 @@ import io.prestosql.security.AllowAllAccessControl;
 import io.prestosql.spi.QueryId;
 import io.prestosql.spi.connector.ColumnHandle;
 import io.prestosql.spi.connector.ConnectorPageSource;
-import io.prestosql.spi.connector.QualifiedObjectName;
 import io.prestosql.spi.memory.MemoryPoolId;
 import io.prestosql.spi.metadata.TableHandle;
 import io.prestosql.spi.plan.PlanNodeId;
@@ -87,8 +87,6 @@ import static io.prestosql.spi.connector.NotPartitionedPartitionHandle.NOT_PARTI
 import static io.prestosql.spi.function.FunctionKind.SCALAR;
 import static io.prestosql.spi.type.BigintType.BIGINT;
 import static io.prestosql.sql.relational.SqlToRowExpressionTranslator.translate;
-import static io.prestosql.testing.TestingPagesSerdeFactory.TESTING_SERDE_FACTORY;
-import static io.prestosql.testing.TestingRecoveryUtils.NOOP_RECOVERY_UTILS;
 import static io.prestosql.testing.TestingSession.testSessionBuilder;
 import static java.lang.String.format;
 import static java.util.Objects.requireNonNull;
@@ -177,7 +175,7 @@ public abstract class AbstractOperatorBenchmark
         List<ColumnHandle> columnHandles = columnHandlesBuilder.build();
 
         // get the split for this table
-        Split split = getLocalQuerySplit(session, tableHandle, planNodeId);
+        Split split = getLocalQuerySplit(session, tableHandle);
 
         return new OperatorFactory()
         {
@@ -202,9 +200,9 @@ public abstract class AbstractOperatorBenchmark
         };
     }
 
-    private Split getLocalQuerySplit(Session session, TableHandle handle, PlanNodeId planNodeId)
+    private Split getLocalQuerySplit(Session session, TableHandle handle)
     {
-        SplitSource splitSource = localQueryRunner.getSplitManager().getSplits(session, handle, UNGROUPED_SCHEDULING, null, Optional.empty(), Collections.emptyMap(), ImmutableSet.of(), false, planNodeId);
+        SplitSource splitSource = localQueryRunner.getSplitManager().getSplits(session, handle, UNGROUPED_SCHEDULING, null, Optional.empty(), Collections.emptyMap(), ImmutableSet.of(), false);
         List<Split> splits = new ArrayList<>();
         while (!splitSource.isFinished()) {
             splits.addAll(getNextBatch(splitSource));
@@ -239,7 +237,7 @@ public abstract class AbstractOperatorBenchmark
         Map<NodeRef<Expression>, Type> expressionTypes = new TypeAnalyzer(localQueryRunner.getSqlParser(), localQueryRunner.getMetadata())
                 .getTypes(session, TypeProvider.copyOf(symbolTypes), hashExpression.get());
 
-        RowExpression translated = translate(hashExpression.get(), SCALAR, expressionTypes, symbolToInputMapping.build(), localQueryRunner.getMetadata().getFunctionAndTypeManager(), session, false);
+        RowExpression translated = translate(hashExpression.get(), SCALAR, expressionTypes, symbolToInputMapping.build(), localQueryRunner.getMetadata(), session, false);
 
         PageFunctionCompiler functionCompiler = new PageFunctionCompiler(localQueryRunner.getMetadata(), 0);
         projections.add(functionCompiler.compileProjection(translated, Optional.empty()).get());
@@ -282,7 +280,7 @@ public abstract class AbstractOperatorBenchmark
     @Override
     protected Map<String, Long> runOnce()
     {
-        Session setSession = testSessionBuilder()
+        Session session = testSessionBuilder()
                 .setSystemProperty("optimizer.optimize-hash-generation", "true")
                 .build();
         MemoryPool memoryPool = new MemoryPool(new MemoryPoolId("test"), new DataSize(1, GIGABYTE));
@@ -297,15 +295,13 @@ public abstract class AbstractOperatorBenchmark
                 localQueryRunner.getExecutor(),
                 localQueryRunner.getScheduler(),
                 new DataSize(256, MEGABYTE),
-                spillSpaceTracker,
-                NOOP_RECOVERY_UTILS)
+                spillSpaceTracker)
                 .addTaskContext(new TaskStateMachine(new TaskId("query", 0, 0), localQueryRunner.getExecutor()),
-                        setSession,
+                        session,
                         false,
                         false,
                         OptionalInt.empty(),
-                        Optional.empty(),
-                        TESTING_SERDE_FACTORY);
+                        Optional.empty());
 
         CpuTimer cpuTimer = new CpuTimer();
         Map<String, Long> executionStats = execute(taskContext);

@@ -15,9 +15,6 @@ package io.prestosql.plugin.geospatial;
 
 import com.google.common.collect.ImmutableList;
 import com.google.common.collect.ImmutableMap;
-import io.hetu.core.common.filesystem.TempFolder;
-import io.hetu.core.filesystem.HetuFileSystemClientPlugin;
-import io.hetu.core.metastore.HetuMetastorePlugin;
 import io.prestosql.Session;
 import io.prestosql.execution.warnings.WarningCollector;
 import io.prestosql.geospatial.KdbTree;
@@ -33,8 +30,6 @@ import io.prestosql.sql.planner.plan.ExchangeNode;
 import io.prestosql.testing.LocalQueryRunner;
 import org.testng.annotations.Test;
 
-import java.io.IOException;
-import java.util.HashMap;
 import java.util.Optional;
 
 import static com.google.common.base.Strings.nullToEmpty;
@@ -70,28 +65,14 @@ public class TestSpatialJoinPlanning
     }
 
     private static LocalQueryRunner createQueryRunner()
-            throws IOException
     {
         LocalQueryRunner queryRunner = new LocalQueryRunner(testSessionBuilder()
                 .setCatalog("memory")
                 .setSchema("default")
                 .build());
-        queryRunner.installPlugin(new HetuFileSystemClientPlugin());
-        queryRunner.installPlugin(new HetuMetastorePlugin());
         queryRunner.installPlugin(new GeoPlugin());
         queryRunner.createCatalog("tpch", new TpchConnectorFactory(1), ImmutableMap.of());
-
-        TempFolder folder = new TempFolder().create();
-        Runtime.getRuntime().addShutdownHook(new Thread(folder::close));
-        HashMap<String, String> metastoreConfig = new HashMap<>();
-        metastoreConfig.put("hetu.metastore.type", "hetufilesystem");
-        metastoreConfig.put("hetu.metastore.hetufilesystem.profile-name", "default");
-        metastoreConfig.put("hetu.metastore.hetufilesystem.path", folder.newFolder("metastore").getAbsolutePath());
-        metastoreConfig.put("hetu.metastore.cache.type", "local");
-        queryRunner.loadMetastore(metastoreConfig);
-        queryRunner.createCatalog("memory", new MemoryConnectorFactory(),
-                ImmutableMap.of("memory.spill-path", folder.newFolder("memory-connector").getAbsolutePath()));
-
+        queryRunner.createCatalog("memory", new MemoryConnectorFactory(), ImmutableMap.of());
         queryRunner.execute(format("CREATE TABLE kdb_tree AS SELECT '%s' AS v", KDB_TREE_JSON));
         queryRunner.execute("CREATE TABLE points (lng, lat, name) AS (VALUES (2.1e0, 2.1e0, 'x'))");
         queryRunner.execute("CREATE TABLE polygons (wkt, name) AS (VALUES ('POLYGON ((30 10, 40 40, 20 40, 10 20, 30 10))', 'a'))");
@@ -300,7 +281,7 @@ public class TestSpatialJoinPlanning
     {
         // broadcast
         assertPlan("SELECT b.name, a.name " +
-                        "FROM (VALUES (2.1, 2.1, 'x'), (3.1, 4.1, 'y')) AS a (lng, lat, name), (VALUES (2.1, 2.1, 'x'), (3.1, 4.1, 'y')) AS b (lng, lat, name) " +
+                        "FROM (VALUES (2.1, 2.1, 'x')) AS a (lng, lat, name), (VALUES (2.1, 2.1, 'x')) AS b (lng, lat, name) " +
                         "WHERE ST_Distance(ST_Point(a.lng, a.lat), ST_Point(b.lng, b.lat)) <= 3.1",
                 anyTree(
                         spatialJoin("st_distance(st_point_a, st_point_b) <= radius",
@@ -313,7 +294,7 @@ public class TestSpatialJoinPlanning
                                                         values(ImmutableMap.of("b_lng", 0, "b_lat", 1))))))));
 
         assertPlan("SELECT b.name, a.name " +
-                        "FROM (VALUES (2.1, 2.1, 'x'), (3.1, 4.1, 'y')) AS a (lng, lat, name), (VALUES (2.1, 2.1, 'x'), (3.1, 4.1, 'y')) AS b (lng, lat, name) " +
+                        "FROM (VALUES (2.1, 2.1, 'x')) AS a (lng, lat, name), (VALUES (2.1, 2.1, 'x')) AS b (lng, lat, name) " +
                         "WHERE ST_Distance(ST_Point(a.lng, a.lat), ST_Point(b.lng, b.lat)) <= 300 / (cos(radians(b.lat)) * 111321)",
                 anyTree(
                         spatialJoin("st_distance(st_point_a, st_point_b) <= radius",
@@ -327,7 +308,7 @@ public class TestSpatialJoinPlanning
 
         // distributed
         assertDistributedPlan("SELECT b.name, a.name " +
-                        "FROM (VALUES (2.1, 2.1, 'x'), (3.1, 4.1, 'y')) AS a (lng, lat, name), (VALUES (2.1, 2.1, 'x'), (3.1, 4.1, 'y')) AS b (lng, lat, name) " +
+                        "FROM (VALUES (2.1, 2.1, 'x')) AS a (lng, lat, name), (VALUES (2.1, 2.1, 'x')) AS b (lng, lat, name) " +
                         "WHERE ST_Distance(ST_Point(a.lng, a.lat), ST_Point(b.lng, b.lat)) <= 3.1",
                 withSpatialPartitioning("memory.default.kdb_tree"),
                 anyTree(

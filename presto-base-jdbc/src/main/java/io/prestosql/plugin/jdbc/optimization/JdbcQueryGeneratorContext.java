@@ -1,5 +1,5 @@
 /*
- * Copyright (C) 2018-2021. Huawei Technologies Co., Ltd. All rights reserved.
+ * Copyright (C) 2018-2020. Huawei Technologies Co., Ltd. All rights reserved.
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
  * You may obtain a copy of the License at
@@ -37,10 +37,6 @@ public final class JdbcQueryGeneratorContext
 {
     private final Optional<CatalogName> catalogName;
     private final Optional<SchemaTableName> schemaTableName;
-    // cresponding to catalogName/schemaName/tableName to JdbcTableHandle
-    private final String remoteCatalogName;
-    private final String remoteSchemaName;
-    private final String remoteTableName;
     private final Optional<ConnectorTransactionHandle> transaction;
     private final LinkedHashMap<String, Selection> selections;
     private final Set<String> groupByColumns;
@@ -54,9 +50,6 @@ public final class JdbcQueryGeneratorContext
     private JdbcQueryGeneratorContext(
             Optional<CatalogName> catalogName,
             Optional<SchemaTableName> schemaTableName,
-            String remoteCatalogName,
-            String remoteSchemaName,
-            String remoteTableName,
             Optional<ConnectorTransactionHandle> transaction,
             Map<String, Selection> selections,
             Optional<String> from,
@@ -69,9 +62,6 @@ public final class JdbcQueryGeneratorContext
     {
         this.catalogName = catalogName;
         this.schemaTableName = schemaTableName;
-        this.remoteCatalogName = remoteCatalogName;
-        this.remoteSchemaName = remoteSchemaName;
-        this.remoteTableName = requireNonNull(remoteTableName, "table name is null");
         this.transaction = transaction;
         this.selections = new LinkedHashMap<>(requireNonNull(selections, "selections can't be null"));
         this.from = requireNonNull(from, "from can't be null");
@@ -91,21 +81,6 @@ public final class JdbcQueryGeneratorContext
     public Optional<SchemaTableName> getSchemaTableName()
     {
         return schemaTableName;
-    }
-
-    public String getRemoteCatalogName()
-    {
-        return remoteCatalogName;
-    }
-
-    public String getRemoteSchemaName()
-    {
-        return remoteSchemaName;
-    }
-
-    public String getRemoteTableName()
-    {
-        return remoteTableName;
     }
 
     public Optional<ConnectorTransactionHandle> getTransaction()
@@ -209,17 +184,13 @@ public final class JdbcQueryGeneratorContext
 
     public static Builder buildAsNewTable(JdbcQueryGeneratorContext context)
     {
-        return new Builder(context.getCatalogName(), context.getSchemaTableName(), context.getRemoteCatalogName(),
-                context.getRemoteSchemaName(), context.getRemoteTableName(), context.getTransaction(), context.getGroupIdNodeInfo());
+        return new Builder(context.getCatalogName(), context.getSchemaTableName(), context.getTransaction(), context.getGroupIdNodeInfo());
     }
 
     public static final class Builder
     {
         private Optional<CatalogName> catalogName;
         private Optional<SchemaTableName> schemaTableName;
-        private String remoteCatalogName;
-        private String remoteSchemaName;
-        private String remoteTableName;
         private Optional<ConnectorTransactionHandle> transaction;
         private LinkedHashMap<String, Selection> selections = new LinkedHashMap<>();
         private Set<String> groupByColumns = new HashSet<>();
@@ -236,9 +207,6 @@ public final class JdbcQueryGeneratorContext
         {
             this.catalogName = context.getCatalogName();
             this.schemaTableName = context.getSchemaTableName();
-            this.remoteCatalogName = context.getRemoteCatalogName();
-            this.remoteSchemaName = context.getRemoteSchemaName();
-            this.remoteTableName = context.getRemoteTableName();
             this.transaction = context.getTransaction();
             this.selections = context.getSelections();
             this.groupByColumns = context.getGroupByColumns();
@@ -253,17 +221,11 @@ public final class JdbcQueryGeneratorContext
         private Builder(
                 Optional<CatalogName> catalogName,
                 Optional<SchemaTableName> schemaTableName,
-                String remoteCatalogName,
-                String remoteSchemaName,
-                String remoteTableName,
                 Optional<ConnectorTransactionHandle> transaction,
                 GroupIdNodeInfo groupIdNodeInfo)
         {
             this.catalogName = catalogName;
             this.schemaTableName = schemaTableName;
-            this.remoteCatalogName = remoteCatalogName;
-            this.remoteSchemaName = remoteSchemaName;
-            this.remoteTableName = remoteTableName;
             this.transaction = transaction;
             this.groupIdNodeInfo = groupIdNodeInfo;
         }
@@ -277,24 +239,6 @@ public final class JdbcQueryGeneratorContext
         public Builder setSchemaTableName(Optional<SchemaTableName> schemaTableName)
         {
             this.schemaTableName = schemaTableName;
-            return this;
-        }
-
-        public Builder setRemoteCatalogName(String catalogname)
-        {
-            this.remoteCatalogName = catalogname;
-            return this;
-        }
-
-        public Builder setRemoteSchemaName(String schemaName)
-        {
-            this.remoteSchemaName = schemaName;
-            return this;
-        }
-
-        public Builder setRemoteTablename(String tableName)
-        {
-            this.remoteTableName = tableName;
             return this;
         }
 
@@ -372,9 +316,6 @@ public final class JdbcQueryGeneratorContext
             return new JdbcQueryGeneratorContext(
                     catalogName,
                     schemaTableName,
-                    remoteCatalogName,
-                    remoteSchemaName,
-                    remoteTableName,
                     transaction,
                     selections,
                     from,

@@ -15,7 +15,6 @@ package io.prestosql.plugin.hive;
 
 import com.google.common.collect.ImmutableList;
 import com.google.common.io.CountingOutputStream;
-import io.airlift.log.Logger;
 import io.airlift.slice.OutputStreamSliceOutput;
 import io.prestosql.rcfile.AircompressorCodecFactory;
 import io.prestosql.rcfile.HadoopCodecFactory;
@@ -47,7 +46,6 @@ import static java.util.Objects.requireNonNull;
 public class RcFileFileWriter
         implements HiveFileWriter
 {
-    private static final Logger log = Logger.get(RcFileFileWriter.class);
     private static final int INSTANCE_SIZE = ClassLayout.parseClass(RcFileFileWriter.class).instanceSize();
     private static final ThreadMXBean THREAD_MX_BEAN = ManagementFactory.getThreadMXBean();
 
@@ -84,13 +82,13 @@ public class RcFileFileWriter
 
         this.fileInputColumnIndexes = requireNonNull(fileInputColumnIndexes, "outputColumnInputIndexes is null");
 
-        ImmutableList.Builder<Block> localNullBlocks = ImmutableList.builder();
+        ImmutableList.Builder<Block> nullBlocks = ImmutableList.builder();
         for (Type fileColumnType : fileColumnTypes) {
             BlockBuilder blockBuilder = fileColumnType.createBlockBuilder(null, 1, 0);
             blockBuilder.appendNull();
-            localNullBlocks.add(blockBuilder.build());
+            nullBlocks.add(blockBuilder.build());
         }
-        this.nullBlocks = localNullBlocks.build();
+        this.nullBlocks = nullBlocks.build();
         this.validationInputFactory = validationInputFactory;
     }
 
@@ -140,7 +138,6 @@ public class RcFileFileWriter
             }
             catch (Exception ignored) {
                 // ignore
-                log.warn("Rollback rcFileWriter close error failed");
             }
             throw new PrestoException(HiveErrorCode.HIVE_WRITER_CLOSE_ERROR, "Error committing write to Hive", e);
         }

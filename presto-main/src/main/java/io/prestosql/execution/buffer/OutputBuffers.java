@@ -46,17 +46,17 @@ public final class OutputBuffers
 
     public static OutputBuffers createInitialEmptyOutputBuffers(PartitioningHandle partitioningHandle)
     {
-        BufferType bufferType;
+        BufferType type;
         if (partitioningHandle.equals(FIXED_BROADCAST_DISTRIBUTION)) {
-            bufferType = BROADCAST;
+            type = BROADCAST;
         }
         else if (partitioningHandle.equals(FIXED_ARBITRARY_DISTRIBUTION)) {
-            bufferType = ARBITRARY;
+            type = ARBITRARY;
         }
         else {
-            bufferType = PARTITIONED;
+            type = PARTITIONED;
         }
-        return new OutputBuffers(bufferType, 0, false, ImmutableMap.of());
+        return new OutputBuffers(type, 0, false, ImmutableMap.of());
     }
 
     public enum BufferType

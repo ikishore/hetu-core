@@ -131,23 +131,23 @@ public final class PrestoThriftDouble
         if (positions == 0) {
             return booleanData(new PrestoThriftBoolean(null, null));
         }
-        boolean[] nulls1 = null;
-        double[] doubles1 = null;
+        boolean[] nulls = null;
+        double[] doubles = null;
         for (int position = 0; position < positions; position++) {
             if (block.isNull(position)) {
-                if (nulls1 == null) {
-                    nulls1 = new boolean[positions];
+                if (nulls == null) {
+                    nulls = new boolean[positions];
                 }
-                nulls1[position] = true;
+                nulls[position] = true;
             }
             else {
-                if (doubles1 == null) {
-                    doubles1 = new double[positions];
+                if (doubles == null) {
+                    doubles = new double[positions];
                 }
-                doubles1[position] = DOUBLE.getDouble(block, position);
+                doubles[position] = DOUBLE.getDouble(block, position);
             }
         }
-        return doubleData(new PrestoThriftDouble(nulls1, doubles1));
+        return doubleData(new PrestoThriftDouble(nulls, doubles));
     }
 
     private static boolean sameSizeIfPresent(boolean[] nulls, double[] doubles)

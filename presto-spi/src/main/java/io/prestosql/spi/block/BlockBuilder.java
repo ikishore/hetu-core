@@ -14,10 +14,9 @@
 package io.prestosql.spi.block;
 
 import io.airlift.slice.Slice;
-import io.prestosql.spi.snapshot.Restorable;
 
 public interface BlockBuilder<T>
-        extends Block<T>, Restorable
+        extends Block<T>
 {
     /**
      * Write a byte to the current entry;
@@ -47,14 +46,6 @@ public interface BlockBuilder<T>
      * Write a long to the current entry;
      */
     default BlockBuilder writeLong(long value)
-    {
-        throw new UnsupportedOperationException(getClass().getName());
-    }
-
-    /**
-     * Write a double to the current entry;
-     */
-    default BlockBuilder writeDouble(double value)
     {
         throw new UnsupportedOperationException(getClass().getName());
     }

@@ -19,20 +19,12 @@ import io.airlift.configuration.ConfigSecuritySensitive;
 import io.airlift.units.Duration;
 import io.airlift.units.MinDuration;
 import io.prestosql.plugin.jdbc.optimization.JdbcPushDownModule;
-import io.prestosql.spi.connector.CatalogSchemaName;
 import io.prestosql.spi.function.Mandatory;
 
 import javax.annotation.Nullable;
 import javax.validation.constraints.Min;
 import javax.validation.constraints.NotNull;
 
-import java.util.List;
-import java.util.Optional;
-import java.util.concurrent.TimeUnit;
-
-import static io.prestosql.sql.builder.functioncall.BaseFunctionUtil.parserExternalFunctionCatalogSchema;
-import static io.prestosql.sql.builder.functioncall.BaseFunctionUtil.parserPushDownSupportedRemoteCatalogSchema;
-import static io.prestosql.sql.builder.functioncall.FunctionCallConstants.REMOTE_FUNCTION_CATALOG_SCHEMA;
 import static java.util.concurrent.TimeUnit.MINUTES;
 
 public class BaseJdbcConfig
@@ -43,7 +35,6 @@ public class BaseJdbcConfig
     private String userCredentialName;
     private String passwordCredentialName;
     private boolean caseInsensitiveNameMatching;
-    private boolean caseInsensitiveNameMatchingConfigured;
     private Duration caseInsensitiveNameMatchingCacheTtl = new Duration(1, MINUTES);
     private boolean useConnectionPool;
     private int maxTotal = 50;
@@ -63,48 +54,10 @@ public class BaseJdbcConfig
     private boolean jmxEnabled = true;
     // Hetu: JDBC fetch size configuration
     private int fetchSize;
-    private boolean dmlStatementsCommitInATransaction;
     // Hetu: JDBC query push down enable
     private boolean pushDownEnable = true;
     // Hetu: JDBC push down module
     private JdbcPushDownModule pushDownModule = JdbcPushDownModule.DEFAULT;
-
-    private String pushDownExternalFunctionNamespaces;
-    private String connectorRegistryFunctionNamespace;
-
-    private boolean fieldSplitEnable;
-
-    private String tableSplitFields;
-
-    private Duration stepCalcRefreshInterval = new Duration(5, TimeUnit.MINUTES);
-    private int stepCalcThreads = 4;
-
-    public Optional<CatalogSchemaName> getConnectorRegistryFunctionNamespace()
-    {
-        return parserExternalFunctionCatalogSchema(connectorRegistryFunctionNamespace);
-    }
-
-    @Config("connector.externalfunction.namespace")
-    public BaseJdbcConfig setConnectorRegistryFunctionNamespace(String connectorRegistryFunctionNamespace)
-    {
-        this.connectorRegistryFunctionNamespace = connectorRegistryFunctionNamespace;
-        return this;
-    }
-
-    @Nullable
-    public List<CatalogSchemaName> getPushDownExternalFunctionNamespace()
-    {
-        return parserPushDownSupportedRemoteCatalogSchema(this.pushDownExternalFunctionNamespaces);
-    }
-
-    @Config(REMOTE_FUNCTION_CATALOG_SCHEMA)
-    @ConfigDescription("The namespace in which remote function can push down, written in a specific catalog.schema, for example: mem.mysql," +
-            " or in multiple specific catalog.schema, for example: mem.mysql|fs.mysql|metaCache.mysql")
-    public BaseJdbcConfig setPushDownExternalFunctionNamespace(String pushDownExternalFunctionNamespaceStr)
-    {
-        this.pushDownExternalFunctionNamespaces = pushDownExternalFunctionNamespaceStr;
-        return this;
-    }
 
     public boolean isLifo()
     {
@@ -384,27 +337,7 @@ public class BaseJdbcConfig
     public BaseJdbcConfig setCaseInsensitiveNameMatching(boolean caseInsensitiveNameMatching)
     {
         this.caseInsensitiveNameMatching = caseInsensitiveNameMatching;
-        setCaseInsensitiveNameMatchingConfigured(true);
         return this;
-    }
-
-    public BaseJdbcConfig internalsetCaseInsensitiveNameMatching(boolean caseInsensitiveNameMatching)
-    {
-        if (!isCaseInsensitiveNameMatchingConfigured()) {
-            this.caseInsensitiveNameMatching = caseInsensitiveNameMatching;
-        }
-        return this;
-    }
-
-    public BaseJdbcConfig setCaseInsensitiveNameMatchingConfigured(boolean isConfigured)
-    {
-        this.caseInsensitiveNameMatchingConfigured = isConfigured;
-        return this;
-    }
-
-    public boolean isCaseInsensitiveNameMatchingConfigured()
-    {
-        return this.caseInsensitiveNameMatchingConfigured;
     }
 
     @NotNull
@@ -446,22 +379,6 @@ public class BaseJdbcConfig
         return this;
     }
 
-    /**
-     * If a connection, all its DML statements, such as Insert, Update or Delete, will be executed and committed as a transaction. Default is false, every 1000 statements will be executed and committed as a transaction.
-     */
-    @Config("dml-statements-commit-in-a-transaction")
-    @ConfigDescription("If a connection, all its DML statements, such as Insert, Update or Delete, will be executed and committed as a transaction. Default is false, every 1000 statements will be executed and committed as a transaction.")
-    public BaseJdbcConfig setDmlStatementsCommitInATransaction(boolean dmlStatementsCommitInATransaction)
-    {
-        this.dmlStatementsCommitInATransaction = dmlStatementsCommitInATransaction;
-        return this;
-    }
-
-    public boolean isDmlStatementsCommitInATransaction()
-    {
-        return dmlStatementsCommitInATransaction;
-    }
-
     public boolean isPushDownEnable()
     {
         return pushDownEnable;
@@ -486,56 +403,5 @@ public class BaseJdbcConfig
     {
         this.pushDownModule = pushDownModule;
         return this;
-    }
-
-    @Config("jdbc.table-split-enabled")
-    @ConfigDescription("table spilt function switch")
-    public BaseJdbcConfig setTableSplitEnable(boolean fieldSplitEnable)
-    {
-        this.fieldSplitEnable = fieldSplitEnable;
-        return this;
-    }
-
-    public boolean getTableSplitEnable()
-    {
-        return this.fieldSplitEnable;
-    }
-
-    //jdbc.table-split-fields =[{"catalogName":"mysqldb","schemaName":"","tableName":"hetu_data","splitField":"id","calcStepEnable":"false","dataReadOnly":"false","scanNodes":"2","fieldMinValue":"-1","fieldMaxValue":"3"},{"catalogName":"mysqldb","schemaName":"","tableName":"hetu_catalog_params","splitField":"catalog_id","calcStepEnable":"false","dataReadOnly":"false","scanNodes":"2","fieldMinValue":"-1","fieldMaxValue":"3"}]
-    @Config("jdbc.table-split-fields")
-    @ConfigDescription("Allow multi split by one of table filed, this filed must be integer like value")
-    public BaseJdbcConfig setTableSplitFields(String tableSplitFields)
-    {
-        this.tableSplitFields = tableSplitFields;
-        return this;
-    }
-
-    public String getTableSplitFields()
-    {
-        return this.tableSplitFields;
-    }
-
-    @Config("jdbc.table-split-stepCalc-refresh-interval")
-    public BaseJdbcConfig setTableSplitStepCalcRefreshInterval(Duration stepCalcRefreshInterval)
-    {
-        this.stepCalcRefreshInterval = stepCalcRefreshInterval;
-        return this;
-    }
-
-    public Duration getTableSplitStepCalcRefreshInterval()
-    {
-        return stepCalcRefreshInterval;
-    }
-
-    @Config("jdbc.table-split-stepCalc-threads")
-    public BaseJdbcConfig setTableSplitStepCalcCalcThreads(int stepCalcThreads)
-    {
-        this.stepCalcThreads = stepCalcThreads;
-        return this;
-    }
-
-    public int getTableSplitStepCalcCalcThreads()
-    {
-        return stepCalcThreads;
     }
 }

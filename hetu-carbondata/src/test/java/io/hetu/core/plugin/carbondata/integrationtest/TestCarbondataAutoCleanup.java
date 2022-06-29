@@ -1,5 +1,5 @@
 /*
- * Copyright (C) 2018-2021. Huawei Technologies Co., Ltd. All rights reserved.
+ * Copyright (C) 2018-2020. Huawei Technologies Co., Ltd. All rights reserved.
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
  * You may obtain a copy of the License at
@@ -62,6 +62,7 @@ public class TestCarbondataAutoCleanup
     public void setup() throws Exception
     {
         logger.info("Setup begin: " + this.getClass().getSimpleName());
+        String dataPath = rootPath + "/src/test/resources/alldatatype.csv";
 
         CarbonProperties.getInstance().addProperty(CarbonCommonConstants.CARBON_WRITTEN_BY_APPNAME, "HetuTest");
         CarbonProperties.getInstance().addProperty(CarbonCommonConstants.MAX_QUERY_EXECUTION_TIME, "0");
@@ -89,7 +90,6 @@ public class TestCarbondataAutoCleanup
         hetuServer.execute("drop table if exists testdb.testtableautocleanup6");
         hetuServer.execute("drop table if exists testdb.testtableautocleanup7");
         hetuServer.execute("drop table if exists testdb.testtableautocleanup8");
-        hetuServer.execute("drop table if exists testdb.testtableautocleanupwithpushdown");
         hetuServer.execute("drop schema if exists testdb");
         hetuServer.execute("drop schema if exists default");
         hetuServer.execute("create schema testdb");
@@ -130,7 +130,7 @@ public class TestCarbondataAutoCleanup
             assertEquals(FileFactory.isFileExist(storePath  + "/carbon.store/testdb/testtableautocleanup1/Fact/Part0/Segment_3", false), false);
         }
         catch (IOException exception) {
-            logger.debug(exception.getMessage());
+
         }
 
         CarbondataMetadata.enableTracingCleanupTask(false);
@@ -159,7 +159,7 @@ public class TestCarbondataAutoCleanup
             assertEquals(FileFactory.isFileExist(storePath  + "/carbon.store/testdb/testtableautocleanup2/Fact/Part0/Segment_2", false), false);
             assertEquals(FileFactory.isFileExist(storePath  + "/carbon.store/testdb/testtableautocleanup2/Fact/Part0/Segment_3", false), false);
         } catch (IOException exception) {
-            logger.debug(exception.getMessage());
+
         }
 
         CarbondataMetadata.enableTracingCleanupTask(false);
@@ -189,7 +189,7 @@ public class TestCarbondataAutoCleanup
             assertEquals(FileFactory.isFileExist(storePath  + "/carbon.store/testdb/testtableautocleanup3/Fact/Part0/Segment_2", false), false);
             assertEquals(FileFactory.isFileExist(storePath  + "/carbon.store/testdb/testtableautocleanup3/Fact/Part0/Segment_3", false), false);
         } catch (IOException exception) {
-            logger.debug(exception.getMessage());
+
         }
 
         CarbondataMetadata.enableTracingCleanupTask(false);
@@ -201,32 +201,32 @@ public class TestCarbondataAutoCleanup
     {
         try {
             hetuServer.execute("set session carbondata.orc_predicate_pushdown_enabled = true");
-            hetuServer.execute("drop table if exists testdb.testtableautocleanupwithpushdown");
-            hetuServer.execute("CREATE TABLE testdb.testtableautocleanupwithpushdown (a int, b int)");
-            hetuServer.execute("INSERT INTO testdb.testtableautocleanupwithpushdown VALUES (10, 11)");
-            hetuServer.execute("INSERT INTO testdb.testtableautocleanupwithpushdown VALUES (110, 211)");
-            hetuServer.execute("INSERT INTO testdb.testtableautocleanupwithpushdown VALUES (120, 311)");
-            hetuServer.execute("INSERT INTO testdb.testtableautocleanupwithpushdown VALUES (130, 411)");
-            hetuServer.execute("INSERT INTO testdb.testtableautocleanupwithpushdown VALUES (130, 511)");
-            hetuServer.execute("vacuum table testdb.testtableautocleanupwithpushdown AND WAIT");
+            hetuServer.execute("drop table if exists testdb.testtableautocleanup3");
+            hetuServer.execute("CREATE TABLE testdb.testtableautocleanup3 (a int, b int)");
+            hetuServer.execute("INSERT INTO testdb.testtableautocleanup3 VALUES (10, 11)");
+            hetuServer.execute("INSERT INTO testdb.testtableautocleanup3 VALUES (110, 211)");
+            hetuServer.execute("INSERT INTO testdb.testtableautocleanup3 VALUES (120, 311)");
+            hetuServer.execute("INSERT INTO testdb.testtableautocleanup3 VALUES (130, 411)");
+            hetuServer.execute("INSERT INTO testdb.testtableautocleanup3 VALUES (130, 511)");
+            hetuServer.execute("vacuum table testdb.testtableautocleanup3 AND WAIT");
 
-            reduceModificationOrdeletionTimesStamp(storePath + "/carbon.store/testdb/testtableautocleanupwithpushdown/Metadata");
+            reduceModificationOrdeletionTimesStamp(storePath + "/carbon.store/testdb/testtableautocleanup3/Metadata");
             CarbondataMetadata.enableTracingCleanupTask(true);
 
-            hetuServer.execute("DELETE FROM testdb.testtableautocleanupwithpushdown WHERE a=130");
+            hetuServer.execute("DELETE FROM testdb.testtableautocleanup3 WHERE a=130");
             try {
                 CarbondataMetadata.waitForSubmittedTasksFinish();
-                assertEquals(FileFactory.isFileExist(storePath + "/carbon.store/testdb/testtableautocleanupwithpushdown/Fact/Part0/Segment_0", false), false);
-                assertEquals(FileFactory.isFileExist(storePath + "/carbon.store/testdb/testtableautocleanupwithpushdown/Fact/Part0/Segment_1", false), false);
-                assertEquals(FileFactory.isFileExist(storePath + "/carbon.store/testdb/testtableautocleanupwithpushdown/Fact/Part0/Segment_2", false), false);
-                assertEquals(FileFactory.isFileExist(storePath + "/carbon.store/testdb/testtableautocleanupwithpushdown/Fact/Part0/Segment_3", false), false);
+                assertEquals(FileFactory.isFileExist(storePath + "/carbon.store/testdb/testtableautocleanup3/Fact/Part0/Segment_0", false), false);
+                assertEquals(FileFactory.isFileExist(storePath + "/carbon.store/testdb/testtableautocleanup3/Fact/Part0/Segment_1", false), false);
+                assertEquals(FileFactory.isFileExist(storePath + "/carbon.store/testdb/testtableautocleanup3/Fact/Part0/Segment_2", false), false);
+                assertEquals(FileFactory.isFileExist(storePath + "/carbon.store/testdb/testtableautocleanup3/Fact/Part0/Segment_3", false), false);
             } catch (IOException exception) {
-                logger.debug(exception.getMessage());
+
             }
         }
         finally {
             CarbondataMetadata.enableTracingCleanupTask(false);
-            hetuServer.execute("drop table testdb.testtableautocleanupwithpushdown");
+            hetuServer.execute("drop table testdb.testtableautocleanup3");
             hetuServer.execute("set session carbondata.orc_predicate_pushdown_enabled = false");
         }
     }
@@ -254,7 +254,7 @@ public class TestCarbondataAutoCleanup
             assertEquals(FileFactory.isFileExist(storePath  + "/carbon.store/testdb/testtableautocleanup4/Fact/Part0/Segment_2", false), false);
             assertEquals(FileFactory.isFileExist(storePath  + "/carbon.store/testdb/testtableautocleanup4/Fact/Part0/Segment_3", false), false);
         } catch (IOException exception) {
-            logger.debug(exception.getMessage());
+
         }
 
         CarbondataMetadata.enableTracingCleanupTask(false);
@@ -285,7 +285,7 @@ public class TestCarbondataAutoCleanup
             assertEquals(FileFactory.isFileExist(storePath  + "/carbon.store/testdb/testtableautocleanup5/Fact/Part0/Segment_3", false), false);
         }
         catch (IOException exception) {
-            logger.debug(exception.getMessage());
+
         }
 
         CarbondataMetadata.enableTracingCleanupTask(false);
@@ -314,7 +314,7 @@ public class TestCarbondataAutoCleanup
             assertEquals(FileFactory.isFileExist(storePath  + "/carbon.store/testdb/testtableautocleanup6/Fact/Part0/Segment_2", false), false);
             assertEquals(FileFactory.isFileExist(storePath  + "/carbon.store/testdb/testtableautocleanup6/Fact/Part0/Segment_3", false), false);
         } catch (IOException exception) {
-            logger.debug(exception.getMessage());
+
         }
 
         CarbondataMetadata.enableTracingCleanupTask(false);
@@ -344,7 +344,7 @@ public class TestCarbondataAutoCleanup
             assertEquals(FileFactory.isFileExist(storePath  + "/carbon.store/testdb/testtableautocleanup7/Fact/Part0/Segment_2", false), false);
             assertEquals(FileFactory.isFileExist(storePath  + "/carbon.store/testdb/testtableautocleanup7/Fact/Part0/Segment_3", false), false);
         } catch (IOException exception) {
-            logger.debug(exception.getMessage());
+
         }
 
         CarbondataMetadata.enableTracingCleanupTask(false);
@@ -374,7 +374,7 @@ public class TestCarbondataAutoCleanup
             assertEquals(FileFactory.isFileExist(storePath  + "/carbon.store/testdb/testtableautocleanup8/Fact/Part0/Segment_2", false), false);
             assertEquals(FileFactory.isFileExist(storePath  + "/carbon.store/testdb/testtableautocleanup8/Fact/Part0/Segment_3", false), false);
         } catch (IOException exception) {
-            logger.debug(exception.getMessage());
+
         }
 
         CarbondataMetadata.enableTracingCleanupTask(false);
@@ -403,7 +403,7 @@ public class TestCarbondataAutoCleanup
                 content = content.replaceFirst(modificationOrdeletionTimesStamp, replace);
                 Files.write(path, content.getBytes(charset));
             } catch (IOException e) {
-                logger.error(e.getMessage());
+                e.printStackTrace();
             }
         }
     }

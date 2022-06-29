@@ -24,12 +24,7 @@ import static org.testng.Assert.assertEquals;
 
 public class TestJdbcSplit
 {
-    private final JdbcSplit split = new JdbcSplit("",
-            "",
-            "tableName",
-            "", "", "",
-            System.nanoTime(), 1,
-            Optional.empty());
+    private final JdbcSplit split = new JdbcSplit(Optional.of("additional predicate"));
 
     @Test
     public void testAddresses()
@@ -38,12 +33,7 @@ public class TestJdbcSplit
         assertEquals(split.getAddresses(), ImmutableList.of());
         assertEquals(split.isRemotelyAccessible(), true);
 
-        JdbcSplit jdbcSplit = new JdbcSplit("",
-                "",
-                "tableName",
-                "", "", "",
-                System.nanoTime(), 1,
-                Optional.empty());
+        JdbcSplit jdbcSplit = new JdbcSplit(Optional.empty());
         assertEquals(jdbcSplit.getAddresses(), ImmutableList.of());
     }
 

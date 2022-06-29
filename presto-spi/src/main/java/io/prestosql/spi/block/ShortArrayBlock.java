@@ -35,11 +35,11 @@ public class ShortArrayBlock
 {
     private static final int INSTANCE_SIZE = ClassLayout.parseClass(ShortArrayBlock.class).instanceSize();
 
-    protected final int arrayOffset;
+    private final int arrayOffset;
     private final int positionCount;
     @Nullable
-    protected final boolean[] valueIsNull;
-    protected final short[] values;
+    private final boolean[] valueIsNull;
+    private final short[] values;
 
     private final long sizeInBytes;
     private final long retainedSizeInBytes;
@@ -196,9 +196,9 @@ public class ShortArrayBlock
     {
         checkValidRegion(getPositionCount(), positionOffset, length);
 
-        int finalPositionOffset = positionOffset + arrayOffset;
-        boolean[] newValueIsNull = valueIsNull == null ? null : compactArray(valueIsNull, finalPositionOffset, length);
-        short[] newValues = compactArray(values, finalPositionOffset, length);
+        positionOffset += arrayOffset;
+        boolean[] newValueIsNull = valueIsNull == null ? null : compactArray(valueIsNull, positionOffset, length);
+        short[] newValues = compactArray(values, positionOffset, length);
 
         if (newValueIsNull == valueIsNull && newValues == values) {
             return this;
@@ -231,13 +231,8 @@ public class ShortArrayBlock
     @Override
     public boolean[] filter(BloomFilter filter, boolean[] validPositions)
     {
-        for (int i = 0; i < positionCount; i++) {
-            if (valueIsNull != null && valueIsNull[i + arrayOffset]) {
-                validPositions[i] = validPositions[i] && filter.test((byte[]) null);
-            }
-            else {
-                validPositions[i] = validPositions[i] && filter.test(values[i + arrayOffset]);
-            }
+        for (int i = 0; i < values.length; i++) {
+            validPositions[i] = validPositions[i] && filter.test(values[i]);
         }
         return validPositions;
     }

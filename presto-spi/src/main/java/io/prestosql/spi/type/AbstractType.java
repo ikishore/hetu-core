@@ -114,13 +114,13 @@ public abstract class AbstractType
     @Override
     public Slice getSlice(Block block, int position)
     {
-        throw new UnsupportedOperationException(String.format("Type Slice can't be converted to type %s", getClass().getName()));
+        throw new UnsupportedOperationException(getClass().getName());
     }
 
     @Override
     public void writeSlice(BlockBuilder blockBuilder, Slice value)
     {
-        throw new UnsupportedOperationException(String.format("Type Slice can't be converted to type %s", getClass().getName()));
+        throw new UnsupportedOperationException(getClass().getName());
     }
 
     @Override

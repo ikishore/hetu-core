@@ -29,6 +29,7 @@ import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.Collections;
 import java.util.List;
+import java.util.Random;
 
 import static com.google.common.base.Preconditions.checkArgument;
 import static io.airlift.slice.Slices.utf8Slice;
@@ -380,22 +381,6 @@ public final class BlockAssertions
         return builder.build();
     }
 
-    public static Block createLongSequenceBlockWithNull(int start, int end, int nullIndex)
-    {
-        BlockBuilder builder = BIGINT.createFixedSizeBlockBuilder(end - start);
-
-        for (int i = start; i < end; i++) {
-            if (i == nullIndex) {
-                builder.appendNull();
-            }
-            else {
-                BIGINT.writeLong(builder, i);
-            }
-        }
-
-        return builder.build();
-    }
-
     public static Block createLongDictionaryBlock(int start, int length)
     {
         checkArgument(length > 5, "block must have more than 5 entries");
@@ -565,6 +550,62 @@ public final class BlockAssertions
 
         for (int i = start; i < end; ++i) {
             type.writeSlice(builder, encodeUnscaledValue(BigInteger.valueOf(i).multiply(base)));
+        }
+
+        return builder.build();
+    }
+
+    public static Block createLongUniformBlock(Random rnd, Long range, int length)
+    {
+        BlockBuilder builder = BIGINT.createFixedSizeBlockBuilder(length);
+
+        for (int i = 0; i < length; i++) {
+            BIGINT.writeLong(builder, Math.abs(rnd.nextInt()) % range);
+        }
+
+        return builder.build();
+    }
+
+    public static Block createQuerySetBlock(int numberOfQueries, Random rnd, int length)
+    {
+        BlockBuilder builder = BIGINT.createFixedSizeBlockBuilder(length);
+
+        long mask = ((1L) << numberOfQueries) - 1L;
+
+        for (int i = 0; i < length; i++) {
+            BIGINT.writeLong(builder, mask);
+        }
+
+        return builder.build();
+    }
+
+    public static Block createUniformQuerySetBlock(int numberOfQueries, Random rnd, int length)
+    {
+        BlockBuilder builder = BIGINT.createFixedSizeBlockBuilder(length);
+
+        long mask = ((1L) << numberOfQueries) - 1L;
+
+        for (int i = 0; i < length; i++) {
+            BIGINT.writeLong(builder, mask);
+        }
+
+        return builder.build();
+    }
+
+    public static Block createProbabilisticQuerySetBlock(int numberOfQueries, Random rnd, double probability, int length)
+    {
+        BlockBuilder builder = BIGINT.createFixedSizeBlockBuilder(length);
+
+        for (int i = 0; i < length; i++) {
+            Long mask = 0L;
+
+            for (int j = 0; j < numberOfQueries; j++) {
+                if (rnd.nextDouble() < probability) {
+                    mask |= 1L << j;
+                }
+            }
+
+            BIGINT.writeLong(builder, mask);
         }
 
         return builder.build();

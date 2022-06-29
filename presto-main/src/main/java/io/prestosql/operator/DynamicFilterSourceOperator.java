@@ -15,25 +15,18 @@ package io.prestosql.operator;
 
 import io.airlift.log.Logger;
 import io.airlift.units.DataSize;
-import io.prestosql.snapshot.RecoveryUtils;
-import io.prestosql.snapshot.SingleInputSnapshotState;
 import io.prestosql.spi.Page;
 import io.prestosql.spi.block.Block;
 import io.prestosql.spi.plan.PlanNodeId;
-import io.prestosql.spi.snapshot.BlockEncodingSerdeProvider;
-import io.prestosql.spi.snapshot.RestorableConfig;
 import io.prestosql.spi.type.Type;
 import io.prestosql.spi.type.TypeUtils;
 
-import java.io.Serializable;
-import java.util.Arrays;
 import java.util.HashMap;
 import java.util.HashSet;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
 import java.util.function.Consumer;
-import java.util.stream.Collectors;
 
 import static com.google.common.base.Preconditions.checkState;
 import static com.google.common.base.Verify.verify;
@@ -45,7 +38,6 @@ import static java.util.stream.Collectors.toSet;
  * The collected pages' value are used for creating a run-time filtering constraint (for probe-side table scan in an inner join).
  * We support only small build-side pages (which should be the case when using "broadcast" join).
  */
-@RestorableConfig(uncapturedFields = {"dynamicPredicateConsumer", "channels", "finished", "current", "snapshotState"})
 public class DynamicFilterSourceOperator
         implements Operator
 {
@@ -59,8 +51,6 @@ public class DynamicFilterSourceOperator
     private Page current;
 
     private Map<Channel, Set> values;
-
-    private final SingleInputSnapshotState snapshotState;
 
     /**
      * Constructor for the Dynamic Filter Source Operator
@@ -84,7 +74,6 @@ public class DynamicFilterSourceOperator
         for (Channel channel : channels) {
             values.put(channel, new HashSet<>());
         }
-        this.snapshotState = context.isSnapshotEnabled() ? SingleInputSnapshotState.forOperator(this, context) : null;
     }
 
     @Override
@@ -103,13 +92,6 @@ public class DynamicFilterSourceOperator
     public void addInput(Page page)
     {
         verify(!finished, "DynamicFilterSourceOperator: addInput() may not be called after finish()");
-
-        if (snapshotState != null) {
-            if (snapshotState.processPage(page)) {
-                return;
-            }
-        }
-
         current = page;
         if (values == null) {
             return;  // the predicate became too large.
@@ -149,22 +131,9 @@ public class DynamicFilterSourceOperator
     @Override
     public Page getOutput()
     {
-        if (snapshotState != null) {
-            Page marker = snapshotState.nextMarker();
-            if (marker != null) {
-                return marker;
-            }
-        }
-
         Page result = current;
         current = null;
         return result;
-    }
-
-    @Override
-    public Page pollMarker()
-    {
-        return snapshotState.nextMarker();
     }
 
     @Override
@@ -187,11 +156,6 @@ public class DynamicFilterSourceOperator
     @Override
     public boolean isFinished()
     {
-        if (snapshotState != null && snapshotState.hasMarker()) {
-            // Snapshot: there are pending markers. Need to send them out before finishing this operator.
-            return false;
-        }
-
         return current == null && finished;
     }
 
@@ -229,66 +193,6 @@ public class DynamicFilterSourceOperator
         {
             return index;
         }
-    }
-
-    @Override
-    public void close()
-    {
-        if (snapshotState != null) {
-            snapshotState.close();
-        }
-    }
-
-    @Override
-    public Object capture(BlockEncodingSerdeProvider serdeProvider)
-    {
-        DynamicFilterSourceOperatorState myState = new DynamicFilterSourceOperatorState();
-        myState.context = context.capture(serdeProvider);
-        if (values != null) {
-            myState.values = channels
-                    .stream()
-                    .map(channel -> values.get(channel)
-                            .stream()
-                            .map(value -> RecoveryUtils.captureHelper(value, serdeProvider))
-                            .toArray())
-                    .toArray(Object[][]::new);
-        }
-        return myState;
-    }
-
-    @Override
-    public void restore(Object state, BlockEncodingSerdeProvider serdeProvider)
-    {
-        DynamicFilterSourceOperatorState myState = (DynamicFilterSourceOperatorState) state;
-        this.context.restore(myState.context, serdeProvider);
-        if (myState.values == null) {
-            this.values = null;
-        }
-        else {
-            if (this.values == null) {
-                this.values = new HashMap<>();
-                for (Channel channel : channels) {
-                    this.values.put(channel, new HashSet<>());
-                }
-            }
-            checkState(myState.values.length == channels.size());
-            for (int i = 0; i < channels.size(); i++) {
-                Type valueType = channels.get(i).type;
-                Set<?> set = Arrays
-                        .stream(myState.values[i])
-                        .map(value -> RecoveryUtils.restoreHelper(value, valueType.getJavaType(), serdeProvider))
-                        .collect(Collectors.toSet());
-                values.get(channels.get(i)).clear();
-                values.get(channels.get(i)).addAll(set);
-            }
-        }
-    }
-
-    private static class DynamicFilterSourceOperatorState
-            implements Serializable
-    {
-        private Object context;
-        private Object[][] values;
     }
 
     public static class DynamicFilterSourceOperatorFactory

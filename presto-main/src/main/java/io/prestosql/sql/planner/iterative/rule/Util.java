@@ -22,7 +22,6 @@ import io.prestosql.spi.plan.ProjectNode;
 import io.prestosql.spi.plan.Symbol;
 import io.prestosql.spi.relation.RowExpression;
 import io.prestosql.sql.planner.SymbolsExtractor;
-import io.prestosql.sql.planner.TypeProvider;
 import io.prestosql.sql.planner.plan.AssignmentUtils;
 import io.prestosql.sql.relational.OriginalExpressionUtils;
 
@@ -83,7 +82,7 @@ class Util
     /**
      * @return If the node has outputs not in permittedOutputs, returns an identity projection containing only those node outputs also in permittedOutputs.
      */
-    public static Optional<PlanNode> restrictOutputs(PlanNodeIdAllocator idAllocator, PlanNode node, Set<Symbol> permittedOutputs, boolean useRowExpression, TypeProvider typeProvider)
+    public static Optional<PlanNode> restrictOutputs(PlanNodeIdAllocator idAllocator, PlanNode node, Set<Symbol> permittedOutputs)
     {
         List<Symbol> restrictedOutputs = node.getOutputSymbols().stream()
                 .filter(permittedOutputs::contains)
@@ -97,7 +96,7 @@ class Util
                 new ProjectNode(
                         idAllocator.getNextId(),
                         node,
-                        useRowExpression ? AssignmentUtils.identityAssignments(typeProvider, restrictedOutputs) : AssignmentUtils.identityAsSymbolReferences(restrictedOutputs)));
+                        AssignmentUtils.identityAsSymbolReferences(restrictedOutputs)));
     }
 
     /**
@@ -120,7 +119,7 @@ class Util
 
         for (int i = 0; i < node.getSources().size(); ++i) {
             PlanNode oldChild = node.getSources().get(i);
-            Optional<PlanNode> newChild = restrictOutputs(idAllocator, oldChild, permittedChildOutputs.get(i), false, null);
+            Optional<PlanNode> newChild = restrictOutputs(idAllocator, oldChild, permittedChildOutputs.get(i));
             rewroteChildren |= newChild.isPresent();
             newChildrenBuilder.add(newChild.orElse(oldChild));
         }

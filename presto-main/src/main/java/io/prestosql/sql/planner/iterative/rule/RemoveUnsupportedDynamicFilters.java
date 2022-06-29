@@ -21,12 +21,10 @@ import io.prestosql.cost.PlanNodeStatsEstimate;
 import io.prestosql.cost.StatsCalculator;
 import io.prestosql.cost.StatsProvider;
 import io.prestosql.execution.warnings.WarningCollector;
-import io.prestosql.expressions.LogicalRowExpressions;
 import io.prestosql.expressions.RowExpressionRewriter;
 import io.prestosql.expressions.RowExpressionTreeRewriter;
 import io.prestosql.metadata.Metadata;
 import io.prestosql.spi.connector.Constraint;
-import io.prestosql.spi.plan.CTEScanNode;
 import io.prestosql.spi.plan.FilterNode;
 import io.prestosql.spi.plan.JoinNode;
 import io.prestosql.spi.plan.PlanNode;
@@ -34,7 +32,6 @@ import io.prestosql.spi.plan.PlanNodeIdAllocator;
 import io.prestosql.spi.plan.ProjectNode;
 import io.prestosql.spi.plan.Symbol;
 import io.prestosql.spi.plan.TableScanNode;
-import io.prestosql.spi.relation.CallExpression;
 import io.prestosql.spi.relation.RowExpression;
 import io.prestosql.spi.relation.SpecialForm;
 import io.prestosql.spi.relation.VariableReferenceExpression;
@@ -47,8 +44,6 @@ import io.prestosql.sql.planner.plan.ExchangeNode;
 import io.prestosql.sql.planner.plan.InternalPlanVisitor;
 import io.prestosql.sql.planner.plan.SemiJoinNode;
 import io.prestosql.sql.planner.plan.SimplePlanRewriter;
-import io.prestosql.sql.relational.FunctionResolution;
-import io.prestosql.sql.relational.RowExpressionDeterminismEvaluator;
 
 import java.util.HashSet;
 import java.util.List;
@@ -59,17 +54,12 @@ import java.util.stream.Collectors;
 
 import static com.google.common.collect.ImmutableList.toImmutableList;
 import static com.google.common.collect.ImmutableSet.toImmutableSet;
-import static com.google.common.collect.Sets.intersection;
 import static io.prestosql.SystemSessionProperties.getDynamicFilteringMaxSize;
-import static io.prestosql.SystemSessionProperties.isCTEReuseEnabled;
 import static io.prestosql.SystemSessionProperties.isOptimizeDynamicFilterGeneration;
-import static io.prestosql.expressions.LogicalRowExpressions.TRUE_CONSTANT;
-import static io.prestosql.expressions.LogicalRowExpressions.extractAllPredicates;
-import static io.prestosql.expressions.LogicalRowExpressions.extractConjuncts;
-import static io.prestosql.expressions.LogicalRowExpressions.extractDisjuncts;
-import static io.prestosql.expressions.LogicalRowExpressions.extractPredicates;
-import static io.prestosql.spi.relation.SpecialForm.Form.AND;
-import static io.prestosql.spi.relation.SpecialForm.Form.OR;
+import static io.prestosql.spi.sql.RowExpressionUtils.TRUE_CONSTANT;
+import static io.prestosql.spi.sql.RowExpressionUtils.combineConjuncts;
+import static io.prestosql.spi.sql.RowExpressionUtils.combinePredicates;
+import static io.prestosql.spi.sql.RowExpressionUtils.extractConjuncts;
 import static io.prestosql.sql.DynamicFilters.extractDynamicFilters;
 import static io.prestosql.sql.DynamicFilters.getDescriptor;
 import static io.prestosql.sql.DynamicFilters.isDynamicFilter;
@@ -92,13 +82,11 @@ public class RemoveUnsupportedDynamicFilters
     private final StatsCalculator statsCalculator;
     private StatsProvider statsProvider;
     private Set<String> removedDynamicFilterIds;
-    private final LogicalRowExpressions logicalRowExpressions;
 
     public RemoveUnsupportedDynamicFilters(Metadata metadata, StatsCalculator statsCalculator)
     {
         this.metadata = requireNonNull(metadata, "metadata is null");
         this.statsCalculator = requireNonNull(statsCalculator, "statsCalculator is null");
-        this.logicalRowExpressions = new LogicalRowExpressions(new RowExpressionDeterminismEvaluator(metadata), new FunctionResolution(metadata.getFunctionAndTypeManager()), metadata.getFunctionAndTypeManager());
     }
 
     @Override
@@ -107,7 +95,7 @@ public class RemoveUnsupportedDynamicFilters
         this.removedDynamicFilterIds = new HashSet<>();
         this.statsProvider = new CachingStatsProvider(statsCalculator, session, planSymbolAllocator.getTypes());
         PlanWithConsumedDynamicFilters result = plan.accept(new RemoveUnsupportedDynamicFilters.Rewriter(session, metadata, removedDynamicFilterIds), ImmutableSet.of());
-        return SimplePlanRewriter.rewriteWith(new RemoveFilterVisitor(removedDynamicFilterIds, this.metadata), result.getNode(), null);
+        return SimplePlanRewriter.rewriteWith(new RemoveFilterVisitor(removedDynamicFilterIds), result.getNode(), null);
     }
 
     private class Rewriter
@@ -146,15 +134,6 @@ public class RemoveUnsupportedDynamicFilters
         }
 
         @Override
-        public PlanWithConsumedDynamicFilters visitCTEScan(CTEScanNode node, Set<String> allowedDynamicFilterIds)
-        {
-            ImmutableSet.Builder<String> builder = ImmutableSet.<String>builder().addAll(allowedDynamicFilterIds);
-            collectFromCTEScanNode(node.getPredicate().isPresent() ? node.getPredicate().get() : TRUE_CONSTANT, builder);
-            Set<String> allowedDynamicFilterIdsFromCTE = builder.build();
-            return visitPlan(node, allowedDynamicFilterIdsFromCTE);
-        }
-
-        @Override
         public PlanWithConsumedDynamicFilters visitJoin(JoinNode node, Set<String> allowedDynamicFilterIds)
         {
             ImmutableSet.Builder<String> builder = ImmutableSet.<String>builder().addAll(allowedDynamicFilterIds);
@@ -171,19 +150,11 @@ public class RemoveUnsupportedDynamicFilters
 
             PlanWithConsumedDynamicFilters rightResult = node.getRight().accept(this, allowedDynamicFilterIds);
             Set<String> consumed = new HashSet<>(rightResult.getConsumedDynamicFilterIds());
-            Set<String> currentJoinDynamicFilters = node.getDynamicFilters().keySet();
-            Set<String> unsupportedDynamicFiltersFromBuildSide = intersection(currentJoinDynamicFilters, consumed);
-            if (!unsupportedDynamicFiltersFromBuildSide.isEmpty()) {
-                removedDynamicFilterIds.addAll(unsupportedDynamicFiltersFromBuildSide);
-            }
             consumed.addAll(consumedProbeSide);
-
             consumed.removeAll(dynamicFilters.keySet());
 
             PlanNode left = leftResult.getNode();
             PlanNode right = rightResult.getNode();
-            Set<String> removedIdsFromJoin = node.getDynamicFilters().keySet().stream().filter(id -> !dynamicFilters.containsKey(id)).collect(Collectors.toSet());
-            removedDynamicFilterIds.addAll(removedIdsFromJoin);
             if (!left.equals(node.getLeft()) || !right.equals(node.getRight()) || !dynamicFilters.equals(node.getDynamicFilters())) {
                 return new PlanWithConsumedDynamicFilters(new JoinNode(
                         node.getId(),
@@ -228,7 +199,6 @@ public class RemoveUnsupportedDynamicFilters
             }
             else {
                 newFilterId = Optional.empty();
-                removedDynamicFilterIds.add(node.getDynamicFilterId().get());
             }
 
             PlanNode newSource = sourceResult.getNode();
@@ -266,19 +236,13 @@ public class RemoveUnsupportedDynamicFilters
             if (source instanceof TableScanNode) {
                 // Keep only small table
                 DynamicFilters.ExtractResult extractResult = extractDynamicFilters(original);
-                // If there are no allowed dynamic filter passed from join so nothing to be removed hence no need to check stats
-                if (isOptimizeDynamicFilterGeneration(session) && !allowedDynamicFilterIds.isEmpty() && !highSelectivity(node)) {
+                if (isOptimizeDynamicFilterGeneration(session) && !highSelectivity(node)) {
                     modified = removeDynamicFilters(original, ImmutableSet.of(), consumedDynamicFilterIds);
                     extractResult.getDynamicConjuncts().forEach(descriptor -> removedDynamicFilterIds.add(descriptor.getId()));
                 }
                 // Keep only allowed dynamic filters
                 else {
-                    if (isCTEReuseEnabled(session)) {
-                        modified = removeDynamicFiltersForCTE(original, allowedDynamicFilterIds, consumedDynamicFilterIds);
-                    }
-                    else {
-                        modified = removeDynamicFilters(original, allowedDynamicFilterIds, consumedDynamicFilterIds);
-                    }
+                    modified = removeDynamicFilters(original, allowedDynamicFilterIds, consumedDynamicFilterIds);
                 }
             }
             else {
@@ -330,7 +294,7 @@ public class RemoveUnsupportedDynamicFilters
                 // the selectivity cannot be easily calculated,
                 // thus we assume it's not high selectivity
                 if (predicates.isPresent()) {
-                    long numDynamicFilters = extractAllPredicates(predicates.get()).stream().filter(DynamicFilters::isDynamicFilter).count();
+                    long numDynamicFilters = extractConjuncts(predicates.get()).stream().filter(DynamicFilters::isDynamicFilter).count();
                     if (numDynamicFilters > 0) {
                         return false;
                     }
@@ -341,7 +305,7 @@ public class RemoveUnsupportedDynamicFilters
                     return true;
                 }
 
-                Estimate totalRowCount = metadata.getTableStatistics(session, ((TableScanNode) buildSideTableScanNode.get()).getTable(), Constraint.alwaysTrue(), true).getRowCount();
+                Estimate totalRowCount = metadata.getTableStatistics(session, ((TableScanNode) buildSideTableScanNode.get()).getTable(), Constraint.alwaysTrue()).getRowCount();
                 PlanNodeStatsEstimate filteredStats = statsProvider.getStats(node);
 
                 if (!filteredStats.isOutputRowCountUnknown() && !totalRowCount.isUnknown()) {
@@ -361,7 +325,7 @@ public class RemoveUnsupportedDynamicFilters
 
         private boolean highSelectivity(FilterNode node)
         {
-            Estimate totalRowCount = metadata.getTableStatistics(session, ((TableScanNode) node.getSource()).getTable(), Constraint.alwaysTrue(), true).getRowCount();
+            Estimate totalRowCount = metadata.getTableStatistics(session, ((TableScanNode) node.getSource()).getTable(), Constraint.alwaysTrue()).getRowCount();
             PlanNodeStatsEstimate filteredStats = statsProvider.getStats(node);
 
             if (!filteredStats.isOutputRowCountUnknown() && !totalRowCount.isUnknown()) {
@@ -381,7 +345,7 @@ public class RemoveUnsupportedDynamicFilters
 
         private RowExpression removeDynamicFilters(RowExpression expression, Set<String> allowedDynamicFilterIds, ImmutableSet.Builder<String> consumedDynamicFilterIds)
         {
-            return logicalRowExpressions.combineConjuncts(extractConjuncts(expression)
+            return combineConjuncts(extractConjuncts(expression)
                     .stream()
                     .map(this::removeNestedDynamicFilters)
                     .filter(conjunct ->
@@ -397,41 +361,6 @@ public class RemoveUnsupportedDynamicFilters
                     .collect(toImmutableList()));
         }
 
-        private RowExpression removeDynamicFiltersForCTE(RowExpression expression, Set<String> allowedDynamicFilterIds, ImmutableSet.Builder<String> consumedDynamicFilterIds)
-        {
-            if (expression instanceof SpecialForm) {
-                switch (((SpecialForm) expression).getForm()) {
-                    case AND:
-                        return logicalRowExpressions.combineConjuncts(extractConjuncts(expression)
-                                .stream()
-                                .map(exp -> removeDynamicFiltersForCTE(exp, allowedDynamicFilterIds, consumedDynamicFilterIds))
-                                .collect(Collectors.toList()));
-                    case OR:
-                        return logicalRowExpressions.combineDisjuncts(extractDisjuncts(expression)
-                                .stream()
-                                .map(exp -> removeDynamicFiltersForCTE(exp, allowedDynamicFilterIds, consumedDynamicFilterIds))
-                                .collect(Collectors.toList()));
-                    default:
-                        return expression;
-                }
-            }
-            return removeDynamicFilters(expression, allowedDynamicFilterIds, consumedDynamicFilterIds);
-        }
-
-        private void collectFromCTEScanNode(RowExpression predicate, ImmutableSet.Builder<String> builder)
-        {
-            if (predicate instanceof SpecialForm && (((SpecialForm) predicate).getForm() == OR || ((SpecialForm) predicate).getForm() == AND)) {
-                collectFromCTEScanNode(((SpecialForm) predicate).getArguments().get(0), builder);
-                collectFromCTEScanNode(((SpecialForm) predicate).getArguments().get(1), builder);
-            }
-            else if (predicate instanceof CallExpression && getDescriptor(predicate).isPresent()) {
-                builder.add(getDescriptor(predicate).get().getId());
-            }
-            else {
-                return;
-            }
-        }
-
         private RowExpression removeAllDynamicFilters(RowExpression expression)
         {
             RowExpression rewrittenExpression = removeNestedDynamicFilters(expression);
@@ -439,7 +368,7 @@ public class RemoveUnsupportedDynamicFilters
             if (extractResult.getDynamicConjuncts().isEmpty()) {
                 return rewrittenExpression;
             }
-            return logicalRowExpressions.combineConjuncts(extractResult.getStaticConjuncts());
+            return combineConjuncts(extractResult.getStaticConjuncts());
         }
 
         private RowExpression removeNestedDynamicFilters(RowExpression expression)
@@ -449,7 +378,7 @@ public class RemoveUnsupportedDynamicFilters
                 @Override
                 public RowExpression rewriteSpecialForm(SpecialForm node, Void context, RowExpressionTreeRewriter<Void> treeRewriter)
                 {
-                    if (node.getForm() != AND || node.getForm() != OR) {
+                    if (node.getForm() != SpecialForm.Form.AND || node.getForm() != SpecialForm.Form.OR) {
                         return node;
                     }
                     SpecialForm rewrittenNode = treeRewriter.defaultRewrite(node, context);
@@ -474,7 +403,7 @@ public class RemoveUnsupportedDynamicFilters
                     if (!modified) {
                         return node;
                     }
-                    return logicalRowExpressions.combinePredicates(node.getForm(), expressionBuilder.build());
+                    return combinePredicates(node.getForm(), expressionBuilder.build());
                 }
             }, expression);
         }
@@ -506,12 +435,10 @@ public class RemoveUnsupportedDynamicFilters
             extends SimplePlanRewriter<Void>
     {
         private final Set<String> removedDynamicFilterIds;
-        private final LogicalRowExpressions logicalRowExpressions;
 
-        public RemoveFilterVisitor(Set<String> removedDynamicFilterIds, Metadata metadata)
+        public RemoveFilterVisitor(Set<String> removedDynamicFilterIds)
         {
             this.removedDynamicFilterIds = removedDynamicFilterIds;
-            this.logicalRowExpressions = new LogicalRowExpressions(new RowExpressionDeterminismEvaluator(metadata), new FunctionResolution(metadata.getFunctionAndTypeManager()), metadata.getFunctionAndTypeManager());
         }
 
         @Override
@@ -521,7 +448,12 @@ public class RemoveUnsupportedDynamicFilters
             RowExpression original = node.getPredicate();
             RowExpression modified;
             if (source instanceof TableScanNode) {
-                modified = removedDynamicFilterIdsForFilter(original);
+                modified = combineConjuncts(extractConjuncts(original)
+                        .stream()
+                        .filter(conjunct ->
+                                getDescriptor(conjunct)
+                                        .map(descriptor -> !removedDynamicFilterIds.contains(descriptor.getId())).orElse(true))
+                        .collect(toImmutableList()));
             }
             else {
                 modified = original;
@@ -580,40 +512,6 @@ public class RemoveUnsupportedDynamicFilters
                         dynamicFilters);
             }
             return node;
-        }
-
-        private RowExpression removedDynamicFilterIdsForFilter(RowExpression expression)
-        {
-            RowExpression modified;
-            if (expression instanceof SpecialForm) {
-                switch (((SpecialForm) expression).getForm()) {
-                    case AND:
-                        return logicalRowExpressions.combineConjuncts(extractPredicates(AND, expression)
-                                .stream()
-                                .map(this::removedDynamicFilterIdsForFilter)
-                                .collect(Collectors.toList()));
-                    case OR:
-                        RowExpression modifiedDisjunct = logicalRowExpressions.combineDisjuncts(extractPredicates(OR, expression)
-                                .stream()
-                                .map(this::removedDynamicFilterIdsForFilter)
-                                .collect(Collectors.toList()));
-                        if (modifiedDisjunct.equals(TRUE_CONSTANT)) {
-                            extractAllPredicates(expression).stream().filter(conjunct -> getDescriptor(conjunct).isPresent())
-                                    .forEach(conjunct -> removedDynamicFilterIds.add(getDescriptor(conjunct).get().getId()));
-                        }
-                        return modifiedDisjunct;
-                    default:
-                        return expression;
-                }
-            }
-            else {
-                modified = logicalRowExpressions.combineConjuncts(extractConjuncts(expression)
-                            .stream()
-                            .filter(conjunct -> getDescriptor(conjunct)
-                            .map(descriptor -> !removedDynamicFilterIds.contains(descriptor.getId()))
-                            .orElse(true)).collect(toImmutableList()));
-            }
-            return modified;
         }
     }
 }

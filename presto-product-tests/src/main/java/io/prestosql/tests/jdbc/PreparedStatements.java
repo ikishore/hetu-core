@@ -24,7 +24,6 @@ import org.testng.annotations.Test;
 
 import java.math.BigDecimal;
 import java.math.BigInteger;
-import java.nio.charset.StandardCharsets;
 import java.sql.Connection;
 import java.sql.Date;
 import java.sql.SQLException;
@@ -374,7 +373,7 @@ public class PreparedStatements
                             "def",
                             "ghi       ",
                             Boolean.FALSE,
-                            "jkl".getBytes(StandardCharsets.UTF_8)),
+                            "jkl".getBytes()),
                     row(null, null, null, null, null, null, null, null, null, null, null, null, null, null, null));
         }
         else {

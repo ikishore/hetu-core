@@ -20,8 +20,6 @@ import static java.util.Objects.requireNonNull;
 
 public final class CatalogSchemaName
 {
-    public static final CatalogSchemaName DEFAULT_NAMESPACE = new CatalogSchemaName("presto", "default");
-
     private final String catalogName;
     private final String schemaName;
 

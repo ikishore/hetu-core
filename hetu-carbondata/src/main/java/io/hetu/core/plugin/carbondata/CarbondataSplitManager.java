@@ -14,7 +14,6 @@
 package io.hetu.core.plugin.carbondata;
 
 import com.google.common.collect.ImmutableList;
-import com.google.common.collect.ImmutableMap;
 import com.google.gson.Gson;
 import io.hetu.core.plugin.carbondata.impl.CarbondataLocalInputSplit;
 import io.hetu.core.plugin.carbondata.impl.CarbondataLocalMultiBlockSplit;
@@ -140,7 +139,7 @@ public class CarbondataSplitManager
     @Override
     public ConnectorSplitSource getSplits(ConnectorTransactionHandle transactionHandle,
             ConnectorSession session, ConnectorTableHandle tableHandle,
-            SplitSchedulingStrategy splitSchedulingStrategy, Supplier<List<Set<DynamicFilter>>> dynamicFilterSupplier,
+            SplitSchedulingStrategy splitSchedulingStrategy, Supplier<Set<DynamicFilter>> dynamicFilterSupplier,
             Optional<QueryType> queryType, Map<String, Object> queryProperties,
             Set<TupleDomain<ColumnMetadata>> userDefinedCachePredicates,
             boolean partOfReuse)
@@ -201,7 +200,7 @@ public class CarbondataSplitManager
                             0, 0, 0, 0,
                             properties, new ArrayList(), getHostAddresses(split.getLocations()),
                             OptionalInt.empty(), false, new HashMap<>(),
-                            Optional.empty(), false, Optional.empty(), Optional.empty(), false, ImmutableMap.of())));
+                            Optional.empty(), false, Optional.empty(), Optional.empty(), false)));
                     /* Todo: Make this part aligned with rest of the HiveSlipt loading flow...
                      *   and figure out how to pass valid transaction Ids to CarbonData? */
                 }
@@ -310,7 +309,7 @@ public class CarbondataSplitManager
                         schemaTableName.getTableName(), tablePath, 0L, 0L, 0L, 0L,
                         properties, new ArrayList(), getHostAddresses(currSplit.getLocations()),
                         OptionalInt.empty(), false, new HashMap<>(),
-                        Optional.empty(), false, Optional.empty(), Optional.empty(), false, ImmutableMap.of())));
+                        Optional.empty(), false, Optional.empty(), Optional.empty(), false)));
             }
         }
         LOGGER.info("Splits for compaction built and ready");

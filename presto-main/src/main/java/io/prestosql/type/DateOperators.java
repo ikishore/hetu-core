@@ -114,7 +114,17 @@ public final class DateOperators
     @SqlType(StandardTypes.TIMESTAMP)
     public static long castToTimestamp(ConnectorSession session, @SqlType(StandardTypes.DATE) long value)
     {
-        return TimeUnit.DAYS.toMillis(value);
+        if (session.isLegacyTimestamp()) {
+            long utcMillis = TimeUnit.DAYS.toMillis(value);
+
+            // date is encoded as milliseconds at midnight in UTC
+            // convert to midnight in the session timezone
+            ISOChronology chronology = getChronology(session.getTimeZoneKey());
+            return utcMillis - chronology.getZone().getOffset(utcMillis);
+        }
+        else {
+            return TimeUnit.DAYS.toMillis(value);
+        }
     }
 
     @ScalarOperator(CAST)
@@ -147,7 +157,7 @@ public final class DateOperators
         try {
             return parseDate(trim(value).toStringUtf8());
         }
-        catch (IllegalArgumentException | ArithmeticException e) {
+        catch (IllegalArgumentException e) {
             throw new PrestoException(INVALID_CAST_ARGUMENT, "Value cannot be cast to date: " + value.toStringUtf8(), e);
         }
     }

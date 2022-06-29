@@ -1,5 +1,5 @@
 /*
- * Copyright (C) 2018-2021. Huawei Technologies Co., Ltd. All rights reserved.
+ * Copyright (C) 2018-2020. Huawei Technologies Co., Ltd. All rights reserved.
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
  * You may obtain a copy of the License at
@@ -36,11 +36,6 @@ public interface Seed
     String TIMESTAMP_PROPERTY_NAME = "timestamp";
 
     /**
-     * Internal state store URI (currently only used in FileBasedSeedOnYarn)
-     */
-    String INTERNAL_STATE_STORE_URI_PROPERTY_NAME = "internal-state-store-uri";
-
-    /**
      * Get location of seed
      *
      * @return location of seed
@@ -48,32 +43,11 @@ public interface Seed
     String getLocation();
 
     /**
-     * St location of seed
-     *
-     * @return void
-     */
-    void setLocation(String location);
-
-    /**
      * Get timestamp of seed
      *
      * @return timestamp of seed
      */
     long getTimestamp();
-
-    /**
-     * Set timestamp of seed
-     *
-     * @return void
-     */
-    void setTimestamp(long timestamp);
-
-    /**
-     * Get attribute of seed
-     * @param key
-     * @return value of attribute
-     */
-    String getUniqueInstanceId();
 
     /**
      * Serialize seed object to string and return

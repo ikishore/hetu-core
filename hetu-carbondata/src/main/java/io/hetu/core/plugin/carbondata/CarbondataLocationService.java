@@ -80,6 +80,8 @@ public class CarbondataLocationService
     {
         // TODO: check and make it compatible for cloud scenario
 
+        HdfsEnvironment.HdfsContext context =
+                new HdfsEnvironment.HdfsContext(session, table.getDatabaseName(), table.getTableName());
         Path targetPath = new Path(table.getStorage().getLocation());
 
         return new LocationHandle(targetPath, targetPath, true,

@@ -1,5 +1,5 @@
 /*
- * Copyright (C) 2018-2021. Huawei Technologies Co., Ltd. All rights reserved.
+ * Copyright (C) 2018-2020. Huawei Technologies Co., Ltd. All rights reserved.
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
  * You may obtain a copy of the License at
@@ -56,7 +56,7 @@ public class TestIndexCacheLoader
         IndexCacheKey indexCacheKey = new IndexCacheKey("/path/to/split", 1);
 
         // throw exception to produce "no last modified time file found" behaviour
-        when(indexclient.getLastModifiedTime((indexCacheKey.getPath()))).thenThrow(Exception.class);
+        when(indexclient.getLastModified((indexCacheKey.getPath()))).thenThrow(Exception.class);
 
         indexCacheLoader.load(indexCacheKey);
     }
@@ -70,7 +70,7 @@ public class TestIndexCacheLoader
         IndexCacheKey indexCacheKey = new IndexCacheKey("/path/to/split", 1L);
 
         // return different last modified time to simulate expired index
-        when(indexclient.getLastModifiedTime((indexCacheKey.getPath()))).thenReturn(2L);
+        when(indexclient.getLastModified((indexCacheKey.getPath()))).thenReturn(2L);
 
         indexCacheLoader.load(indexCacheKey);
     }
@@ -83,7 +83,7 @@ public class TestIndexCacheLoader
 
         long lastModifiedTime = 1L;
         IndexCacheKey indexCacheKey = new IndexCacheKey("/path/to/split", lastModifiedTime);
-        when(indexclient.getLastModifiedTime((indexCacheKey.getPath()))).thenReturn(lastModifiedTime);
+        when(indexclient.getLastModified((indexCacheKey.getPath()))).thenReturn(lastModifiedTime);
         when(indexclient.readSplitIndex((indexCacheKey.getPath()))).thenThrow(Exception.class);
 
         indexCacheLoader.load(indexCacheKey);
@@ -97,7 +97,7 @@ public class TestIndexCacheLoader
 
         long lastModifiedTime = 1L;
         IndexCacheKey indexCacheKey = new IndexCacheKey("/path/to/split", lastModifiedTime);
-        when(indexclient.getLastModifiedTime((indexCacheKey.getPath()))).thenReturn(lastModifiedTime);
+        when(indexclient.getLastModified((indexCacheKey.getPath()))).thenReturn(lastModifiedTime);
         when(indexclient.readSplitIndex((indexCacheKey.getPath()))).thenReturn(Collections.emptyList());
 
         indexCacheLoader.load(indexCacheKey);
@@ -114,7 +114,7 @@ public class TestIndexCacheLoader
 
         long lastModifiedTime = 1L;
         IndexCacheKey indexCacheKey = new IndexCacheKey("/path/to/split", lastModifiedTime);
-        when(indexclient.getLastModifiedTime((indexCacheKey.getPath()))).thenReturn(lastModifiedTime);
+        when(indexclient.getLastModified((indexCacheKey.getPath()))).thenReturn(lastModifiedTime);
         when(indexclient.readSplitIndex((indexCacheKey.getPath()))).thenReturn(expectedSplitIndexes);
 
         List<IndexMetadata> actualSplitIndexes = indexCacheLoader.load(indexCacheKey);

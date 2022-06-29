@@ -31,10 +31,10 @@ import io.prestosql.execution.TableInfo;
 import io.prestosql.execution.resourcegroups.IndexedPriorityQueue;
 import io.prestosql.metadata.InternalNode;
 import io.prestosql.metadata.InternalNodeManager;
+import io.prestosql.metadata.QualifiedObjectName;
 import io.prestosql.metadata.Split;
 import io.prestosql.spi.HostAddress;
 import io.prestosql.spi.PrestoException;
-import io.prestosql.spi.connector.QualifiedObjectName;
 import io.prestosql.spi.plan.PlanNodeId;
 import io.prestosql.spi.plan.TableScanNode;
 import sun.reflect.generics.reflectiveObjects.NotImplementedException;
@@ -50,7 +50,6 @@ import java.util.Map;
 import java.util.Optional;
 import java.util.Set;
 import java.util.concurrent.atomic.AtomicReference;
-import java.util.stream.Collectors;
 
 import static io.prestosql.execution.scheduler.NodeScheduler.calculateLowWatermark;
 import static io.prestosql.execution.scheduler.NodeScheduler.randomizedNodes;
@@ -69,15 +68,14 @@ public class SimpleNodeSelector
     private static final Logger log = Logger.get(SimpleNodeSelector.class);
 
     private final InternalNodeManager nodeManager;
-    protected final NodeTaskMap nodeTaskMap;
+    private final NodeTaskMap nodeTaskMap;
     private final boolean includeCoordinator;
-    protected final AtomicReference<Supplier<NodeMap>> nodeMap;
+    private final AtomicReference<Supplier<NodeMap>> nodeMap;
     private final int minCandidates;
-    protected final int maxSplitsPerNode;
-    protected final int maxPendingSplitsPerTask;
+    private final int maxSplitsPerNode;
+    private final int maxPendingSplitsPerTask;
     private final boolean optimizedLocalScheduling;
-    private final TableSplitAssignmentInfo tableSplitAssignmentInfo;
-    private final Map<PlanNodeId, FixedNodeScheduleData> feederScheduledNodes;
+    private TableSplitAssignmentInfo tableSplitAssignmentInfo;
 
     public SimpleNodeSelector(
             InternalNodeManager nodeManager,
@@ -87,8 +85,7 @@ public class SimpleNodeSelector
             int minCandidates,
             int maxSplitsPerNode,
             int maxPendingSplitsPerTask,
-            boolean optimizedLocalScheduling,
-            Map<PlanNodeId, FixedNodeScheduleData> feederScheduledNodes)
+            boolean optimizedLocalScheduling)
     {
         this.nodeManager = requireNonNull(nodeManager, "nodeManager is null");
         this.nodeTaskMap = requireNonNull(nodeTaskMap, "nodeTaskMap is null");
@@ -99,7 +96,6 @@ public class SimpleNodeSelector
         this.maxPendingSplitsPerTask = maxPendingSplitsPerTask;
         this.optimizedLocalScheduling = optimizedLocalScheduling;
         tableSplitAssignmentInfo = TableSplitAssignmentInfo.getInstance();
-        this.feederScheduledNodes = feederScheduledNodes;
     }
 
     @Override
@@ -115,15 +111,6 @@ public class SimpleNodeSelector
     }
 
     @Override
-    public int selectableNodeCount()
-    {
-        NodeMap map = nodeMap.get().get();
-        return (int) map.getNodesByHostAndPort().values().stream()
-                .filter(InternalNode::isWorker)
-                .count();
-    }
-
-    @Override
     public InternalNode selectCurrentNode()
     {
         // TODO: this is a hack to force scheduling on the coordinator
@@ -133,17 +120,17 @@ public class SimpleNodeSelector
     @Override
     public List<InternalNode> selectRandomNodes(int limit, Set<InternalNode> excludedNodes)
     {
-        return selectNodes(limit, randomizedNodes(nodeMap.get().get(), excludedNodes));
+        return selectNodes(limit, randomizedNodes(nodeMap.get().get(), includeCoordinator, excludedNodes));
     }
 
     @Override
     public SplitPlacementResult computeAssignments(Set<Split> splits, List<RemoteTask> existingTasks, Optional<SqlStageExecution> stage)
     {
         Multimap<InternalNode, Split> assignment = HashMultimap.create();
-        NodeMap nodeMapSlice = this.nodeMap.get().get();
-        NodeAssignmentStats assignmentStats = new NodeAssignmentStats(nodeTaskMap, nodeMapSlice, existingTasks);
+        NodeMap nodeMap = this.nodeMap.get().get();
+        NodeAssignmentStats assignmentStats = new NodeAssignmentStats(nodeTaskMap, nodeMap, existingTasks);
 
-        ResettableRandomizedIterator<InternalNode> randomCandidates = randomizedNodes(nodeMapSlice, ImmutableSet.of());
+        ResettableRandomizedIterator<InternalNode> randomCandidates = randomizedNodes(nodeMap, includeCoordinator, ImmutableSet.of());
         Set<InternalNode> blockedExactNodes = new HashSet<>();
         boolean splitWaitingForAnyNode = false;
         // splitsToBeRedistributed becomes true only when splits go through locality-based assignment
@@ -182,7 +169,7 @@ public class SimpleNodeSelector
             if (optimizedLocalScheduling) { //should not hit for consumer case
                 for (Split split : splits) {
                     if (split.isRemotelyAccessible() && !split.getAddresses().isEmpty()) {
-                        List<InternalNode> candidateNodes = selectExactNodes(nodeMapSlice, split.getAddresses(), includeCoordinator);
+                        List<InternalNode> candidateNodes = selectExactNodes(nodeMap, split.getAddresses(), includeCoordinator);
 
                         Optional<InternalNode> chosenNode = candidateNodes.stream()
                                 .filter(ownerNode -> assignmentStats.getTotalSplitCount(ownerNode) < maxSplitsPerNode)
@@ -206,13 +193,13 @@ public class SimpleNodeSelector
 
                 List<InternalNode> candidateNodes;
                 if (!split.isRemotelyAccessible()) {
-                    candidateNodes = selectExactNodes(nodeMapSlice, split.getAddresses(), includeCoordinator);
+                    candidateNodes = selectExactNodes(nodeMap, split.getAddresses(), includeCoordinator);
                 }
                 else {
                     candidateNodes = selectNodes(minCandidates, randomCandidates);
                 }
                 if (candidateNodes.isEmpty()) {
-                    log.debug("No nodes available to schedule %s. Available nodes %s", split, nodeMapSlice.getNodesByHost().keys());
+                    log.debug("No nodes available to schedule %s. Available nodes %s", split, nodeMap.getNodesByHost().keys());
                     throw new PrestoException(NO_NODES_AVAILABLE, "No nodes available to run query");
                 }
 
@@ -262,7 +249,7 @@ public class SimpleNodeSelector
 
         if (!stage.isPresent() || stage.get().getStateMachine().getConsumerScanNode() == null) {
             if (splitsToBeRedistributed) { //skip for consumer
-                equateDistribution(assignment, assignmentStats, nodeMapSlice);
+                equateDistribution(assignment, assignmentStats, nodeMap);
             }
         }
 
@@ -271,32 +258,11 @@ public class SimpleNodeSelector
             // if node exists, get the TableScanNode and annotate it as producer
             saveProducerScanNodeAssignment(stage, assignment, assignmentStats);
         }
-
-        // Check if its CTE node and its feeder
-        if (stage.isPresent() && stage.get().getFragment().getFeederCTEId().isPresent()) {
-            updateFeederNodeAndSplitCount(stage.get(), assignment);
-        }
-
         return new SplitPlacementResult(blocked, assignment);
     }
 
-    private void updateFeederNodeAndSplitCount(SqlStageExecution stage, Multimap<InternalNode, Split> assignment)
-    {
-        FixedNodeScheduleData data;
-        if (feederScheduledNodes.containsKey(stage.getFragment().getFeederCTEParentId().get())) {
-            data = feederScheduledNodes.get(stage.getFragment().getFeederCTEParentId().get());
-            data.updateSplitCount(assignment.size());
-            data.updateAssignedNodes(assignment.keys().stream().collect(Collectors.toSet()));
-        }
-        else {
-            data = new FixedNodeScheduleData(assignment.size(), assignment.keys().stream().collect(Collectors.toSet()));
-        }
-
-        feederScheduledNodes.put(stage.getFragment().getFeederCTEParentId().get(), data);
-    }
-
     private Multimap createConsumerScanNodeAssignment(QualifiedObjectName tableName, Set<Split> splits, Set<SplitKey> splitKeySet,
-            HashMap<SplitKey, InternalNode> splitKeyNodeAssignment)
+                                                      HashMap<SplitKey, InternalNode> splitKeyNodeAssignment)
     {
         Multimap<InternalNode, Split> assignment = HashMultimap.create();
         for (Split split : splits) {
@@ -349,7 +315,6 @@ public class SimpleNodeSelector
      * The method tries to make the distribution of splits more uniform. All nodes are arranged into a maxHeap and a minHeap
      * based on the number of splits that are assigned to them. Splits are redistributed, one at a time, from a maxNode to a
      * minNode until we have as uniform a distribution as possible.
-     *
      * @param assignment the node-splits multimap after the first and the second stage
      * @param assignmentStats required to obtain info regarding splits assigned to a node outside the current batch of assignment
      * @param nodeMap to get a list of all nodes to which splits can be assigned

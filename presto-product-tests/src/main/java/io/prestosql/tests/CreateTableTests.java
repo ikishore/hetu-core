@@ -15,7 +15,6 @@
 package io.prestosql.tests;
 
 import com.google.inject.Inject;
-import io.airlift.log.Logger;
 import io.prestosql.tempto.ProductTest;
 import io.prestosql.tempto.Requires;
 import io.prestosql.tempto.fulfillment.table.hive.tpch.ImmutableTpchTablesRequirements.ImmutableNationTable;
@@ -41,8 +40,6 @@ public class CreateTableTests
 
     @Inject
     private HdfsClient hdfsClient;
-
-    private static final Logger LOG = Logger.get(CreateTableTests.class);
 
     @Test(groups = CREATE_TABLE)
     public void shouldCreateTableAsSelect()
@@ -80,7 +77,7 @@ public class CreateTableTests
                 threads[i].join();
             }
             catch (InterruptedException e) {
-                LOG.info("Error message: " + e.getStackTrace());
+                e.printStackTrace();
             }
         }
         //after simultaneous create Table, it should allow to insert, update
@@ -103,7 +100,7 @@ public class CreateTableTests
                 threads[i].join();
             }
             catch (InterruptedException e) {
-                LOG.info("Error message: " + e.getStackTrace());
+                e.printStackTrace();
             }
         }
         // after simultaneous drop there should not be table folder

@@ -17,7 +17,6 @@ import io.prestosql.spi.dynamicfilter.DynamicFilter;
 import io.prestosql.spi.predicate.TupleDomain;
 import io.prestosql.spi.resourcegroups.QueryType;
 
-import java.util.List;
 import java.util.Map;
 import java.util.Optional;
 import java.util.Set;
@@ -49,7 +48,7 @@ public interface ConnectorSplitManager
             ConnectorSession session,
             ConnectorTableHandle table,
             SplitSchedulingStrategy splitSchedulingStrategy,
-            Supplier<List<Set<DynamicFilter>>> dynamicFilterSupplier,
+            Supplier<Set<DynamicFilter>> dynamicFilterSupplier,
             Optional<QueryType> queryType,
             Map<String, Object> queryInfo,
             Set<TupleDomain<ColumnMetadata>> userDefinedCachePredicates,

@@ -15,6 +15,7 @@ package io.prestosql.server;
 
 import com.fasterxml.jackson.annotation.JsonCreator;
 import com.fasterxml.jackson.annotation.JsonProperty;
+import com.google.common.collect.ImmutableList;
 import io.prestosql.Session;
 import io.prestosql.SessionRepresentation;
 import io.prestosql.execution.QueryInfo;
@@ -29,6 +30,7 @@ import javax.annotation.Nullable;
 import javax.annotation.concurrent.Immutable;
 
 import java.net.URI;
+import java.util.List;
 import java.util.Optional;
 
 import static com.google.common.base.MoreObjects.toStringHelper;
@@ -45,6 +47,7 @@ import static java.util.Objects.requireNonNull;
 public class BasicQueryInfo
 {
     private final QueryId queryId;
+    private final List<QueryId> batchQueries;
     private final SessionRepresentation session;
     private final Optional<ResourceGroupId> resourceGroupId;
     private final QueryState state;
@@ -56,6 +59,38 @@ public class BasicQueryInfo
     private final BasicQueryStats queryStats;
     private final ErrorType errorType;
     private final ErrorCode errorCode;
+
+    @JsonCreator
+    public BasicQueryInfo(
+            @JsonProperty("queryId") QueryId queryId,
+            @JsonProperty("batchQueries") List<QueryId> batchQueries,
+            @JsonProperty("session") SessionRepresentation session,
+            @JsonProperty("resourceGroupId") Optional<ResourceGroupId> resourceGroupId,
+            @JsonProperty("state") QueryState state,
+            @JsonProperty("memoryPool") MemoryPoolId memoryPool,
+            @JsonProperty("scheduled") boolean scheduled,
+            @JsonProperty("self") URI self,
+            @JsonProperty("query") String query,
+            @JsonProperty("preparedQuery") Optional<String> preparedQuery,
+            @JsonProperty("queryStats") BasicQueryStats queryStats,
+            @JsonProperty("errorType") ErrorType errorType,
+            @JsonProperty("errorCode") ErrorCode errorCode)
+    {
+        this.queryId = requireNonNull(queryId, "queryId is null");
+        this.batchQueries = ImmutableList.copyOf(batchQueries);
+        this.session = requireNonNull(session, "session is null");
+        this.resourceGroupId = requireNonNull(resourceGroupId, "resourceGroupId is null");
+        this.state = requireNonNull(state, "state is null");
+        this.memoryPool = memoryPool;
+        this.errorType = errorType;
+        this.errorCode = errorCode;
+        this.scheduled = scheduled;
+        this.self = requireNonNull(self, "self is null");
+        this.query = requireNonNull(query, "query is null");
+        this.preparedQuery = requireNonNull(preparedQuery, "preparedQuery is null");
+        this.queryStats = requireNonNull(queryStats, "queryStats is null");
+    }
+
 
     @JsonCreator
     public BasicQueryInfo(
@@ -73,6 +108,7 @@ public class BasicQueryInfo
             @JsonProperty("errorCode") ErrorCode errorCode)
     {
         this.queryId = requireNonNull(queryId, "queryId is null");
+        this.batchQueries = null;
         this.session = requireNonNull(session, "session is null");
         this.resourceGroupId = requireNonNull(resourceGroupId, "resourceGroupId is null");
         this.state = requireNonNull(state, "state is null");
@@ -89,6 +125,7 @@ public class BasicQueryInfo
     public BasicQueryInfo(QueryInfo queryInfo)
     {
         this(queryInfo.getQueryId(),
+                queryInfo.getBatchQueries(),
                 queryInfo.getSession(),
                 queryInfo.getResourceGroupId(),
                 queryInfo.getState(),
@@ -106,6 +143,7 @@ public class BasicQueryInfo
     {
         return new BasicQueryInfo(
                 session.getQueryId(),
+                ImmutableList.of(session.getQueryId()),
                 session.toSessionRepresentation(),
                 resourceGroupId,
                 FAILED,
@@ -123,6 +161,12 @@ public class BasicQueryInfo
     public QueryId getQueryId()
     {
         return queryId;
+    }
+
+    @JsonProperty
+    public List<QueryId> getBatchQueries()
+    {
+        return batchQueries;
     }
 
     @JsonProperty

@@ -13,20 +13,34 @@
  */
 package io.prestosql.operator;
 
+import com.google.common.collect.ImmutableList;
+import com.google.common.util.concurrent.ListenableFuture;
+import io.airlift.slice.Slice;
 import io.prestosql.spi.Page;
+import io.prestosql.spi.PageBuilder;
 import io.prestosql.spi.block.Block;
+import io.prestosql.spi.block.BlockBuilder;
+import io.prestosql.spi.connector.UpdatablePageSource;
 import io.prestosql.spi.plan.PlanNodeId;
-import io.prestosql.spi.snapshot.MarkerPage;
-import io.prestosql.spi.snapshot.RestorableConfig;
+import io.prestosql.spi.type.Type;
+
+import java.util.Collection;
+import java.util.List;
+import java.util.Optional;
+import java.util.function.Supplier;
 
 import static com.google.common.base.Preconditions.checkState;
+import static io.airlift.concurrent.MoreFutures.getFutureValue;
+import static io.airlift.concurrent.MoreFutures.toListenableFuture;
+import static io.prestosql.spi.type.BigintType.BIGINT;
+import static io.prestosql.spi.type.VarbinaryType.VARBINARY;
 import static java.util.Objects.requireNonNull;
 
-//TODO-cp-I38S9Q: Operator currently not supported for Snapshot
-@RestorableConfig(unsupported = true)
 public class DeleteOperator
-        extends AbstractRowChangeOperator
+        implements Operator
 {
+    public static final List<Type> TYPES = ImmutableList.of(BIGINT, VARBINARY);
+
     public static class DeleteOperatorFactory
             implements OperatorFactory
     {
@@ -63,12 +77,51 @@ public class DeleteOperator
         }
     }
 
+    private enum State
+    {
+        RUNNING, FINISHING, FINISHED
+    }
+
+    private final OperatorContext operatorContext;
     private final int rowIdChannel;
+
+    private State state = State.RUNNING;
+    private long rowCount;
+    private boolean closed;
+    private ListenableFuture<Collection<Slice>> finishFuture;
+    private Supplier<Optional<UpdatablePageSource>> pageSource = Optional::empty;
 
     public DeleteOperator(OperatorContext operatorContext, int rowIdChannel)
     {
-        super(operatorContext);
+        this.operatorContext = requireNonNull(operatorContext, "operatorContext is null");
         this.rowIdChannel = rowIdChannel;
+    }
+
+    @Override
+    public OperatorContext getOperatorContext()
+    {
+        return operatorContext;
+    }
+
+    @Override
+    public void finish()
+    {
+        if (state == State.RUNNING) {
+            state = State.FINISHING;
+            finishFuture = toListenableFuture(pageSource().finish());
+        }
+    }
+
+    @Override
+    public boolean isFinished()
+    {
+        return state == State.FINISHED;
+    }
+
+    @Override
+    public boolean needsInput()
+    {
+        return state == State.RUNNING;
     }
 
     @Override
@@ -77,20 +130,74 @@ public class DeleteOperator
         requireNonNull(page, "page is null");
         checkState(state == State.RUNNING, "Operator is %s", state);
 
-        //TODO-cp-I38S9Q: Operator currently not supported for Snapshot
-        if (page instanceof MarkerPage) {
-            throw new UnsupportedOperationException("Operator doesn't support snapshotting.");
-        }
-
         Block rowIds = page.getBlock(rowIdChannel);
         pageSource().deleteRows(rowIds);
         rowCount += rowIds.getPositionCount();
     }
 
     @Override
-    public Page pollMarker()
+    public ListenableFuture<?> isBlocked()
     {
-        //TODO-cp-I38S9Q: Operator currently not supported for Snapshot
-        return null;
+        if (finishFuture == null) {
+            return NOT_BLOCKED;
+        }
+        return finishFuture;
+    }
+
+    @Override
+    public Page getOutput()
+    {
+        if ((state != State.FINISHING) || !finishFuture.isDone()) {
+            return null;
+        }
+        state = State.FINISHED;
+
+        Collection<Slice> fragments = getFutureValue(finishFuture);
+
+        // output page will only be constructed once,
+        // so a new PageBuilder is constructed (instead of using PageBuilder.reset)
+        PageBuilder page = new PageBuilder(fragments.size() + 1, TYPES);
+        BlockBuilder rowsBuilder = page.getBlockBuilder(0);
+        BlockBuilder fragmentBuilder = page.getBlockBuilder(1);
+
+        // write row count
+        page.declarePosition();
+        BIGINT.writeLong(rowsBuilder, rowCount);
+        fragmentBuilder.appendNull();
+
+        // write fragments
+        for (Slice fragment : fragments) {
+            page.declarePosition();
+            rowsBuilder.appendNull();
+            VARBINARY.writeSlice(fragmentBuilder, fragment);
+        }
+
+        return page.build();
+    }
+
+    @Override
+    public void close()
+    {
+        if (!closed) {
+            closed = true;
+            if (finishFuture != null) {
+                finishFuture.cancel(true);
+            }
+            else {
+                pageSource.get().ifPresent(UpdatablePageSource::abort);
+            }
+        }
+    }
+
+    public void setPageSource(Supplier<Optional<UpdatablePageSource>> pageSource)
+    {
+        this.pageSource = requireNonNull(pageSource, "pageSource is null");
+    }
+
+    private UpdatablePageSource pageSource()
+    {
+        Optional<UpdatablePageSource> source = pageSource.get();
+        checkState(source.isPresent(), "UpdatablePageSource not set");
+        return source.get();
     }
 }

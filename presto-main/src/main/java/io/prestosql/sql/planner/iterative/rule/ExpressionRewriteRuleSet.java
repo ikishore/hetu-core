@@ -26,7 +26,6 @@ import io.prestosql.spi.plan.JoinNode;
 import io.prestosql.spi.plan.ProjectNode;
 import io.prestosql.spi.plan.Symbol;
 import io.prestosql.spi.plan.ValuesNode;
-import io.prestosql.spi.relation.CallExpression;
 import io.prestosql.spi.relation.RowExpression;
 import io.prestosql.sql.planner.OrderingSchemeUtils;
 import io.prestosql.sql.planner.SymbolUtils;
@@ -161,7 +160,8 @@ public class ExpressionRewriteRuleSet
                 Aggregation aggregation = entry.getValue();
                 FunctionCall call = (FunctionCall) rewriter.rewrite(
                         new FunctionCall(
-                                QualifiedName.of(aggregation.getFunctionCall().getDisplayName()),
+                                Optional.empty(),
+                                QualifiedName.of(aggregation.getSignature().getName()),
                                 Optional.empty(),
                                 aggregation.getFilter().map(symbol -> new SymbolReference(symbol.getName())),
                                 aggregation.getOrderingScheme().map(orderBy -> new OrderBy(orderBy.getOrderBy().stream()
@@ -173,13 +173,9 @@ public class ExpressionRewriteRuleSet
                                 aggregation.isDistinct(),
                                 aggregation.getArguments().stream().map(OriginalExpressionUtils::castToExpression).collect(toImmutableList())),
                         context);
-                verify(call.getName().equals(QualifiedName.of(aggregation.getFunctionCall().getDisplayName())), "Aggregation function name changed");
+                verify(call.getName().equals(QualifiedName.of(aggregation.getSignature().getName())), "Aggregation function name changed");
                 Aggregation newAggregation = new Aggregation(
-                        new CallExpression(aggregation.getFunctionCall().getDisplayName(),
-                                aggregation.getFunctionCall().getFunctionHandle(),
-                                aggregation.getFunctionCall().getType(),
-                                call.getArguments().stream().map(OriginalExpressionUtils::castToRowExpression).collect(toImmutableList()),
-                                Optional.empty()),
+                        aggregation.getSignature(),
                         call.getArguments().stream().map(OriginalExpressionUtils::castToRowExpression).collect(toImmutableList()),
                         call.isDistinct(),
                         call.getFilter().map(SymbolUtils::from),
@@ -199,9 +195,7 @@ public class ExpressionRewriteRuleSet
                         aggregationNode.getPreGroupedSymbols(),
                         aggregationNode.getStep(),
                         aggregationNode.getHashSymbol(),
-                        aggregationNode.getGroupIdSymbol(),
-                        aggregationNode.getAggregationType(),
-                        aggregationNode.getFinalizeSymbol()));
+                        aggregationNode.getGroupIdSymbol()));
             }
             return Result.empty();
         }

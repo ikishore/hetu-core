@@ -16,7 +16,6 @@ package io.prestosql.cli;
 import com.google.common.base.Strings;
 import com.google.common.collect.ImmutableList;
 import com.google.common.io.CharStreams;
-import io.airlift.log.Logger;
 import io.airlift.units.Duration;
 import sun.misc.Signal;
 import sun.misc.SignalHandler;
@@ -52,7 +51,6 @@ public final class QueryPreprocessor
 
     private static final Signal SIGINT = new Signal("INT");
     private static final String PREPROCESSING_QUERY_MESSAGE = "Preprocessing query...";
-    private static final Logger log = Logger.get(QueryPreprocessor.class);
 
     private QueryPreprocessor() {}
 
@@ -206,14 +204,6 @@ public final class QueryPreprocessor
     {
         FutureTask<T> task = new FutureTask<>(callable);
         Thread thread = new Thread(task);
-        thread.setUncaughtExceptionHandler(new Thread.UncaughtExceptionHandler(){
-            @Override
-            public void uncaughtException(Thread thread, Throwable throwable)
-            {
-                log.warn(thread.getName());
-                log.warn(throwable.getMessage());
-            }
-        });
         thread.setName(threadName);
         thread.setDaemon(true);
         thread.start();

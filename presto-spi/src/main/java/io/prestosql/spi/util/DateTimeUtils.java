@@ -37,7 +37,6 @@ import static io.prestosql.spi.util.DateTimeZoneIndex.getDateTimeZone;
 import static io.prestosql.spi.util.DateTimeZoneIndex.packDateTimeWithZone;
 import static io.prestosql.spi.util.DateTimeZoneIndex.unpackChronology;
 import static io.prestosql.spi.util.DateTimeZoneIndex.unpackDateTimeZone;
-import static java.lang.Math.toIntExact;
 import static java.lang.String.format;
 
 public final class DateTimeUtils
@@ -50,7 +49,7 @@ public final class DateTimeUtils
 
     public static int parseDate(String value)
     {
-        return toIntExact(TimeUnit.MILLISECONDS.toDays(DATE_FORMATTER.parseMillis(value)));
+        return (int) TimeUnit.MILLISECONDS.toDays(DATE_FORMATTER.parseMillis(value));
     }
 
     public static String printDate(int days)
@@ -58,6 +57,7 @@ public final class DateTimeUtils
         return DATE_FORMATTER.print(TimeUnit.DAYS.toMillis(days));
     }
 
+    private static final DateTimeFormatter LEGACY_TIMESTAMP_WITHOUT_TIME_ZONE_FORMATTER;
     private static final DateTimeFormatter TIMESTAMP_WITHOUT_TIME_ZONE_FORMATTER;
     private static final DateTimeFormatter TIMESTAMP_WITH_TIME_ZONE_FORMATTER;
     private static final DateTimeFormatter TIMESTAMP_WITH_OR_WITHOUT_TIME_ZONE_FORMATTER;
@@ -65,13 +65,14 @@ public final class DateTimeUtils
     static {
         DateTimeParser[] timestampWithoutTimeZoneParser = {
                 DateTimeFormat.forPattern("yyyy-M-d").getParser(),
-                DateTimeFormat.forPattern("yyyy-M-d'T'H:m").getParser(),
-                DateTimeFormat.forPattern("yyyy-M-d'T'H:m:s").getParser(),
-                DateTimeFormat.forPattern("yyyy-M-d'T'H:m:s.SSS").getParser(),
                 DateTimeFormat.forPattern("yyyy-M-d H:m").getParser(),
                 DateTimeFormat.forPattern("yyyy-M-d H:m:s").getParser(),
                 DateTimeFormat.forPattern("yyyy-M-d H:m:s.SSS").getParser()};
         DateTimePrinter timestampWithoutTimeZonePrinter = DateTimeFormat.forPattern("yyyy-MM-dd HH:mm:ss.SSS").getPrinter();
+        LEGACY_TIMESTAMP_WITHOUT_TIME_ZONE_FORMATTER = new DateTimeFormatterBuilder()
+                .append(timestampWithoutTimeZonePrinter, timestampWithoutTimeZoneParser)
+                .toFormatter()
+                .withOffsetParsed();
 
         TIMESTAMP_WITHOUT_TIME_ZONE_FORMATTER = new DateTimeFormatterBuilder()
                 .append(timestampWithoutTimeZonePrinter, timestampWithoutTimeZoneParser)
@@ -155,8 +156,13 @@ public final class DateTimeUtils
     @Deprecated
     public static long parseTimestampLiteral(TimeZoneKey timeZoneKey, String value)
     {
-        DateTime dateTime = TIMESTAMP_WITH_TIME_ZONE_FORMATTER.parseDateTime(value);
-        return packDateTimeWithZone(dateTime);
+        try {
+            DateTime dateTime = TIMESTAMP_WITH_TIME_ZONE_FORMATTER.parseDateTime(value);
+            return packDateTimeWithZone(dateTime);
+        }
+        catch (RuntimeException e) {
+            return LEGACY_TIMESTAMP_WITHOUT_TIME_ZONE_FORMATTER.withChronology(getChronology(timeZoneKey)).parseMillis(value);
+        }
     }
 
     /**
@@ -218,6 +224,15 @@ public final class DateTimeUtils
     public static String printTimestampWithoutTimeZone(long timestamp)
     {
         return TIMESTAMP_WITHOUT_TIME_ZONE_FORMATTER.print(timestamp);
+    }
+
+    /**
+     * @deprecated applicable in legacy timestamp semantics only
+     */
+    @Deprecated
+    public static String printTimestampWithoutTimeZone(TimeZoneKey timeZoneKey, long timestamp)
+    {
+        return LEGACY_TIMESTAMP_WITHOUT_TIME_ZONE_FORMATTER.withChronology(getChronology(timeZoneKey)).print(timestamp);
     }
 
     public static boolean timestampHasTimeZone(String value)

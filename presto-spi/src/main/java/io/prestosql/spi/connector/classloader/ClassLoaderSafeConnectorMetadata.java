@@ -14,7 +14,6 @@
 package io.prestosql.spi.connector.classloader;
 
 import io.airlift.slice.Slice;
-import io.prestosql.spi.PartialAndFinalAggregationType;
 import io.prestosql.spi.classloader.ThreadContextClassLoader;
 import io.prestosql.spi.connector.ColumnHandle;
 import io.prestosql.spi.connector.ColumnMetadata;
@@ -54,7 +53,6 @@ import io.prestosql.spi.security.RoleGrant;
 import io.prestosql.spi.statistics.ComputedStatistics;
 import io.prestosql.spi.statistics.TableStatistics;
 import io.prestosql.spi.statistics.TableStatisticsMetadata;
-import io.prestosql.spi.type.Type;
 
 import java.util.Collection;
 import java.util.List;
@@ -274,10 +272,10 @@ public class ClassLoaderSafeConnectorMetadata
     }
 
     @Override
-    public TableStatistics getTableStatistics(ConnectorSession session, ConnectorTableHandle tableHandle, Constraint constraint, boolean includeColumnStatistics)
+    public TableStatistics getTableStatistics(ConnectorSession session, ConnectorTableHandle tableHandle, Constraint constraint)
     {
         try (ThreadContextClassLoader ignored = new ThreadContextClassLoader(classLoader)) {
-            return delegate.getTableStatistics(session, tableHandle, constraint, includeColumnStatistics);
+            return delegate.getTableStatistics(session, tableHandle, constraint);
         }
     }
 
@@ -410,26 +408,10 @@ public class ClassLoaderSafeConnectorMetadata
     }
 
     @Override
-    public ConnectorUpdateTableHandle beginUpdateAsInsert(ConnectorSession session, ConnectorTableHandle tableHandle)
+    public ConnectorUpdateTableHandle beginUpdate(ConnectorSession session, ConnectorTableHandle tableHandle)
     {
         try (ThreadContextClassLoader ignored = new ThreadContextClassLoader(classLoader)) {
-            return delegate.beginUpdateAsInsert(session, tableHandle);
-        }
-    }
-
-    @Override
-    public ConnectorTableHandle beginUpdate(ConnectorSession session, ConnectorTableHandle tableHandle, List<Type> updatedColumnTypes)
-    {
-        try (ThreadContextClassLoader ignored = new ThreadContextClassLoader(classLoader)) {
-            return delegate.beginUpdate(session, tableHandle, updatedColumnTypes);
-        }
-    }
-
-    @Override
-    public void finishUpdate(ConnectorSession session, ConnectorTableHandle tableHandle, Collection<Slice> fragments)
-    {
-        try (ThreadContextClassLoader ignored = new ThreadContextClassLoader(classLoader)) {
-            delegate.finishUpdate(session, tableHandle, fragments);
+            return delegate.beginUpdate(session, tableHandle);
         }
     }
 
@@ -450,10 +432,10 @@ public class ClassLoaderSafeConnectorMetadata
     }
 
     @Override
-    public Optional<ConnectorOutputMetadata> finishUpdateAsInsert(ConnectorSession session, ConnectorUpdateTableHandle updateHandle, Collection<Slice> fragments, Collection<ComputedStatistics> computedStatistics)
+    public Optional<ConnectorOutputMetadata> finishUpdate(ConnectorSession session, ConnectorUpdateTableHandle updateHandle, Collection<Slice> fragments, Collection<ComputedStatistics> computedStatistics)
     {
         try (ThreadContextClassLoader ignored = new ThreadContextClassLoader(classLoader)) {
-            return delegate.finishUpdateAsInsert(session, updateHandle, fragments, computedStatistics);
+            return delegate.finishUpdate(session, updateHandle, fragments, computedStatistics);
         }
     }
 
@@ -522,18 +504,10 @@ public class ClassLoaderSafeConnectorMetadata
     }
 
     @Override
-    public ColumnHandle getDeleteRowIdColumnHandle(ConnectorSession session, ConnectorTableHandle tableHandle)
+    public ColumnHandle getUpdateRowIdColumnHandle(ConnectorSession session, ConnectorTableHandle tableHandle)
     {
         try (ThreadContextClassLoader ignored = new ThreadContextClassLoader(classLoader)) {
-            return delegate.getDeleteRowIdColumnHandle(session, tableHandle);
-        }
-    }
-
-    @Override
-    public ColumnHandle getUpdateRowIdColumnHandle(ConnectorSession session, ConnectorTableHandle tableHandle, List<ColumnHandle> updatedColumns)
-    {
-        try (ThreadContextClassLoader ignored = new ThreadContextClassLoader(classLoader)) {
-            return delegate.getUpdateRowIdColumnHandle(session, tableHandle, updatedColumns);
+            return delegate.getUpdateRowIdColumnHandle(session, tableHandle);
         }
     }
 
@@ -590,14 +564,6 @@ public class ClassLoaderSafeConnectorMetadata
     {
         try (ThreadContextClassLoader ignored = new ThreadContextClassLoader(classLoader)) {
             return delegate.executeDelete(session, handle);
-        }
-    }
-
-    @Override
-    public OptionalLong executeUpdate(ConnectorSession session, ConnectorTableHandle handle)
-    {
-        try (ThreadContextClassLoader ignored = new ThreadContextClassLoader(classLoader)) {
-            return delegate.executeUpdate(session, handle);
         }
     }
 
@@ -739,7 +705,6 @@ public class ClassLoaderSafeConnectorMetadata
         }
     }
 
-    @Override
     public Optional<ProjectionApplicationResult<ConnectorTableHandle>> applyProjection(ConnectorSession session, ConnectorTableHandle handle, List<ConnectorExpression> projections, Map<String, ColumnHandle> assignments)
     {
         try (ThreadContextClassLoader ignored = new ThreadContextClassLoader(classLoader)) {
@@ -747,7 +712,6 @@ public class ClassLoaderSafeConnectorMetadata
         }
     }
 
-    @Override
     public Optional<ConnectorTableHandle> applySample(ConnectorSession session, ConnectorTableHandle handle, SampleType sampleType, double sampleRatio)
     {
         try (ThreadContextClassLoader ignored = new ThreadContextClassLoader(classLoader)) {
@@ -773,15 +737,12 @@ public class ClassLoaderSafeConnectorMetadata
     @Override
     public boolean isExecutionPlanCacheSupported(ConnectorSession session, ConnectorTableHandle handle)
     {
-        try (ThreadContextClassLoader ignored = new ThreadContextClassLoader(classLoader)) {
-            return delegate.isExecutionPlanCacheSupported(session, handle);
-        }
+        return delegate.isExecutionPlanCacheSupported(session, handle);
     }
 
     /**
      * Hetu can only create index for supported connectors.
      */
-    @Override
     public boolean isHeuristicIndexSupported()
     {
         return delegate.isHeuristicIndexSupported();
@@ -800,62 +761,6 @@ public class ClassLoaderSafeConnectorMetadata
     {
         try (ThreadContextClassLoader ignored = new ThreadContextClassLoader(classLoader)) {
             return delegate.isPreAggregationSupported(session);
-        }
-    }
-
-    @Override
-    public boolean isSnapshotSupportedAsInput(ConnectorSession session, ConnectorTableHandle table)
-    {
-        try (ThreadContextClassLoader ignored = new ThreadContextClassLoader(classLoader)) {
-            return delegate.isSnapshotSupportedAsInput(session, table);
-        }
-    }
-
-    @Override
-    public boolean isSnapshotSupportedAsOutput(ConnectorSession session, ConnectorTableHandle table)
-    {
-        try (ThreadContextClassLoader ignored = new ThreadContextClassLoader(classLoader)) {
-            return delegate.isSnapshotSupportedAsOutput(session, table);
-        }
-    }
-
-    @Override
-    public boolean isSnapshotSupportedAsNewTable(ConnectorSession session, Map<String, Object> tableProperties)
-    {
-        try (ThreadContextClassLoader ignored = new ThreadContextClassLoader(classLoader)) {
-            return delegate.isSnapshotSupportedAsNewTable(session, tableProperties);
-        }
-    }
-
-    @Override
-    public void resetInsertForRerun(ConnectorSession session, ConnectorInsertTableHandle tableHandle, OptionalLong snapshotIndex)
-    {
-        try (ThreadContextClassLoader ignored = new ThreadContextClassLoader(classLoader)) {
-            delegate.resetInsertForRerun(session, tableHandle, snapshotIndex);
-        }
-    }
-
-    @Override
-    public void resetCreateForRerun(ConnectorSession session, ConnectorOutputTableHandle tableHandle, OptionalLong snapshotIndex)
-    {
-        try (ThreadContextClassLoader ignored = new ThreadContextClassLoader(classLoader)) {
-            delegate.resetCreateForRerun(session, tableHandle, snapshotIndex);
-        }
-    }
-
-    @Override
-    public PartialAndFinalAggregationType validateAndGetSortAggregationType(ConnectorSession session, ConnectorTableHandle tableHandle, List<String> keyNames)
-    {
-        try (ThreadContextClassLoader ignored = new ThreadContextClassLoader(classLoader)) {
-            return delegate.validateAndGetSortAggregationType(session, tableHandle, keyNames);
-        }
-    }
-
-    @Override
-    public void refreshMetadataCache()
-    {
-        try (ThreadContextClassLoader ignored = new ThreadContextClassLoader(classLoader)) {
-            delegate.refreshMetadataCache();
         }
     }
 }

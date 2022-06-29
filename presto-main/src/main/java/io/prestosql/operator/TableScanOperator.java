@@ -37,7 +37,6 @@ import io.prestosql.spi.operator.ReuseExchangeOperator;
 import io.prestosql.spi.plan.PlanNode;
 import io.prestosql.spi.plan.PlanNodeId;
 import io.prestosql.spi.plan.TableScanNode;
-import io.prestosql.spi.snapshot.RestorableConfig;
 import io.prestosql.spi.type.Type;
 import io.prestosql.spi.util.BloomFilter;
 import io.prestosql.spiller.Spiller;
@@ -74,8 +73,6 @@ import static io.prestosql.spi.operator.ReuseExchangeOperator.STRATEGY.REUSE_STR
 import static io.prestosql.spi.operator.ReuseExchangeOperator.STRATEGY.REUSE_STRATEGY_PRODUCER;
 import static java.util.Objects.requireNonNull;
 
-// Table scan operators do not participate in snapshotting
-@RestorableConfig(unsupported = true)
 public class TableScanOperator
         implements SourceOperator, Closeable
 {
@@ -96,12 +93,12 @@ public class TableScanOperator
         private Optional<QueryId> queryIdOptional = Optional.empty();
         private Optional<Metadata> metadataOptional = Optional.empty();
         private Optional<DynamicFilterCacheManager> dynamicFilterCacheManagerOptional = Optional.empty();
-        private final ReuseExchangeOperator.STRATEGY strategy;
-        private final UUID reuseTableScanMappingId;
-        private final boolean spillEnabled;
+        private ReuseExchangeOperator.STRATEGY strategy;
+        private UUID reuseTableScanMappingId;
+        private boolean spillEnabled;
         private final Optional<SpillerFactory> spillerFactory;
-        private final Integer spillerThreshold;
-        private final Integer consumerTableScanNodeCount;
+        private Integer spillerThreshold;
+        private Integer consumerTableScanNodeCount;
 
         public TableScanOperatorFactory(
                 Session session,
@@ -169,11 +166,16 @@ public class TableScanOperator
             this.consumerTableScanNodeCount = consumerTableScanNodeCount;
         }
 
-        // todo: find set strategy usage
         public ReuseExchangeOperator.STRATEGY getStrategy()
         {
             return strategy;
         }
+
+//        public void setStrategy(ReuseExchangeOperator.STRATEGY strategy)
+//        {
+//            //todo: find usage
+//            this.strategy = strategy;
+//        }
 
         @Override
         public int getOperatorId()
@@ -197,13 +199,13 @@ public class TableScanOperator
         public SourceOperator createOperator(DriverContext driverContext)
         {
             checkState(!closed, "Factory is already closed");
-            OperatorContext addOperatorContext = driverContext.addOperatorContext(operatorId, sourceId, getOperatorType());
+            OperatorContext operatorContext = driverContext.addOperatorContext(operatorId, sourceId, getOperatorType());
             if (table.getConnectorHandle().isSuitableForPushdown()) {
-                return new WorkProcessorSourceOperatorAdapter(addOperatorContext, this, REUSE_STRATEGY_DEFAULT, new UUID(0, 0), spillEnabled, types, spillerFactory, spillerThreshold, consumerTableScanNodeCount);
+                return new WorkProcessorSourceOperatorAdapter(operatorContext, this, REUSE_STRATEGY_DEFAULT, new UUID(0, 0), spillEnabled, types, spillerFactory, spillerThreshold, consumerTableScanNodeCount);
             }
 
             return new TableScanOperator(
-                    addOperatorContext,
+                    operatorContext,
                     sourceId,
                     pageSourceProvider,
                     table,
@@ -267,8 +269,6 @@ public class TableScanOperator
 
     private boolean finished;
 
-    // completedPositionCount is used only if connectorPageSource.getCompletedPositionCount is present.
-    private long completedPositionCount;
     private long completedBytes;
     private long readTimeNanos;
     Optional<TableScanNode> tableScanNodeOptional;
@@ -281,15 +281,15 @@ public class TableScanOperator
     boolean existsCrossFilter;
     boolean isDcTable;
 
-    private final ReuseExchangeOperator.STRATEGY strategy;
-    private final UUID reuseTableScanMappingId;
+    private ReuseExchangeOperator.STRATEGY strategy;
+    private UUID reuseTableScanMappingId;
     private static ConcurrentMap<String, Integer> sourceReuseTableScanMappingIdPositionIndexMap;
     private String sourceIdString;
     private final Optional<SpillerFactory> spillerFactory;
     private final List<Type> types;
-    private final boolean spillEnabled;
+    private boolean spillEnabled;
     private final long spillThreshold;
-    private static final ConcurrentMap<UUID, ReuseExchangeTableScanMappingIdState> reuseExchangeTableScanMappingIdUtilsMap = new ConcurrentHashMap<>();
+    private static ConcurrentMap<UUID, ReuseExchangeTableScanMappingIdState> reuseExchangeTableScanMappingIdUtilsMap = new ConcurrentHashMap<>();
     private ReuseExchangeTableScanMappingIdState reuseExchangeTableScanMappingIdState;
     private ListenableFuture<?> spillInProgress = immediateFuture(null);
 
@@ -384,8 +384,12 @@ public class TableScanOperator
     {
         int pagesWrittenCount = reuseExchangeTableScanMappingIdState.getPagesWrittenCount();
 
-        // there was no spilling of data- either spilling is not used, or not enough data to spill
-        return pagesWrittenCount == 0;
+        if (pagesWrittenCount == 0) {
+            // there was no spilling of data- either spilling is not used, or not enough data to spill
+            return true;
+        }
+
+        return false;
     }
 
     public static void deleteSpilledFiles(UUID reuseTableScanMappingId)
@@ -533,7 +537,6 @@ public class TableScanOperator
                         }
 
                         spillInProgress = reuseExchangeTableScanMappingIdState.getSpiller().get().spill(pageSpilledList.iterator());
-                        LOG.debug("spilling to disk initiated by reuse exchange");
 
                         try {
                             // blocking call to ensure spilling completes before we move forward
@@ -687,6 +690,18 @@ public class TableScanOperator
     }
 
     @Override
+    public boolean needsInput()
+    {
+        return false;
+    }
+
+    @Override
+    public void addInput(Page page)
+    {
+        throw new UnsupportedOperationException(getClass().getName() + " can not take input");
+    }
+
+    @Override
     public Page getOutput()
     {
         if (strategy.equals(REUSE_STRATEGY_CONSUMER)) {
@@ -709,34 +724,17 @@ public class TableScanOperator
         }
 
         Page page = source.getNextPage();
-
-        // if pageSource.getCompletedPositionCount is present, get operator statistics from pageSource
-        if (source.getCompletedPositionCount().isPresent()) {
-            long endCompletedPositionCount = source.getCompletedPositionCount().getAsLong();
-            long endCompletedBytes = source.getCompletedBytes();
-            long endReadTimeNanos = source.getReadTimeNanos();
-            long currentPositionCount = endCompletedPositionCount - completedPositionCount;
-            long currentCompletedBytes = endCompletedBytes - completedBytes;
-            operatorContext.recordPhysicalInputWithTiming(currentCompletedBytes, currentPositionCount, endReadTimeNanos - readTimeNanos);
-            operatorContext.recordProcessedInput(currentCompletedBytes, currentPositionCount);
-            completedPositionCount = endCompletedPositionCount;
-            completedBytes = endCompletedBytes;
-            readTimeNanos = endReadTimeNanos;
-        }
-
         if (page != null) {
             // assure the page is in memory before handing to another operator
             page = page.getLoadedPage();
 
             // update operator stats
-            if (!source.getCompletedPositionCount().isPresent()) {
-                long endCompletedBytes = source.getCompletedBytes();
-                long endReadTimeNanos = source.getReadTimeNanos();
-                operatorContext.recordPhysicalInputWithTiming(endCompletedBytes - completedBytes, page.getPositionCount(), endReadTimeNanos - readTimeNanos);
-                operatorContext.recordProcessedInput(page.getSizeInBytes(), page.getPositionCount());
-                completedBytes = endCompletedBytes;
-                readTimeNanos = endReadTimeNanos;
-            }
+            long endCompletedBytes = source.getCompletedBytes();
+            long endReadTimeNanos = source.getReadTimeNanos();
+            operatorContext.recordPhysicalInputWithTiming(endCompletedBytes - completedBytes, page.getPositionCount(), endReadTimeNanos - readTimeNanos);
+            operatorContext.recordProcessedInput(page.getSizeInBytes(), page.getPositionCount());
+            completedBytes = endCompletedBytes;
+            readTimeNanos = endReadTimeNanos;
 
             // pull bloomFilter from stateStore and filter page
             if (existsCrossFilter) {
@@ -759,21 +757,14 @@ public class TableScanOperator
         return page;
     }
 
-    @Override
-    public Page pollMarker()
-    {
-        return null; // No marker in source pipeline
-    }
-
     private Page filter(Page page)
     {
         BloomFilterUtils.updateBloomFilter(queryIdOptional, isDcTable, stateStoreProviderOptional, tableScanNodeOptional, dynamicFilterCacheManagerOptional, bloomFiltersBackup, bloomFilters);
 
-        Page inputPage = page;
         if (!bloomFilters.isEmpty()) {
-            inputPage = BloomFilterUtils.filter(inputPage, bloomFilters);
+            page = BloomFilterUtils.filter(page, bloomFilters);
         }
-        return inputPage;
+        return page;
     }
 
     private void cleanupInErrorCase()

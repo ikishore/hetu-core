@@ -14,15 +14,13 @@
 package io.prestosql.sql.planner;
 
 import io.prestosql.expressions.DefaultRowExpressionTraversalVisitor;
-import io.prestosql.metadata.FunctionAndTypeManager;
-import io.prestosql.spi.function.FunctionMetadata;
 import io.prestosql.spi.function.OperatorType;
+import io.prestosql.spi.function.Signature;
 import io.prestosql.spi.relation.CallExpression;
 import io.prestosql.spi.relation.RowExpression;
 import io.prestosql.spi.relation.SpecialForm;
 import io.prestosql.spi.type.Type;
 import io.prestosql.spi.type.TypeManager;
-import io.prestosql.sql.relational.FunctionResolution;
 import io.prestosql.sql.tree.Cast;
 import io.prestosql.sql.tree.DefaultExpressionTraversalVisitor;
 import io.prestosql.sql.tree.DereferenceExpression;
@@ -61,12 +59,12 @@ public final class NullabilityAnalyzer
         return result.get();
     }
 
-    public static boolean mayReturnNullOnNonNullInput(RowExpression expression, TypeManager typeManager, FunctionAndTypeManager functionAndTypeManager)
+    public static boolean mayReturnNullOnNonNullInput(RowExpression expression, TypeManager typeManager)
     {
         requireNonNull(expression, "expression is null");
 
         AtomicBoolean result = new AtomicBoolean(false);
-        expression.accept(new RowExpressionVisitor(typeManager, functionAndTypeManager), result);
+        expression.accept(new RowExpressionVisitor(typeManager), result);
         return result.get();
     }
 
@@ -159,21 +157,18 @@ public final class NullabilityAnalyzer
             extends DefaultRowExpressionTraversalVisitor<AtomicBoolean>
     {
         private final TypeManager typeManager;
-        private final FunctionAndTypeManager functionAndTypeManager;
-        private FunctionResolution functionResolution;
 
-        public RowExpressionVisitor(TypeManager typeManager, FunctionAndTypeManager functionAndTypeManager)
+        public RowExpressionVisitor(TypeManager typeManager)
         {
             this.typeManager = typeManager;
-            this.functionAndTypeManager = functionAndTypeManager;
-            this.functionResolution = new FunctionResolution(functionAndTypeManager);
         }
 
         @Override
         public Void visitCall(CallExpression call, AtomicBoolean result)
         {
-            FunctionMetadata functionMetadata = functionAndTypeManager.getFunctionMetadata(call.getFunctionHandle());
-            Optional<OperatorType> operator = functionMetadata.getOperatorType();
+            Signature signature = call.getSignature();
+
+            Optional<OperatorType> operator = Signature.getOperatorType(signature.getName());
             if (operator.isPresent()) {
                 switch (operator.get()) {
                     case SATURATED_FLOOR_CAST:
@@ -184,21 +179,12 @@ public final class NullabilityAnalyzer
                         if (!typeManager.isTypeOnlyCoercion(sourceType, targetType)) {
                             result.set(true);
                         }
-                        break;
                     }
                     case SUBSCRIPT:
                         result.set(true);
-                        break;
-                    default:
-                        // no-op
                 }
             }
-            else if (functionResolution.isTryCastFunction(call.getFunctionHandle())) {
-                if (!isCastTypeOnlyCoercion(call)) {
-                    result.set(true);
-                }
-            }
-            else if (!functionReturnsNullForNotNullInput(functionMetadata)) {
+            else if (!functionReturnsNullForNotNullInput(signature)) {
                 result.set(true);
             }
 
@@ -206,17 +192,9 @@ public final class NullabilityAnalyzer
             return null;
         }
 
-        private boolean functionReturnsNullForNotNullInput(FunctionMetadata function)
+        private boolean functionReturnsNullForNotNullInput(Signature signature)
         {
-            return (function.getName().getObjectName().equalsIgnoreCase("like"));
-        }
-
-        private boolean isCastTypeOnlyCoercion(CallExpression castCallExpression)
-        {
-            checkArgument(castCallExpression.getArguments().size() == 1);
-            Type sourceType = castCallExpression.getArguments().get(0).getType();
-            Type targetType = castCallExpression.getType();
-            return functionAndTypeManager.isTypeOnlyCoercion(sourceType, targetType);
+            return (signature.getName().equalsIgnoreCase("like"));
         }
 
         @Override

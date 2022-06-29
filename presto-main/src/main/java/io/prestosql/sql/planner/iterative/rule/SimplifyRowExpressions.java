@@ -25,7 +25,6 @@ import io.prestosql.spi.relation.RowExpression;
 import io.prestosql.spi.relation.SpecialForm;
 import io.prestosql.spi.type.BooleanType;
 import io.prestosql.sql.planner.iterative.Rule;
-import io.prestosql.sql.relational.FunctionResolution;
 import io.prestosql.sql.relational.RowExpressionDeterminismEvaluator;
 import io.prestosql.sql.relational.RowExpressionOptimizer;
 
@@ -83,19 +82,17 @@ public class SimplifyRowExpressions
     {
         private final LogicalRowExpressions logicalRowExpressions;
         private final Metadata metadata;
-        private final FunctionResolution functionResolution;
 
         public LogicalExpressionRewriter(Metadata metadata)
         {
-            this.logicalRowExpressions = new LogicalRowExpressions(new RowExpressionDeterminismEvaluator(metadata), new FunctionResolution(metadata.getFunctionAndTypeManager()), metadata.getFunctionAndTypeManager());
+            this.logicalRowExpressions = new LogicalRowExpressions(new RowExpressionDeterminismEvaluator(metadata));
             this.metadata = metadata;
-            this.functionResolution = new FunctionResolution(metadata.getFunctionAndTypeManager());
         }
 
         @Override
         public RowExpression rewriteCall(CallExpression node, Boolean isRoot, RowExpressionTreeRewriter<Boolean> treeRewriter)
         {
-            if (functionResolution.isNotFunction(node.getFunctionHandle())) {
+            if (node.getSignature().getName().equals("not")) {
                 checkState(BooleanType.BOOLEAN.equals(node.getType()), "NOT must be boolean function");
                 return rewriteBooleanExpression(node, isRoot);
             }

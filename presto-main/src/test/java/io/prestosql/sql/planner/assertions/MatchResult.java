@@ -31,10 +31,10 @@ public class MatchResult
 
     public static MatchResult match(String alias, SymbolReference symbolReference)
     {
-        SymbolAliases symbolAliases = SymbolAliases.builder()
+        SymbolAliases newAliases = SymbolAliases.builder()
                 .put(alias, symbolReference)
                 .build();
-        return new MatchResult(true, symbolAliases);
+        return new MatchResult(true, newAliases);
     }
 
     public static MatchResult match(SymbolAliases newAliases)

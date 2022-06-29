@@ -17,39 +17,42 @@ import com.fasterxml.jackson.annotation.JsonCreator;
 import com.fasterxml.jackson.annotation.JsonProperty;
 import com.google.common.collect.ImmutableList;
 import com.google.common.collect.Iterables;
-import io.prestosql.spi.cube.CubeUpdateMetadata;
 import io.prestosql.spi.plan.PlanNode;
 import io.prestosql.spi.plan.PlanNodeId;
 import io.prestosql.spi.plan.Symbol;
-import io.prestosql.spi.type.Type;
+import io.prestosql.sql.tree.Expression;
 
 import javax.annotation.concurrent.Immutable;
 
 import java.util.List;
-import java.util.Map;
+
+import static java.util.Objects.requireNonNull;
 
 @Immutable
 public class CubeFinishNode
         extends InternalPlanNode
 {
     private final PlanNode source;
+    private final String cubeName;
     private final Symbol rowCountSymbol;
-    private final CubeUpdateMetadata metadata;
-    private final Map<Symbol, Type> predicateColumnsType;
+    private final Expression dataPredicate;
+    private final boolean overwrite;
 
     @JsonCreator
     public CubeFinishNode(
             @JsonProperty("id") PlanNodeId id,
             @JsonProperty("source") PlanNode source,
             @JsonProperty("rowCountSymbol") Symbol rowCountSymbol,
-            @JsonProperty("metadata") CubeUpdateMetadata metadata,
-            @JsonProperty("predicateColumnsType") Map<Symbol, Type> predicateColumnsType)
+            @JsonProperty("cubeName") String cubeName,
+            @JsonProperty("dataPredicate") Expression dataPredicate,
+            @JsonProperty("overwrite") boolean overwrite)
     {
         super(id);
-        this.source = source;
-        this.rowCountSymbol = rowCountSymbol;
-        this.metadata = metadata;
-        this.predicateColumnsType = predicateColumnsType;
+        this.source = requireNonNull(source, "source is null");
+        this.cubeName = requireNonNull(cubeName, "Cube name is null");
+        this.rowCountSymbol = requireNonNull(rowCountSymbol, "rowCountSymbol is null");
+        this.dataPredicate = requireNonNull(dataPredicate, "Predicate is null");
+        this.overwrite = overwrite;
     }
 
     @JsonProperty
@@ -65,9 +68,21 @@ public class CubeFinishNode
     }
 
     @JsonProperty
-    public CubeUpdateMetadata getMetadata()
+    public String getCubeName()
     {
-        return metadata;
+        return cubeName;
+    }
+
+    @JsonProperty
+    public Expression getDataPredicate()
+    {
+        return dataPredicate;
+    }
+
+    @JsonProperty
+    public boolean isOverwrite()
+    {
+        return overwrite;
     }
 
     @Override
@@ -80,12 +95,6 @@ public class CubeFinishNode
     public List<Symbol> getOutputSymbols()
     {
         return ImmutableList.of(rowCountSymbol);
-    }
-
-    @JsonProperty
-    public Map<Symbol, Type> getPredicateColumnsType()
-    {
-        return this.predicateColumnsType;
     }
 
     @Override
@@ -101,7 +110,8 @@ public class CubeFinishNode
                 getId(),
                 Iterables.getOnlyElement(newChildren),
                 rowCountSymbol,
-                metadata,
-                predicateColumnsType);
+                cubeName,
+                dataPredicate,
+                overwrite);
     }
 }

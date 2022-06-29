@@ -85,7 +85,7 @@ public class AutoVacuumScanner
     private final BlockEncodingSerde blockEncodingSerde;
     private final BoundedExecutor responseExecutor;
     private final ScheduledExecutorService timeoutExecutor;
-    private final Map<String, Long> vacuumInProgressMap;
+    private Map<String, Long> vacuumInProgressMap;
 
     @Inject
     public AutoVacuumScanner(AutoVacuumConfig autoVacuumConfig,

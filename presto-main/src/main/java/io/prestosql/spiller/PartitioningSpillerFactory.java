@@ -16,11 +16,9 @@ package io.prestosql.spiller;
 import io.prestosql.memory.context.AggregatedMemoryContext;
 import io.prestosql.operator.PartitionFunction;
 import io.prestosql.operator.SpillContext;
-import io.prestosql.spi.Page;
 import io.prestosql.spi.type.Type;
 
 import java.util.List;
-import java.util.function.BiFunction;
 
 public interface PartitioningSpillerFactory
 {
@@ -29,16 +27,6 @@ public interface PartitioningSpillerFactory
             PartitionFunction partitionFunction,
             SpillContext spillContext,
             AggregatedMemoryContext memoryContext);
-
-    default PartitioningSpiller create(
-            List<Type> types,
-            PartitionFunction partitionFunction,
-            SpillContext spillContext,
-            AggregatedMemoryContext memoryContext,
-            BiFunction<Integer, Page, Long> getRawHash)
-    {
-        return create(types, partitionFunction, spillContext, memoryContext);
-    }
 
     static PartitioningSpillerFactory unsupportedPartitioningSpillerFactory()
     {

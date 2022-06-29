@@ -20,13 +20,11 @@ import io.prestosql.spi.connector.CatalogName;
 import io.prestosql.spi.connector.ConnectorCapabilities;
 import io.prestosql.spi.connector.ConnectorMetadata;
 import io.prestosql.spi.connector.ConnectorTransactionHandle;
-import io.prestosql.spi.connector.QualifiedObjectName;
 
 import java.util.List;
 import java.util.Set;
 
 import static com.google.common.base.MoreObjects.toStringHelper;
-import static io.prestosql.metadata.MetadataUtil.toSchemaTableName;
 import static java.util.Objects.requireNonNull;
 
 public class CatalogMetadata
@@ -114,7 +112,7 @@ public class CatalogMetadata
             return informationSchemaId;
         }
 
-        if (systemTables.getTableHandle(session.toConnectorSession(systemTablesId), toSchemaTableName(table)) != null) {
+        if (systemTables.getTableHandle(session.toConnectorSession(systemTablesId), table.asSchemaTableName()) != null) {
             return systemTablesId;
         }
 

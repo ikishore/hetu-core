@@ -1,5 +1,5 @@
 /*
- * Copyright (C) 2018-2021. Huawei Technologies Co., Ltd. All rights reserved.
+ * Copyright (C) 2018-2020. Huawei Technologies Co., Ltd. All rights reserved.
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
  * You may obtain a copy of the License at
@@ -30,7 +30,6 @@ import io.prestosql.spi.type.Type;
 import io.prestosql.spi.type.TypeUtils;
 import org.apache.hadoop.hbase.TableName;
 import org.apache.hadoop.hbase.client.Put;
-import org.apache.hadoop.hbase.client.Table;
 
 import java.io.IOException;
 import java.util.ArrayList;
@@ -88,18 +87,18 @@ public class HBasePageSink
         // For each position within the page
         List<Put> puts = new ArrayList<>();
 
-        try (Table table = hbaseConn.getConn().getTable(TableName.valueOf(tablename))) {
+        try {
             for (int position = 0; position < page.getPositionCount(); ++position) {
                 // Convert Page to a Put, writing and indexing it
                 Put put = pageToPut(page, position);
                 puts.add(put);
                 if (puts.size() >= Constants.PUT_BATCH_SIZE) {
-                    table.put(puts);
+                    hbaseConn.getConn().getTable(TableName.valueOf(tablename)).put(puts);
                     puts.clear();
                 }
             }
             if (!puts.isEmpty()) {
-                table.put(puts);
+                hbaseConn.getConn().getTable(TableName.valueOf(tablename)).put(puts);
             }
         }
         catch (IOException e) {

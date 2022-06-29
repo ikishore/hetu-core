@@ -175,10 +175,10 @@ public class UnloadedIndexKeyRecordSet
                 if (!pageAndPositionsIterator.hasNext()) {
                     return false;
                 }
-                PageAndPositions tmpPageAndPositions = pageAndPositionsIterator.next();
-                page = tmpPageAndPositions.getUpdateRequest().getPage();
+                PageAndPositions pageAndPositions = pageAndPositionsIterator.next();
+                page = pageAndPositions.getUpdateRequest().getPage();
                 checkState(types.size() == page.getChannelCount());
-                positionIterator = tmpPageAndPositions.getPositions().iterator();
+                positionIterator = pageAndPositions.getPositions().iterator();
             }
 
             position = positionIterator.nextInt();

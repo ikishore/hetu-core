@@ -40,8 +40,7 @@ public final class StatementRewrite
             new ExplainRewrite(),
             new CacheTableRewrite(),
             new CreateIndexRewrite(),
-            new InsertCubeRewrite(),
-            new UpdateIndexRewrite());
+            new InsertCubeRewrite());
 
     private StatementRewrite() {}
 
@@ -51,13 +50,12 @@ public final class StatementRewrite
             CubeManager cubeManager,
             SqlParser parser,
             Optional<QueryExplainer> queryExplainer,
-            Statement inputNode,
+            Statement node,
             List<Expression> parameters,
             AccessControl accessControl,
             WarningCollector warningCollector,
             HeuristicIndexerManager heuristicIndexerManager)
     {
-        Statement node = inputNode;
         for (Rewrite rewrite : REWRITES) {
             node = requireNonNull(rewrite.rewrite(session, metadata, cubeManager, parser, queryExplainer, node, parameters, accessControl, warningCollector, heuristicIndexerManager),
                     "Statement rewrite returned null");

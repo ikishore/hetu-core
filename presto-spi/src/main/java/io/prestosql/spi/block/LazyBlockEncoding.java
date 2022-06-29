@@ -16,8 +16,6 @@ package io.prestosql.spi.block;
 import io.airlift.slice.SliceInput;
 import io.airlift.slice.SliceOutput;
 
-import java.io.InputStream;
-import java.io.OutputStream;
 import java.util.Optional;
 
 public class LazyBlockEncoding
@@ -44,18 +42,6 @@ public class LazyBlockEncoding
     public void writeBlock(BlockEncodingSerde blockEncodingSerde, SliceOutput sliceOutput, Block block)
     {
         // We implemented replacementBlockForWrite, so we will never need to write a lazy block
-        throw new UnsupportedOperationException();
-    }
-
-    @Override
-    public Block readBlock(BlockEncodingSerde blockEncodingSerde, InputStream input)
-    {
-        throw new UnsupportedOperationException();
-    }
-
-    @Override
-    public void writeBlock(BlockEncodingSerde blockEncodingSerde, OutputStream output, Block block)
-    {
         throw new UnsupportedOperationException();
     }
 

@@ -14,21 +14,14 @@
 package io.prestosql.operator;
 
 import com.google.common.annotations.VisibleForTesting;
-import com.google.common.collect.ImmutableList;
 import com.google.common.util.concurrent.ListenableFuture;
-import io.hetu.core.transport.execution.buffer.PagesSerde;
-import io.hetu.core.transport.execution.buffer.SerializedPage;
 import io.prestosql.execution.Lifespan;
-import io.prestosql.snapshot.SingleInputSnapshotState;
 import io.prestosql.spi.Page;
 import io.prestosql.spi.block.Block;
 import io.prestosql.spi.block.RunLengthEncodedBlock;
 import io.prestosql.spi.plan.PlanNodeId;
-import io.prestosql.spi.snapshot.BlockEncodingSerdeProvider;
-import io.prestosql.spi.snapshot.RestorableConfig;
 
 import java.io.Closeable;
-import java.io.Serializable;
 import java.util.Iterator;
 import java.util.List;
 import java.util.NoSuchElementException;
@@ -40,7 +33,6 @@ import static io.airlift.concurrent.MoreFutures.tryGetFutureValue;
 import static java.lang.Math.multiplyExact;
 import static java.util.Objects.requireNonNull;
 
-@RestorableConfig(uncapturedFields = {"nestedLoopJoinPagesFuture", "afterClose", "probePage", "buildPageIterator", "nestedLoopPageBuilder", "snapshotState"})
 public class NestedLoopJoinOperator
         implements Operator, Closeable
 {
@@ -80,11 +72,11 @@ public class NestedLoopJoinOperator
             checkState(!closed, "Factory is already closed");
             NestedLoopJoinBridge nestedLoopJoinBridge = joinBridgeManager.getJoinBridge(driverContext.getLifespan());
 
-            OperatorContext addOperatorContext = driverContext.addOperatorContext(operatorId, planNodeId, NestedLoopJoinOperator.class.getSimpleName());
+            OperatorContext operatorContext = driverContext.addOperatorContext(operatorId, planNodeId, NestedLoopJoinOperator.class.getSimpleName());
 
             joinBridgeManager.probeOperatorCreated(driverContext.getLifespan());
             return new NestedLoopJoinOperator(
-                    addOperatorContext,
+                    operatorContext,
                     nestedLoopJoinBridge,
                     () -> joinBridgeManager.probeOperatorClosed(driverContext.getLifespan()));
         }
@@ -124,14 +116,11 @@ public class NestedLoopJoinOperator
     private boolean finishing;
     private boolean closed;
 
-    private final SingleInputSnapshotState snapshotState;
-
     private NestedLoopJoinOperator(OperatorContext operatorContext, NestedLoopJoinBridge joinBridge, Runnable afterClose)
     {
         this.operatorContext = requireNonNull(operatorContext, "operatorContext is null");
         this.nestedLoopJoinPagesFuture = joinBridge.getPagesFuture();
         this.afterClose = requireNonNull(afterClose, "afterClose is null");
-        this.snapshotState = operatorContext.isSnapshotEnabled() ? SingleInputSnapshotState.forOperator(this, operatorContext) : null;
     }
 
     @Override
@@ -149,11 +138,6 @@ public class NestedLoopJoinOperator
     @Override
     public boolean isFinished()
     {
-        if (snapshotState != null && snapshotState.hasMarker()) {
-            // Snapshot: there are pending markers. Need to send them out before finishing this operator.
-            return false;
-        }
-
         boolean finished = finishing && probePage == null;
 
         if (finished) {
@@ -165,18 +149,13 @@ public class NestedLoopJoinOperator
     @Override
     public ListenableFuture<?> isBlocked()
     {
-        if (snapshotState != null && allowMarker()) {
-            // TODO-cp-I3AJIP: this may unblock too often
-            return NOT_BLOCKED;
-        }
-
         return nestedLoopJoinPagesFuture;
     }
 
     @Override
     public boolean needsInput()
     {
-        if (!allowMarker()) {
+        if (finishing || probePage != null) {
             return false;
         }
 
@@ -190,23 +169,10 @@ public class NestedLoopJoinOperator
     }
 
     @Override
-    public boolean allowMarker()
-    {
-        return !finishing && probePage == null;
-    }
-
-    @Override
     public void addInput(Page page)
     {
         requireNonNull(page, "page is null");
         checkState(!finishing, "Operator is finishing");
-
-        if (snapshotState != null) {
-            if (snapshotState.processPage(page)) {
-                return;
-            }
-        }
-
         checkState(buildPages != null, "Page source has not been built yet");
         checkState(probePage == null, "Current page has not been completely processed yet");
         checkState(buildPageIterator == null || !buildPageIterator.hasNext(), "Current buildPageIterator has not been completely processed yet");
@@ -220,13 +186,6 @@ public class NestedLoopJoinOperator
     @Override
     public Page getOutput()
     {
-        if (snapshotState != null) {
-            Page marker = snapshotState.nextMarker();
-            if (marker != null) {
-                return marker;
-            }
-        }
-
         // Either probe side or build side is not ready
         if (probePage == null || buildPages == null) {
             return null;
@@ -246,21 +205,12 @@ public class NestedLoopJoinOperator
     }
 
     @Override
-    public Page pollMarker()
-    {
-        return snapshotState.nextMarker();
-    }
-
-    @Override
     public void close()
     {
         buildPages = null;
         // We don't want to release the supplier multiple times, since its reference counted
         if (closed) {
             return;
-        }
-        if (snapshotState != null) {
-            snapshotState.close();
         }
         closed = true;
         // `afterClose` must be run last.
@@ -317,7 +267,6 @@ public class NestedLoopJoinOperator
                 }
                 catch (ArithmeticException exception) {
                     // return -1 to disable the shortcut if overflows.
-                    return -1;
                 }
             }
             return -1;
@@ -364,50 +313,5 @@ public class NestedLoopJoinOperator
 
             return new Page(largePage.getPositionCount(), blocks);
         }
-    }
-
-    @Override
-    public Object capture(BlockEncodingSerdeProvider serdeProvider)
-    {
-        NestedLoopJoinOperatorState myState = new NestedLoopJoinOperatorState();
-        myState.operatorContext = operatorContext.capture(serdeProvider);
-        if (buildPages != null) {
-            myState.buildPages = new Object[buildPages.size()];
-            PagesSerde serde = (PagesSerde) serdeProvider;
-            for (int i = 0; i < buildPages.size(); i++) {
-                SerializedPage sp = serde.serialize(buildPages.get(i));
-                myState.buildPages[i] = sp.capture(serdeProvider);
-            }
-        }
-        myState.finishing = finishing;
-        myState.closed = closed;
-        return myState;
-    }
-
-    @Override
-    public void restore(Object state, BlockEncodingSerdeProvider serdeProvider)
-    {
-        NestedLoopJoinOperatorState myState = (NestedLoopJoinOperatorState) state;
-        this.operatorContext.restore(myState.operatorContext, serdeProvider);
-        if (myState.buildPages != null && this.buildPages == null) {
-            PagesSerde serde = (PagesSerde) serdeProvider;
-            ImmutableList.Builder<Page> builder = ImmutableList.builder();
-            for (Object obj : myState.buildPages) {
-                SerializedPage sp = SerializedPage.restoreSerializedPage(obj);
-                builder.add(serde.deserialize(sp));
-            }
-            this.buildPages = builder.build();
-        }
-        this.finishing = myState.finishing;
-        this.closed = myState.closed;
-    }
-
-    private static class NestedLoopJoinOperatorState
-            implements Serializable
-    {
-        private Object operatorContext;
-        private Object[] buildPages;
-        private boolean finishing;
-        private boolean closed;
     }
 }

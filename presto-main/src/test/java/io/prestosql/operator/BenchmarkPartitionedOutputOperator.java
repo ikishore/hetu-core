@@ -15,6 +15,7 @@ package io.prestosql.operator;
 
 import com.google.common.collect.ImmutableList;
 import io.airlift.units.DataSize;
+import io.hetu.core.transport.execution.buffer.PagesSerdeFactory;
 import io.prestosql.execution.StateMachine;
 import io.prestosql.execution.buffer.OutputBuffers;
 import io.prestosql.execution.buffer.PartitionedOutputBuffer;
@@ -43,7 +44,6 @@ import org.openjdk.jmh.runner.options.Options;
 import org.openjdk.jmh.runner.options.OptionsBuilder;
 import org.openjdk.jmh.runner.options.VerboseMode;
 
-import java.nio.charset.StandardCharsets;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Optional;
@@ -63,6 +63,7 @@ import static io.prestosql.execution.buffer.BufferState.TERMINAL_BUFFER_STATES;
 import static io.prestosql.execution.buffer.OutputBuffers.BufferType.PARTITIONED;
 import static io.prestosql.execution.buffer.OutputBuffers.createInitialEmptyOutputBuffers;
 import static io.prestosql.memory.context.AggregatedMemoryContext.newSimpleAggregatedMemoryContext;
+import static io.prestosql.metadata.MetadataManager.createTestMetadataManager;
 import static io.prestosql.spi.type.BigintType.BIGINT;
 import static io.prestosql.spi.type.VarcharType.VARCHAR;
 import static java.util.concurrent.Executors.newCachedThreadPool;
@@ -114,6 +115,7 @@ public class BenchmarkPartitionedOutputOperator
         private PartitionedOutputOperator createPartitionedOutputOperator()
         {
             PartitionFunction partitionFunction = new LocalPartitionGenerator(new InterpretedHashGenerator(ImmutableList.of(BIGINT), new int[] {0}), PARTITION_COUNT);
+            PagesSerdeFactory serdeFactory = new PagesSerdeFactory(createTestMetadataManager().getBlockEncodingSerde(), false);
             OutputBuffers buffers = createInitialEmptyOutputBuffers(PARTITIONED);
             for (int partition = 0; partition < PARTITION_COUNT; partition++) {
                 buffers = buffers.withBuffer(new OutputBuffers.OutputBufferId(partition), partition);
@@ -129,10 +131,9 @@ public class BenchmarkPartitionedOutputOperator
                     OptionalInt.empty(),
                     buffer,
                     new DataSize(1, GIGABYTE));
-            TaskContext taskContext = createTaskContext();
             return (PartitionedOutputOperator) operatorFactory
-                    .createOutputOperator(0, new PlanNodeId("plan-node-0"), TYPES, Function.identity(), taskContext)
-                    .createOperator(createDriverContext(taskContext));
+                    .createOutputOperator(0, new PlanNodeId("plan-node-0"), TYPES, Function.identity(), serdeFactory)
+                    .createOperator(createDriverContext());
         }
 
         private Page createPage()
@@ -177,7 +178,7 @@ public class BenchmarkPartitionedOutputOperator
                     if (fieldTypes.get(j) == VARCHAR) {
                         byte[] data = new byte[ThreadLocalRandom.current().nextInt(128)];
                         ThreadLocalRandom.current().nextBytes(data);
-                        testRow.add(new String(data, StandardCharsets.UTF_8));
+                        testRow.add(new String(data));
                     }
                     else {
                         throw new UnsupportedOperationException();
@@ -188,16 +189,11 @@ public class BenchmarkPartitionedOutputOperator
             return testRows;
         }
 
-        private TaskContext createTaskContext()
+        private DriverContext createDriverContext()
         {
             return TestingTaskContext.builder(EXECUTOR, SCHEDULER, TEST_SESSION)
                     .setMemoryPoolSize(MAX_MEMORY)
-                    .build();
-        }
-
-        private DriverContext createDriverContext(TaskContext taskContext)
-        {
-            return taskContext
+                    .build()
                     .addPipelineContext(0, true, true, false)
                     .addDriverContext();
         }
@@ -205,6 +201,7 @@ public class BenchmarkPartitionedOutputOperator
         private PartitionedOutputBuffer createPartitionedBuffer(OutputBuffers buffers, DataSize dataSize)
         {
             return new PartitionedOutputBuffer(
+                    "task-instance-id",
                     new StateMachine<>("bufferState", SCHEDULER, OPEN, TERMINAL_BUFFER_STATES),
                     buffers,
                     dataSize,

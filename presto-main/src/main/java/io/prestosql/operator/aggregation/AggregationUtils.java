@@ -48,8 +48,8 @@ public final class AggregationUtils
                 .anyMatch(AggregationNode.Aggregation::isDistinct);
 
         boolean decomposableFunctions = aggregationNode.getAggregations().values().stream()
-                .map(AggregationNode.Aggregation::getFunctionHandle)
-                .map(metadata.getFunctionAndTypeManager()::getAggregateFunctionImplementation)
+                .map(AggregationNode.Aggregation::getSignature)
+                .map(metadata::getAggregateFunctionImplementation)
                 .allMatch(InternalAggregationFunction::isDecomposable);
 
         return !hasOrderBy && !hasDistinct && decomposableFunctions;

@@ -1,5 +1,5 @@
 /*
- * Copyright (C) 2018-2021. Huawei Technologies Co., Ltd. All rights reserved.
+ * Copyright (C) 2018-2020. Huawei Technologies Co., Ltd. All rights reserved.
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
  * You may obtain a copy of the License at
@@ -18,7 +18,6 @@ import io.prestosql.spi.connector.CreateIndexMetadata;
 
 import java.io.IOException;
 import java.util.List;
-import java.util.Map;
 
 public interface IndexClient
 {
@@ -38,7 +37,7 @@ public interface IndexClient
      * @return last modified time or 0 if not found.
      * @throws IOException thrown by filesystem client
      */
-    long getLastModifiedTime(String path)
+    long getLastModified(String path)
             throws IOException;
 
     /**
@@ -47,27 +46,6 @@ public interface IndexClient
      * @param path
      */
     List<IndexMetadata> readPartitionIndex(String path)
-            throws IOException;
-
-    /**
-     * This method will return a mapping of orc file, partition, or table to last modified time depending on the index leve,
-     * i.e. for stripe level indices it will contain:
-     * <p>
-     * /user/hive/.../orc_file_name1 -> last modified time
-     * <p>
-     * for partition level indices:
-     * <p>
-     * nationkey=3 -> last modified time
-     * <p>
-     * for table level indices:
-     * <p>
-     * hive.default.nation -> last modified time
-     *
-     * @param indexName index name
-     * @return mapping of index level fields to last modified times
-     * @throws IOException thrown by filesystem client
-     */
-    Map<String, String> getLastModifiedTimes(String indexName)
             throws IOException;
 
     /**
@@ -139,12 +117,4 @@ public interface IndexClient
         IN_PROGRESS_SAME_INDEX_PART_CAN_MERGE,
         IN_PROGRESS_SAME_INDEX_PART_CONFLICT
     }
-
-    /**
-     * Get the index size with the index name provided
-     *
-     * @param name index name
-     * @throws IOException any IOException thrown by filesystem client during file read
-     */
-    long getIndexSize(String name) throws IOException;
 }

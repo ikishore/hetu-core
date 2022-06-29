@@ -42,14 +42,6 @@ public enum JobState
      */
     RUNNING(false),
     /**
-     * Failed tasks will be re-scheduled. Waiting for old stages/tasks to finish.
-     */
-    RESCHEDULING(false),
-    /**
-     * Resume execution of rescheduled tasks, after old stages/tasks finish.
-     */
-    RESUMING(false),
-    /**
      * Query is finishing (e.g. commit for autocommit queries)
      */
     FINISHING(false),
@@ -72,7 +64,7 @@ public enum JobState
 
     private final boolean doneState;
 
-    JobState(boolean doneState)
+    private JobState(boolean doneState)
     {
         this.doneState = doneState;
     }

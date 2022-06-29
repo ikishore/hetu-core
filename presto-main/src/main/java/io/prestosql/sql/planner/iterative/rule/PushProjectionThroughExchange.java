@@ -18,7 +18,6 @@ import com.google.common.collect.ImmutableSet;
 import io.prestosql.matching.Capture;
 import io.prestosql.matching.Captures;
 import io.prestosql.matching.Pattern;
-import io.prestosql.spi.plan.AggregationNode;
 import io.prestosql.spi.plan.Assignments;
 import io.prestosql.spi.plan.PlanNode;
 import io.prestosql.spi.plan.ProjectNode;
@@ -41,12 +40,13 @@ import java.util.Set;
 
 import static com.google.common.base.Preconditions.checkArgument;
 import static io.prestosql.matching.Capture.newCapture;
-import static io.prestosql.sql.planner.VariableReferenceSymbolConverter.toVariableReference;
+import static io.prestosql.sql.planner.SymbolUtils.toSymbolReference;
 import static io.prestosql.sql.planner.iterative.rule.Util.restrictOutputs;
 import static io.prestosql.sql.planner.plan.Patterns.exchange;
 import static io.prestosql.sql.planner.plan.Patterns.project;
 import static io.prestosql.sql.planner.plan.Patterns.source;
 import static io.prestosql.sql.relational.OriginalExpressionUtils.castToExpression;
+import static io.prestosql.sql.relational.OriginalExpressionUtils.castToRowExpression;
 import static io.prestosql.sql.relational.OriginalExpressionUtils.isExpression;
 
 /**
@@ -111,8 +111,7 @@ public class PushProjectionThroughExchange
 
             if (exchange.getPartitioningScheme().getHashColumn().isPresent()) {
                 // Need to retain the hash symbol for the exchange
-                projections.put(exchange.getPartitioningScheme().getHashColumn().get(),
-                        toVariableReference(exchange.getPartitioningScheme().getHashColumn().get(), context.getSymbolAllocator().getTypes()));
+                projections.put(exchange.getPartitioningScheme().getHashColumn().get(), castToRowExpression(toSymbolReference(exchange.getPartitioningScheme().getHashColumn().get())));
                 inputs.add(exchange.getPartitioningScheme().getHashColumn().get());
             }
 
@@ -172,15 +171,10 @@ public class PushProjectionThroughExchange
                 partitioningScheme,
                 newSourceBuilder.build(),
                 inputsBuilder.build(),
-                exchange.getOrderingScheme(),
-                AggregationNode.AggregationType.HASH);
+                exchange.getOrderingScheme());
 
         // we need to strip unnecessary symbols (hash, partitioning columns).
-        return Result.ofPlanNode(restrictOutputs(context.getIdAllocator(),
-                                                result,
-                                                ImmutableSet.copyOf(project.getOutputSymbols()),
-                                                true,
-                                                context.getSymbolAllocator().getTypes()).orElse(result));
+        return Result.ofPlanNode(restrictOutputs(context.getIdAllocator(), result, ImmutableSet.copyOf(project.getOutputSymbols())).orElse(result));
     }
 
     private static boolean isSymbolToSymbolProjection(ProjectNode project)

@@ -80,18 +80,18 @@ public class IndexSnapshotBuilder
         this.keyOutputHashChannel = keyOutputHashChannel;
         this.maxMemoryInBytes = maxMemoryInBytes.toBytes();
 
-        ImmutableList.Builder<Type> tmpMissingKeysTypes = ImmutableList.builder();
-        ImmutableList.Builder<Integer> tmpMissingKeysChannels = ImmutableList.builder();
+        ImmutableList.Builder<Type> missingKeysTypes = ImmutableList.builder();
+        ImmutableList.Builder<Integer> missingKeysChannels = ImmutableList.builder();
         for (int i = 0; i < keyOutputChannels.size(); i++) {
             Integer keyOutputChannel = keyOutputChannels.get(i);
-            tmpMissingKeysTypes.add(outputTypes.get(keyOutputChannel));
-            tmpMissingKeysChannels.add(i);
+            missingKeysTypes.add(outputTypes.get(keyOutputChannel));
+            missingKeysChannels.add(i);
         }
-        this.missingKeysTypes = tmpMissingKeysTypes.build();
-        this.missingKeysChannels = tmpMissingKeysChannels.build();
+        this.missingKeysTypes = missingKeysTypes.build();
+        this.missingKeysChannels = missingKeysChannels.build();
 
         this.outputPagesIndex = pagesIndexFactory.newPagesIndex(outputTypes, expectedPositions);
-        this.missingKeysIndex = pagesIndexFactory.newPagesIndex(tmpMissingKeysTypes.build(), expectedPositions);
+        this.missingKeysIndex = pagesIndexFactory.newPagesIndex(missingKeysTypes.build(), expectedPositions);
         this.missingKeys = missingKeysIndex.createLookupSourceSupplier(session, this.missingKeysChannels).get();
 
         this.missingKeysPageBuilder = new PageBuilder(missingKeysIndex.getTypes());

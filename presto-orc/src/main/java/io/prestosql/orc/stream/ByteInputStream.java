@@ -97,10 +97,9 @@ public class ByteInputStream
     }
 
     @Override
-    public void skip(long inputItems)
+    public void skip(long items)
             throws IOException
     {
-        long items = inputItems;
         while (items > 0) {
             if (offset == length) {
                 readNextBlock();

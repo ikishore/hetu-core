@@ -224,23 +224,23 @@ final class PrestoDriverUri
     private static URI parseDriverUrl(String url)
             throws SQLException
     {
-        URI tmpUri;
+        URI uri;
         try {
-            tmpUri = new URI(url.substring(JDBC_URL_START.length()));
+            uri = new URI(url.substring(JDBC_URL_START.length()));
         }
         catch (URISyntaxException e) {
             throw new SQLException("Invalid JDBC URL: " + url, e);
         }
-        if (isNullOrEmpty(tmpUri.getHost())) {
+        if (isNullOrEmpty(uri.getHost())) {
             throw new SQLException("No host specified: " + url);
         }
-        if (tmpUri.getPort() == -1) {
+        if (uri.getPort() == -1) {
             throw new SQLException("No port number specified: " + url);
         }
-        if ((tmpUri.getPort() < 1) || (tmpUri.getPort() > 65535)) {
+        if ((uri.getPort() < 1) || (uri.getPort() > 65535)) {
             throw new SQLException("Invalid port number: " + url);
         }
-        return tmpUri;
+        return uri;
     }
 
     private URI buildHttpUri()

@@ -64,14 +64,14 @@ public class FixedLifespanScheduler
         checkArgument(partitionHandles.size() == bucketNodeMap.getBucketCount());
 
         Map<InternalNode, IntList> nodeToDriverGroupMap = new HashMap<>();
-        Int2ObjectMap<InternalNode> tmpDriverGroupToNodeMap = new Int2ObjectOpenHashMap<>();
+        Int2ObjectMap<InternalNode> driverGroupToNodeMap = new Int2ObjectOpenHashMap<>();
         for (int bucket = 0; bucket < bucketNodeMap.getBucketCount(); bucket++) {
             InternalNode node = bucketNodeMap.getAssignedNode(bucket).get();
             nodeToDriverGroupMap.computeIfAbsent(node, key -> new IntArrayList()).add(bucket);
-            tmpDriverGroupToNodeMap.put(bucket, node);
+            driverGroupToNodeMap.put(bucket, node);
         }
 
-        this.driverGroupToNodeMap = tmpDriverGroupToNodeMap;
+        this.driverGroupToNodeMap = driverGroupToNodeMap;
         this.nodeToDriverGroupsMap = nodeToDriverGroupMap.entrySet().stream()
                 .collect(toImmutableMap(Map.Entry::getKey, entry -> entry.getValue().iterator()));
         this.partitionHandles = requireNonNull(partitionHandles, "partitionHandles is null");
@@ -81,7 +81,6 @@ public class FixedLifespanScheduler
         this.concurrentLifespansPerTask = requireNonNull(concurrentLifespansPerTask, "concurrentLifespansPerTask is null");
     }
 
-    @Override
     public void scheduleInitial(SourceScheduler scheduler)
     {
         checkState(!initialScheduled);
@@ -108,23 +107,21 @@ public class FixedLifespanScheduler
         }
     }
 
-    @Override
     public void onLifespanFinished(Iterable<Lifespan> newlyCompletedDriverGroups)
     {
         checkState(initialScheduled);
 
-        SettableFuture<?> tmpNewDriverGroupReady;
+        SettableFuture<?> newDriverGroupReady;
         synchronized (this) {
             for (Lifespan newlyCompletedDriverGroup : newlyCompletedDriverGroups) {
                 checkArgument(!newlyCompletedDriverGroup.isTaskWide());
                 recentlyCompletedDriverGroups.add(newlyCompletedDriverGroup);
             }
-            tmpNewDriverGroupReady = this.newDriverGroupReady;
+            newDriverGroupReady = this.newDriverGroupReady;
         }
-        tmpNewDriverGroupReady.set(null);
+        newDriverGroupReady.set(null);
     }
 
-    @Override
     public SettableFuture<?> schedule(SourceScheduler scheduler)
     {
         // Return a new future even if newDriverGroupReady has not finished.
@@ -132,14 +129,14 @@ public class FixedLifespanScheduler
 
         checkState(initialScheduled);
 
-        List<Lifespan> tmpRecentlyCompletedDriverGroups;
+        List<Lifespan> recentlyCompletedDriverGroups;
         synchronized (this) {
-            tmpRecentlyCompletedDriverGroups = ImmutableList.copyOf(this.recentlyCompletedDriverGroups);
+            recentlyCompletedDriverGroups = ImmutableList.copyOf(this.recentlyCompletedDriverGroups);
             this.recentlyCompletedDriverGroups.clear();
             newDriverGroupReady = SettableFuture.create();
         }
 
-        for (Lifespan driverGroup : tmpRecentlyCompletedDriverGroups) {
+        for (Lifespan driverGroup : recentlyCompletedDriverGroups) {
             IntListIterator driverGroupsIterator = nodeToDriverGroupsMap.get(driverGroupToNodeMap.get(driverGroup.getId()));
             if (!driverGroupsIterator.hasNext()) {
                 continue;

@@ -1,5 +1,5 @@
 /*
- * Copyright (C) 2018-2021. Huawei Technologies Co., Ltd. All rights reserved.
+ * Copyright (C) 2018-2020. Huawei Technologies Co., Ltd. All rights reserved.
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
  * You may obtain a copy of the License at
@@ -35,7 +35,7 @@ public class CTEScanNode
 {
     private PlanNode source;
     private List<Symbol> outputSymbols;
-    private Optional<RowExpression> predicate;
+    private final Optional<RowExpression> predicate;
     private Set<PlanNodeId> consumerPlans;
     private final String cteRefName;
     private final Integer commonCTERefNum;
@@ -72,7 +72,6 @@ public class CTEScanNode
     }
 
     @JsonProperty
-    @Override
     public List<Symbol> getOutputSymbols()
     {
         return outputSymbols;
@@ -87,12 +86,6 @@ public class CTEScanNode
     public Optional<RowExpression> getPredicate()
     {
         return predicate;
-    }
-
-    @JsonProperty
-    public void setPredicate(Optional<RowExpression> predicate)
-    {
-        this.predicate = predicate;
     }
 
     @JsonProperty

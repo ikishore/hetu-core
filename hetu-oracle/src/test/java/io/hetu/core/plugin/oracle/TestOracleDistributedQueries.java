@@ -138,7 +138,6 @@ public class TestOracleDistributedQueries
     /**
      * testShowCreateView
      */
-    @Override
     public void testShowCreateView()
     {
         // view is not supported
@@ -177,7 +176,6 @@ public class TestOracleDistributedQueries
     /**
      * testCommentTable
      */
-    @Override
     public void testCommentTable()
     {
         // commnet is not supported
@@ -186,7 +184,6 @@ public class TestOracleDistributedQueries
     /**
      * testInsertArray
      */
-    @Override
     public void testInsertArray()
     {
         // array is not supported
@@ -195,7 +192,6 @@ public class TestOracleDistributedQueries
     /**
      * testView
      */
-    @Override
     public void testView()
     {
         // view is not supported
@@ -204,7 +200,6 @@ public class TestOracleDistributedQueries
     /**
      * testViewCaseSensitivity
      */
-    @Override
     public void testViewCaseSensitivity()
     {
         // view is not supported
@@ -213,7 +208,6 @@ public class TestOracleDistributedQueries
     /**
      * testCompatibleTypeChangeForView
      */
-    @Override
     public void testCompatibleTypeChangeForView()
     {
         // view is not supported
@@ -222,7 +216,6 @@ public class TestOracleDistributedQueries
     /**
      * testCompatibleTypeChangeForView2
      */
-    @Override
     public void testCompatibleTypeChangeForView2()
     {
         // view is not supported
@@ -231,7 +224,6 @@ public class TestOracleDistributedQueries
     /**
      * testViewMetadata
      */
-    @Override
     public void testViewMetadata()
     {
         // view is not supported
@@ -247,7 +239,6 @@ public class TestOracleDistributedQueries
     }
 
     @Test
-    @Override
     public void testCreateTable()
     {
         // for now oracle do not support NCLOB(4000, 0) with jdbc type 2011

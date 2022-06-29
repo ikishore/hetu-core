@@ -15,8 +15,6 @@ package io.prestosql.plugin.ml;
 
 import com.google.common.annotations.VisibleForTesting;
 import com.google.common.collect.ImmutableSortedMap;
-import io.prestosql.spi.snapshot.BlockEncodingSerdeProvider;
-import io.prestosql.spi.snapshot.Restorable;
 
 import java.util.Map;
 import java.util.SortedMap;
@@ -26,7 +24,6 @@ import static io.airlift.slice.SizeOf.SIZE_OF_INT;
 import static io.airlift.slice.SizeOf.SIZE_OF_LONG;
 
 public class FeatureVector
-        implements Restorable
 {
     //TODO replace this with a more efficient data structure
     private final SortedMap<Integer, Double> features;
@@ -55,11 +52,5 @@ public class FeatureVector
     public long getEstimatedSize()
     {
         return (SIZE_OF_DOUBLE + SIZE_OF_INT + 3 * 3 * SIZE_OF_LONG) * (long) size();
-    }
-
-    @Override
-    public Object capture(BlockEncodingSerdeProvider serdeProvider)
-    {
-        return features;
     }
 }

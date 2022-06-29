@@ -19,10 +19,8 @@ import io.prestosql.Session;
 import io.prestosql.execution.StateMachine.StateChangeListener;
 import io.prestosql.server.BasicQueryInfo;
 import io.prestosql.spi.ErrorCode;
-import org.joda.time.DateTime;
 
 import java.util.Optional;
-import java.util.OptionalDouble;
 
 public interface ManagedQueryExecution
 {
@@ -53,14 +51,4 @@ public interface ManagedQueryExecution
      * @return Returns non-empty value iff error has occurred and query failed state is visible.
      */
     Optional<ErrorCode> getErrorCode();
-
-    default Optional<DateTime> getQueryExecutionStartTime()
-    {
-        return Optional.empty();
-    }
-
-    default OptionalDouble getQueryProgress()
-    {
-        return getBasicQueryInfo().getQueryStats().getProgressPercentage();
-    }
 }

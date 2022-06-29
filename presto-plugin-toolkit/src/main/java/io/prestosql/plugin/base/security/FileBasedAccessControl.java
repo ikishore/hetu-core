@@ -212,7 +212,6 @@ public class FileBasedAccessControl
         }
     }
 
-    @Override
     public void checkCanUpdateTable(ConnectorTransactionHandle transactionHandle, ConnectorIdentity identity, SchemaTableName tableName)
     {
         if (!checkTablePermission(identity, tableName, UPDATE)) {
@@ -340,7 +339,7 @@ public class FileBasedAccessControl
     private boolean canSetSessionProperty(ConnectorIdentity identity, String property)
     {
         for (SessionPropertyAccessControlRule rule : sessionPropertyRules) {
-            Optional<Boolean> allowed = rule.match(identity.getUser(), identity.getGroups(), property);
+            Optional<Boolean> allowed = rule.match(identity.getUser(), property);
             if (allowed.isPresent() && allowed.get()) {
                 return true;
             }
@@ -358,7 +357,7 @@ public class FileBasedAccessControl
         }
 
         for (TableAccessControlRule rule : tableRules) {
-            Optional<Set<TablePrivilege>> tablePrivileges = rule.match(identity.getUser(), identity.getGroups(), tableName);
+            Optional<Set<TablePrivilege>> tablePrivileges = rule.match(identity.getUser(), tableName);
             if (tablePrivileges.isPresent()) {
                 return tablePrivileges.get().containsAll(ImmutableSet.copyOf(requiredPrivileges));
             }
@@ -369,7 +368,7 @@ public class FileBasedAccessControl
     private boolean isDatabaseOwner(ConnectorIdentity identity, String schemaName)
     {
         for (SchemaAccessControlRule rule : schemaRules) {
-            Optional<Boolean> owner = rule.match(identity.getUser(), identity.getGroups(), schemaName);
+            Optional<Boolean> owner = rule.match(identity.getUser(), schemaName);
             if (owner.isPresent()) {
                 return owner.get();
             }

@@ -19,14 +19,11 @@ import com.google.common.collect.ImmutableList;
 import com.google.common.collect.ImmutableMap;
 import com.google.common.collect.ImmutableSet;
 import com.google.common.collect.Iterables;
-import io.prestosql.spi.function.FunctionHandle;
-import io.prestosql.spi.relation.CallExpression;
+import io.prestosql.spi.function.Signature;
 import io.prestosql.spi.relation.RowExpression;
 
 import javax.annotation.concurrent.Immutable;
 
-import java.util.ArrayList;
-import java.util.Arrays;
 import java.util.HashSet;
 import java.util.List;
 import java.util.Map;
@@ -50,8 +47,6 @@ public class AggregationNode
     private final Optional<Symbol> hashSymbol;
     private final Optional<Symbol> groupIdSymbol;
     private final List<Symbol> outputs;
-    private AggregationType aggregationType;
-    private Optional<Symbol> finalizeSymbol;
 
     @JsonCreator
     public AggregationNode(
@@ -62,9 +57,7 @@ public class AggregationNode
             @JsonProperty("preGroupedSymbols") List<Symbol> preGroupedSymbols,
             @JsonProperty("step") Step step,
             @JsonProperty("hashSymbol") Optional<Symbol> hashSymbol,
-            @JsonProperty("groupIdSymbol") Optional<Symbol> groupIdSymbol,
-            @JsonProperty("aggregationType") AggregationType aggregationType,
-            @JsonProperty("finalizeSymbol") Optional<Symbol> finalizeSymbol)
+            @JsonProperty("groupIdSymbol") Optional<Symbol> groupIdSymbol)
     {
         super(id);
 
@@ -89,27 +82,12 @@ public class AggregationNode
         checkArgument(preGroupedSymbols.isEmpty() || groupingSets.getGroupingKeys().containsAll(preGroupedSymbols), "Pre-grouped symbols must be a subset of the grouping keys");
         this.preGroupedSymbols = ImmutableList.copyOf(preGroupedSymbols);
 
-        ImmutableList.Builder<Symbol> outputs1 = ImmutableList.builder();
-        outputs1.addAll(groupingSets.getGroupingKeys());
-        hashSymbol.ifPresent(outputs1::add);
-        outputs1.addAll(aggregations.keySet());
+        ImmutableList.Builder<Symbol> outputs = ImmutableList.builder();
+        outputs.addAll(groupingSets.getGroupingKeys());
+        hashSymbol.ifPresent(outputs::add);
+        outputs.addAll(aggregations.keySet());
 
-        AggregationType tmpAggregationType = aggregationType;
-        if (tmpAggregationType == AggregationType.SORT_BASED) {
-            if (step.equals(Step.PARTIAL)) {
-                if (finalizeSymbol.isPresent()) {
-                    List<Symbol> symbolList = new ArrayList<>(Arrays.asList(finalizeSymbol.get()));
-                    outputs1.addAll(symbolList);
-                }
-            }
-            else if (step.equals(Step.FINAL) && !finalizeSymbol.isPresent()) {
-                tmpAggregationType = AggregationType.HASH;
-            }
-        }
-
-        this.outputs = outputs1.build();
-        this.aggregationType = tmpAggregationType;
-        this.finalizeSymbol = finalizeSymbol;
+        this.outputs = outputs.build();
     }
 
     public List<Symbol> getGroupingKeys()
@@ -220,8 +198,7 @@ public class AggregationNode
     @Override
     public PlanNode replaceChildren(List<PlanNode> newChildren)
     {
-        return new AggregationNode(getId(), Iterables.getOnlyElement(newChildren), aggregations, groupingSets, preGroupedSymbols, step, hashSymbol, groupIdSymbol,
-                aggregationType, finalizeSymbol);
+        return new AggregationNode(getId(), Iterables.getOnlyElement(newChildren), aggregations, groupingSets, preGroupedSymbols, step, hashSymbol, groupIdSymbol);
     }
 
     public boolean producesDistinctRows()
@@ -258,28 +235,6 @@ public class AggregationNode
     public static GroupingSetDescriptor groupingSets(List<Symbol> groupingKeys, int groupingSetCount, Set<Integer> globalGroupingSets)
     {
         return new GroupingSetDescriptor(groupingKeys, groupingSetCount, globalGroupingSets);
-    }
-
-    @JsonProperty("aggregationType")
-    public AggregationType getAggregationType()
-    {
-        return aggregationType;
-    }
-
-    public void setAggregationType(AggregationType aggregationType)
-    {
-        this.aggregationType = aggregationType;
-    }
-
-    @JsonProperty("finalizeSymbol")
-    public Optional<Symbol> getFinalizeSymbol()
-    {
-        return finalizeSymbol;
-    }
-
-    public void setFinalizeSymbol(Optional<Symbol> finalizeSymbol)
-    {
-        this.finalizeSymbol = finalizeSymbol;
     }
 
     public static class GroupingSetDescriptor
@@ -374,7 +329,7 @@ public class AggregationNode
 
     public static class Aggregation
     {
-        private final CallExpression functionCall;
+        private final Signature signature;
         private final List<RowExpression> arguments;
         private final boolean distinct;
         private final Optional<Symbol> filter;
@@ -383,15 +338,19 @@ public class AggregationNode
 
         @JsonCreator
         public Aggregation(
-                @JsonProperty("call") CallExpression functionCall,
+                @JsonProperty("signature") Signature signature,
                 @JsonProperty("arguments") List<RowExpression> arguments,
                 @JsonProperty("distinct") boolean distinct,
                 @JsonProperty("filter") Optional<Symbol> filter,
                 @JsonProperty("orderingScheme") Optional<OrderingScheme> orderingScheme,
                 @JsonProperty("mask") Optional<Symbol> mask)
         {
-            this.functionCall = requireNonNull(functionCall, "functionCall is null");
+            this.signature = requireNonNull(signature, "signature is null");
             this.arguments = ImmutableList.copyOf(requireNonNull(arguments, "arguments is null"));
+//            for (RowExpression argument : arguments) {
+//                checkArgument(isExpression(argument) && (castToExpression(argument) instanceof SymbolReference || castToExpression(argument) instanceof LambdaExpression),
+//                        "argument must be symbol or lambda expression: %s", argument.getClass().getSimpleName());
+//            }
             this.distinct = distinct;
             this.filter = requireNonNull(filter, "filter is null");
             this.orderingScheme = requireNonNull(orderingScheme, "orderingScheme is null");
@@ -399,15 +358,9 @@ public class AggregationNode
         }
 
         @JsonProperty
-        public CallExpression getFunctionCall()
+        public Signature getSignature()
         {
-            return functionCall;
-        }
-
-        @JsonProperty
-        public FunctionHandle getFunctionHandle()
-        {
-            return functionCall.getFunctionHandle();
+            return signature;
         }
 
         @JsonProperty
@@ -451,7 +404,7 @@ public class AggregationNode
             }
             Aggregation that = (Aggregation) o;
             return distinct == that.distinct &&
-                    Objects.equals(functionCall, that.functionCall) &&
+                    Objects.equals(signature, that.signature) &&
                     Objects.equals(arguments, that.arguments) &&
                     Objects.equals(filter, that.filter) &&
                     Objects.equals(orderingScheme, that.orderingScheme) &&
@@ -461,13 +414,7 @@ public class AggregationNode
         @Override
         public int hashCode()
         {
-            return Objects.hash(functionCall, arguments, distinct, filter, orderingScheme, mask);
+            return Objects.hash(signature, arguments, distinct, filter, orderingScheme, mask);
         }
-    }
-
-    public enum AggregationType
-    {
-        HASH,
-        SORT_BASED
     }
 }

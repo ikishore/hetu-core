@@ -26,14 +26,11 @@ import io.prestosql.connector.system.MetadataBasedSystemTablesProvider;
 import io.prestosql.connector.system.StaticSystemTablesProvider;
 import io.prestosql.connector.system.SystemConnector;
 import io.prestosql.connector.system.SystemTablesProvider;
-import io.prestosql.cost.ConnectorFilterStatsCalculatorService;
-import io.prestosql.cost.FilterStatsCalculator;
 import io.prestosql.execution.scheduler.NodeSchedulerConfig;
 import io.prestosql.heuristicindex.HeuristicIndexerManager;
 import io.prestosql.index.IndexManager;
 import io.prestosql.metadata.Catalog;
 import io.prestosql.metadata.CatalogManager;
-import io.prestosql.metadata.FunctionAndTypeManager;
 import io.prestosql.metadata.HandleResolver;
 import io.prestosql.metadata.InternalNodeManager;
 import io.prestosql.metadata.MetadataManager;
@@ -42,8 +39,6 @@ import io.prestosql.security.AccessControlManager;
 import io.prestosql.server.ServerConfig;
 import io.prestosql.spi.PageIndexerFactory;
 import io.prestosql.spi.PageSorter;
-import io.prestosql.spi.PrestoException;
-import io.prestosql.spi.PrestoTransportException;
 import io.prestosql.spi.VersionEmbedder;
 import io.prestosql.spi.classloader.ThreadContextClassLoader;
 import io.prestosql.spi.connector.CatalogName;
@@ -59,8 +54,6 @@ import io.prestosql.spi.connector.ConnectorPlanOptimizerProvider;
 import io.prestosql.spi.connector.ConnectorRecordSetProvider;
 import io.prestosql.spi.connector.ConnectorSplitManager;
 import io.prestosql.spi.connector.SystemTable;
-import io.prestosql.spi.function.ExternalFunctionHub;
-import io.prestosql.spi.function.SqlInvokedFunction;
 import io.prestosql.spi.procedure.Procedure;
 import io.prestosql.spi.relation.DeterminismEvaluator;
 import io.prestosql.spi.relation.DomainTranslator;
@@ -72,7 +65,6 @@ import io.prestosql.split.SplitManager;
 import io.prestosql.sql.planner.ConnectorPlanOptimizerManager;
 import io.prestosql.sql.planner.NodePartitioningManager;
 import io.prestosql.sql.relational.ConnectorRowExpressionService;
-import io.prestosql.sql.relational.FunctionResolution;
 import io.prestosql.transaction.TransactionManager;
 import io.prestosql.type.InternalTypeManager;
 import io.prestosql.version.EmbedVersion;
@@ -96,10 +88,7 @@ import java.util.concurrent.atomic.AtomicBoolean;
 import static com.google.common.base.Preconditions.checkArgument;
 import static com.google.common.base.Preconditions.checkState;
 import static com.google.common.base.Verify.verify;
-import static io.prestosql.metadata.FunctionExtractor.extractExternalFunctions;
-import static io.prestosql.spi.HetuConstant.CONNECTION_USER;
 import static io.prestosql.spi.HetuConstant.DATA_CENTER_CONNECTOR_NAME;
-import static io.prestosql.spi.StandardErrorCode.REMOTE_TASK_ERROR;
 import static io.prestosql.spi.connector.CatalogName.createInformationSchemaCatalogName;
 import static io.prestosql.spi.connector.CatalogName.createSystemTablesCatalogName;
 import static java.lang.String.format;
@@ -145,7 +134,6 @@ public class ConnectorManager
 
     private final DomainTranslator domainTranslator;
     private final DeterminismEvaluator determinismEvaluator;
-    private final FilterStatsCalculator filterStatsCalculator;
 
     @Inject
     public ConnectorManager(
@@ -172,8 +160,7 @@ public class ConnectorManager
             NodeSchedulerConfig schedulerConfig,
             HeuristicIndexerManager heuristicIndexerManager,
             DomainTranslator domainTranslator,
-            DeterminismEvaluator determinismEvaluator,
-            FilterStatsCalculator filterStatsCalculator)
+            DeterminismEvaluator determinismEvaluator)
     {
         this.hetuMetaStoreManager = hetuMetaStoreManager;
         this.metadataManager = metadataManager;
@@ -199,7 +186,6 @@ public class ConnectorManager
         this.heuristicIndexerManager = heuristicIndexerManager;
         this.domainTranslator = domainTranslator;
         this.determinismEvaluator = determinismEvaluator;
-        this.filterStatsCalculator = filterStatsCalculator;
     }
 
     @PreDestroy
@@ -252,23 +238,15 @@ public class ConnectorManager
         handleResolver.addConnectorName(connectorFactory.getName(), connectorFactory.getHandleResolver());
     }
 
-    public synchronized CatalogName createAndCheckConnection(String catalogName, String connectorName, Map<String, String> properties)
-    {
-        requireNonNull(connectorName, "connectorName is null");
-        ConnectorFactory connectorFactory = connectorFactories.get(connectorName);
-        checkArgument(connectorFactory != null, "No factory for connector [%s].  Available factories: %s", connectorName, connectorFactories.keySet());
-        return createConnection(catalogName, connectorFactory, properties, true);
-    }
-
     public synchronized CatalogName createConnection(String catalogName, String connectorName, Map<String, String> properties)
     {
         requireNonNull(connectorName, "connectorName is null");
         ConnectorFactory connectorFactory = connectorFactories.get(connectorName);
         checkArgument(connectorFactory != null, "No factory for connector [%s].  Available factories: %s", connectorName, connectorFactories.keySet());
-        return createConnection(catalogName, connectorFactory, properties, false);
+        return createConnection(catalogName, connectorFactory, properties);
     }
 
-    private synchronized CatalogName createConnection(String catalogName, ConnectorFactory connectorFactory, Map<String, String> properties, boolean checkConnection)
+    private synchronized CatalogName createConnection(String catalogName, ConnectorFactory connectorFactory, Map<String, String> properties)
     {
         checkState(!stopped.get(), "ConnectorManager is stopped");
         requireNonNull(catalogName, "catalogName is null");
@@ -279,7 +257,7 @@ public class ConnectorManager
         CatalogName catalog = new CatalogName(catalogName);
         checkState(!connectors.containsKey(catalog), "A catalog %s already exists", catalog);
 
-        addCatalogConnector(catalog, connectorFactory, properties, checkConnection);
+        addCatalogConnector(catalog, connectorFactory, properties);
 
         return catalog;
     }
@@ -290,9 +268,8 @@ public class ConnectorManager
      * @param catalogName the catalog name
      * @param factory the connector factory
      * @param properties catalog properties
-     * @param checkConnection check whether connection of catalog is available.
      */
-    private synchronized void addCatalogConnector(CatalogName catalogName, ConnectorFactory factory, Map<String, String> properties, boolean checkConnection)
+    private synchronized void addCatalogConnector(CatalogName catalogName, ConnectorFactory factory, Map<String, String> properties)
     {
         // create all connectors before adding, so a broken connector does not leave the system half updated
         // Hetu reads the DC Connector properties file and dynamically creates <data-center>.<catalog-name> catalogs for each catalogs in that data center
@@ -300,17 +277,6 @@ public class ConnectorManager
         if (DATA_CENTER_CONNECTOR_NAME.equals(factory.getName())) {
             // It registers the Connector and Properties in the DataCenterConnectorStore
             catalogConnectorStore.registerConnectorAndProperties(catalogName, catalogConnector, properties);
-            if (checkConnection) {
-                // check connection
-                String catalog = catalogName.getCatalogName();
-                Connector connector = catalogConnectorStore.getCatalogConnector(catalog);
-                try {
-                    connector.getCatalogs(properties.get(CONNECTION_USER), properties);
-                }
-                catch (PrestoTransportException e) {
-                    throw new PrestoException(REMOTE_TASK_ERROR, "Failed to get catalogs from remote data center.");
-                }
-            }
         }
         else {
             addCatalogConnector(catalogName, catalogConnector);
@@ -450,31 +416,15 @@ public class ConnectorManager
         ConnectorContext context = new ConnectorContextInstance(
                 new ConnectorAwareNodeManager(nodeManager, nodeInfo.getEnvironment(), catalogName),
                 versionEmbedder,
-                new InternalTypeManager(metadataManager.getFunctionAndTypeManager()),
+                new InternalTypeManager(metadataManager),
                 pageSorter,
                 pageIndexerFactory,
                 hetuMetaStoreManager.getHetuMetastore(),
                 heuristicIndexerManager.getIndexClient(),
-                new ConnectorRowExpressionService(domainTranslator, determinismEvaluator),
-                metadataManager.getFunctionAndTypeManager(),
-                new FunctionResolution(metadataManager.getFunctionAndTypeManager()),
-                metadataManager.getFunctionAndTypeManager().getBlockEncodingSerde(),
-                new ConnectorFilterStatsCalculatorService(filterStatsCalculator));
+                new ConnectorRowExpressionService(domainTranslator, determinismEvaluator));
 
         try (ThreadContextClassLoader ignored = new ThreadContextClassLoader(factory.getClass().getClassLoader())) {
-            Connector connector = factory.create(catalogName.getCatalogName(), properties, context);
-            registerExternalFunctions(connector.getExternalFunctionHub(), metadataManager.getFunctionAndTypeManager());
-            return connector;
-        }
-    }
-
-    private static void registerExternalFunctions(Optional<ExternalFunctionHub> externalFunctionHub, FunctionAndTypeManager functionAndTypeManager)
-    {
-        if (externalFunctionHub.isPresent()) {
-            Set<SqlInvokedFunction> sqlInvokedFunctions = extractExternalFunctions(externalFunctionHub.get());
-            for (SqlInvokedFunction sqlInvokedFunction : sqlInvokedFunctions) {
-                functionAndTypeManager.createFunction(sqlInvokedFunction, true);
-            }
+            return factory.create(catalogName.getCatalogName(), properties, context);
         }
     }
 
@@ -576,21 +526,21 @@ public class ConnectorManager
             this.catalogName = requireNonNull(catalogName, "catalogName is null");
             this.connector = requireNonNull(connector, "connector is null");
 
-            Set<SystemTable> connectorSystemTables = connector.getSystemTables();
-            requireNonNull(connectorSystemTables, "Connector %s returned a null system tables set");
-            this.systemTables = ImmutableSet.copyOf(connectorSystemTables);
+            Set<SystemTable> systemTables = connector.getSystemTables();
+            requireNonNull(systemTables, "Connector %s returned a null system tables set");
+            this.systemTables = ImmutableSet.copyOf(systemTables);
 
-            Set<Procedure> connectorProcedures = connector.getProcedures();
-            requireNonNull(connectorProcedures, "Connector %s returned a null procedures set");
-            this.procedures = ImmutableSet.copyOf(connectorProcedures);
+            Set<Procedure> procedures = connector.getProcedures();
+            requireNonNull(procedures, "Connector %s returned a null procedures set");
+            this.procedures = ImmutableSet.copyOf(procedures);
 
-            ConnectorSplitManager connectorSplitManager = null;
+            ConnectorSplitManager splitManager = null;
             try {
-                connectorSplitManager = connector.getSplitManager();
+                splitManager = connector.getSplitManager();
             }
             catch (UnsupportedOperationException ignored) {
             }
-            this.splitManager = Optional.ofNullable(connectorSplitManager);
+            this.splitManager = Optional.ofNullable(splitManager);
 
             ConnectorPageSourceProvider connectorPageSourceProvider = null;
             try {
@@ -598,7 +548,6 @@ public class ConnectorManager
                 requireNonNull(connectorPageSourceProvider, format("Connector %s returned a null page source provider", catalogName));
             }
             catch (UnsupportedOperationException ignored) {
-                // could be ignored
             }
 
             try {
@@ -608,7 +557,6 @@ public class ConnectorManager
                 connectorPageSourceProvider = new RecordPageSourceProvider(connectorRecordSetProvider);
             }
             catch (UnsupportedOperationException ignored) {
-                // could be ignored
             }
             this.pageSourceProvider = Optional.ofNullable(connectorPageSourceProvider);
 
@@ -618,68 +566,63 @@ public class ConnectorManager
                 requireNonNull(connectorPageSinkProvider, format("Connector %s returned a null page sink provider", catalogName));
             }
             catch (UnsupportedOperationException ignored) {
-                // could be ignored
             }
             this.pageSinkProvider = Optional.ofNullable(connectorPageSinkProvider);
 
-            ConnectorIndexProvider connectorIndexProvider = null;
+            ConnectorIndexProvider indexProvider = null;
             try {
-                connectorIndexProvider = connector.getIndexProvider();
-                requireNonNull(connectorIndexProvider, format("Connector %s returned a null index provider", catalogName));
+                indexProvider = connector.getIndexProvider();
+                requireNonNull(indexProvider, format("Connector %s returned a null index provider", catalogName));
             }
             catch (UnsupportedOperationException ignored) {
-                // could be ignored
             }
-            this.indexProvider = Optional.ofNullable(connectorIndexProvider);
+            this.indexProvider = Optional.ofNullable(indexProvider);
 
-            ConnectorNodePartitioningProvider connectorNodePartitioningProvider = null;
+            ConnectorNodePartitioningProvider partitioningProvider = null;
             try {
-                connectorNodePartitioningProvider = connector.getNodePartitioningProvider();
-                requireNonNull(connectorNodePartitioningProvider, format("Connector %s returned a null partitioning provider", catalogName));
+                partitioningProvider = connector.getNodePartitioningProvider();
+                requireNonNull(partitioningProvider, format("Connector %s returned a null partitioning provider", catalogName));
             }
             catch (UnsupportedOperationException ignored) {
-                // could be ignored
             }
-            this.partitioningProvider = Optional.ofNullable(connectorNodePartitioningProvider);
+            this.partitioningProvider = Optional.ofNullable(partitioningProvider);
 
-            ConnectorPlanOptimizerProvider connectorPlanOptimizerProvider = null;
+            ConnectorPlanOptimizerProvider planOptimizerProvider = null;
             try {
-                connectorPlanOptimizerProvider = connector.getConnectorPlanOptimizerProvider();
-                requireNonNull(connectorPlanOptimizerProvider, format("Connector %s returned a null plan optimizer provider", catalogName));
+                planOptimizerProvider = connector.getConnectorPlanOptimizerProvider();
+                requireNonNull(planOptimizerProvider, format("Connector %s returned a null plan optimizer provider", catalogName));
             }
             catch (UnsupportedOperationException ignored) {
-                // could be ignored
             }
-            this.planOptimizerProvider = Optional.ofNullable(connectorPlanOptimizerProvider);
+            this.planOptimizerProvider = Optional.ofNullable(planOptimizerProvider);
 
-            ConnectorAccessControl connectorAccessControl = null;
+            ConnectorAccessControl accessControl = null;
             try {
-                connectorAccessControl = connector.getAccessControl();
+                accessControl = connector.getAccessControl();
             }
             catch (UnsupportedOperationException ignored) {
-                // could be ignored
             }
-            this.accessControl = Optional.ofNullable(connectorAccessControl);
+            this.accessControl = Optional.ofNullable(accessControl);
 
-            List<PropertyMetadata<?>> connectorSessionProperties = connector.getSessionProperties();
-            requireNonNull(connectorSessionProperties, "Connector %s returned a null system properties set");
-            this.sessionProperties = ImmutableList.copyOf(connectorSessionProperties);
+            List<PropertyMetadata<?>> sessionProperties = connector.getSessionProperties();
+            requireNonNull(sessionProperties, "Connector %s returned a null system properties set");
+            this.sessionProperties = ImmutableList.copyOf(sessionProperties);
 
-            List<PropertyMetadata<?>> connectorTableProperties = connector.getTableProperties();
-            requireNonNull(connectorTableProperties, "Connector %s returned a null table properties set");
-            this.tableProperties = ImmutableList.copyOf(connectorTableProperties);
+            List<PropertyMetadata<?>> tableProperties = connector.getTableProperties();
+            requireNonNull(tableProperties, "Connector %s returned a null table properties set");
+            this.tableProperties = ImmutableList.copyOf(tableProperties);
 
-            List<PropertyMetadata<?>> connectorSchemaProperties = connector.getSchemaProperties();
-            requireNonNull(connectorSchemaProperties, "Connector %s returned a null schema properties set");
-            this.schemaProperties = ImmutableList.copyOf(connectorSchemaProperties);
+            List<PropertyMetadata<?>> schemaProperties = connector.getSchemaProperties();
+            requireNonNull(schemaProperties, "Connector %s returned a null schema properties set");
+            this.schemaProperties = ImmutableList.copyOf(schemaProperties);
 
-            List<PropertyMetadata<?>> connectorColumnProperties = connector.getColumnProperties();
-            requireNonNull(connectorColumnProperties, "Connector %s returned a null column properties set");
-            this.columnProperties = ImmutableList.copyOf(connectorColumnProperties);
+            List<PropertyMetadata<?>> columnProperties = connector.getColumnProperties();
+            requireNonNull(columnProperties, "Connector %s returned a null column properties set");
+            this.columnProperties = ImmutableList.copyOf(columnProperties);
 
-            List<PropertyMetadata<?>> connectorAnalyzeProperties = connector.getAnalyzeProperties();
-            requireNonNull(connectorAnalyzeProperties, "Connector %s returned a null analyze properties set");
-            this.analyzeProperties = ImmutableList.copyOf(connectorAnalyzeProperties);
+            List<PropertyMetadata<?>> analyzeProperties = connector.getAnalyzeProperties();
+            requireNonNull(analyzeProperties, "Connector %s returned a null analyze properties set");
+            this.analyzeProperties = ImmutableList.copyOf(analyzeProperties);
         }
 
         public CatalogName getCatalogName()

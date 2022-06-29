@@ -66,11 +66,11 @@ public class TpcdsMetadata
 
     public TpcdsMetadata()
     {
-        ImmutableSet.Builder<String> tableNamesBuilder = ImmutableSet.builder();
+        ImmutableSet.Builder<String> tableNames = ImmutableSet.builder();
         for (Table tpcdsTable : Table.getBaseTables()) {
-            tableNamesBuilder.add(tpcdsTable.getName().toLowerCase(ENGLISH));
+            tableNames.add(tpcdsTable.getName().toLowerCase(ENGLISH));
         }
-        this.tableNames = tableNamesBuilder.build();
+        this.tableNames = tableNames.build();
     }
 
     @Override
@@ -154,8 +154,12 @@ public class TpcdsMetadata
     }
 
     @Override
-    public TableStatistics getTableStatistics(ConnectorSession session, ConnectorTableHandle tableHandle, Constraint constraint, boolean includeColumnStatistics)
+    public TableStatistics getTableStatistics(ConnectorSession session, ConnectorTableHandle tableHandle, Constraint constraint)
     {
+        //        System.out.println("getTableStatistics (tpcds - connector)");
+//        TpcdsStatisticsRecorder objStats = new TpcdsStatisticsRecorder();
+//        objStats.callable();
+
         TpcdsTableHandle tpcdsTableHandle = (TpcdsTableHandle) tableHandle;
 
         Table table = Table.getTable(tpcdsTableHandle.getTableName());
@@ -184,7 +188,7 @@ public class TpcdsMetadata
     public ColumnMetadata getColumnMetadata(ConnectorSession session, ConnectorTableHandle tableHandle, ColumnHandle columnHandle)
     {
         ConnectorTableMetadata tableMetadata = getTableMetadata(session, tableHandle);
-        String columnName = columnHandle.getColumnName();
+        String columnName = ((TpcdsColumnHandle) columnHandle).getColumnName();
 
         for (ColumnMetadata column : tableMetadata.getColumns()) {
             if (column.getName().equals(columnName)) {
@@ -286,12 +290,6 @@ public class TpcdsMetadata
      */
     @Override
     public boolean isExecutionPlanCacheSupported(ConnectorSession session, ConnectorTableHandle handle)
-    {
-        return true;
-    }
-
-    @Override
-    public boolean isSnapshotSupportedAsInput(ConnectorSession session, ConnectorTableHandle handle)
     {
         return true;
     }

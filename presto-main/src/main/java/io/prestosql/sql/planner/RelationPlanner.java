@@ -35,6 +35,7 @@ import io.prestosql.spi.plan.JoinNode;
 import io.prestosql.spi.plan.PlanNode;
 import io.prestosql.spi.plan.PlanNodeIdAllocator;
 import io.prestosql.spi.plan.ProjectNode;
+import io.prestosql.spi.plan.RouterNode;
 import io.prestosql.spi.plan.Symbol;
 import io.prestosql.spi.plan.TableScanNode;
 import io.prestosql.spi.plan.UnionNode;
@@ -247,7 +248,7 @@ class RelationPlanner
         TranslationMap translations = new TranslationMap(plan, analysis, lambdaDeclarationToSymbolMap);
         translations.setFieldMappings(mappings);
 
-        PlanBuilder planBuilder = new PlanBuilder(translations, root);
+        PlanBuilder planBuilder = new PlanBuilder(translations, root, analysis.getParameters());
 
         for (int i = 0; i < plan.getDescriptor().getAllFieldCount(); i++) {
             Field field = plan.getDescriptor().getFieldByIndex(i);
@@ -482,7 +483,7 @@ class RelationPlanner
 
         if (node.getType() == INNER) {
             // rewrite all the other conditions using output symbols from left + right plan node.
-            PlanBuilder rootPlanBuilder = new PlanBuilder(translationMap, root);
+            PlanBuilder rootPlanBuilder = new PlanBuilder(translationMap, root, analysis.getParameters());
             rootPlanBuilder = subqueryPlanner.handleSubqueries(rootPlanBuilder, complexJoinExpressions, node);
 
             for (Expression expression : complexJoinExpressions) {
@@ -496,6 +497,8 @@ class RelationPlanner
                 root = new FilterNode(idAllocator.getNextId(), root, castToRowExpression(postInnerJoinCriteria));
             }
         }
+
+        //root = new RouterNode(idAllocator.getNextId(), root, root.getOutputSymbols(), new HashSet(), 1);
 
         return new RelationPlan(root, analysis.getScope(node), outputSymbols);
     }
@@ -990,7 +993,7 @@ class RelationPlanner
         // This makes it possible to rewrite FieldOrExpressions that reference fields from the underlying tuple directly
         translations.setFieldMappings(relationPlan.getFieldMappings());
 
-        return new PlanBuilder(translations, relationPlan.getRoot());
+        return new PlanBuilder(translations, relationPlan.getRoot(), analysis.getParameters());
     }
 
     private PlanNode distinct(PlanNode node)
@@ -1002,8 +1005,6 @@ class RelationPlanner
                 ImmutableList.of(),
                 AggregationNode.Step.SINGLE,
                 Optional.empty(),
-                Optional.empty(),
-                AggregationNode.AggregationType.HASH,
                 Optional.empty());
     }
 

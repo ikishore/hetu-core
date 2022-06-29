@@ -14,12 +14,13 @@
 package io.prestosql;
 
 import com.google.common.annotations.VisibleForTesting;
+import com.google.common.collect.ImmutableList;
 import com.google.common.collect.ImmutableMap;
 import com.google.common.collect.ImmutableSet;
 import com.google.common.collect.Maps;
 import io.airlift.units.DataSize;
 import io.airlift.units.Duration;
-import io.prestosql.execution.DriverPipelineTaskId;
+import io.prestosql.execution.DriverTaskId;
 import io.prestosql.metadata.SessionPropertyManager;
 import io.prestosql.security.AccessControl;
 import io.prestosql.spi.PrestoException;
@@ -36,21 +37,13 @@ import io.prestosql.transaction.TransactionId;
 import io.prestosql.transaction.TransactionManager;
 
 import java.security.Principal;
-import java.util.HashMap;
-import java.util.Locale;
-import java.util.Map;
+import java.util.*;
 import java.util.Map.Entry;
-import java.util.Optional;
-import java.util.Set;
-import java.util.TimeZone;
 import java.util.stream.Collectors;
 
 import static com.google.common.base.MoreObjects.toStringHelper;
 import static com.google.common.base.Preconditions.checkArgument;
 import static com.google.common.base.Preconditions.checkState;
-import static io.prestosql.SystemSessionProperties.RECOVERY_ENABLED;
-import static io.prestosql.SystemSessionProperties.SNAPSHOT_ENABLED;
-import static io.prestosql.SystemSessionProperties.TIME_ZONE_ID;
 import static io.prestosql.spi.StandardErrorCode.NOT_FOUND;
 import static io.prestosql.spi.connector.CatalogName.createInformationSchemaCatalogName;
 import static io.prestosql.spi.connector.CatalogName.createSystemTablesCatalogName;
@@ -60,6 +53,7 @@ import static java.util.Objects.requireNonNull;
 public final class Session
 {
     private final QueryId queryId;
+    private List<QueryId> batchQueries;
     private final Optional<TransactionId> transactionId;
     private final boolean clientTransactionSupport;
     private final Identity identity;
@@ -111,6 +105,7 @@ public final class Session
             boolean pageMetadataEnabled)
     {
         this.queryId = requireNonNull(queryId, "queryId is null");
+        this.batchQueries = ImmutableList.of(this.queryId);
         this.transactionId = requireNonNull(transactionId, "transactionId is null");
         this.clientTransactionSupport = clientTransactionSupport;
         this.identity = requireNonNull(identity, "identity is null");
@@ -128,15 +123,7 @@ public final class Session
         this.clientCapabilities = ImmutableSet.copyOf(requireNonNull(clientCapabilities, "clientCapabilities is null"));
         this.resourceEstimates = requireNonNull(resourceEstimates, "resourceEstimates is null");
         this.startTime = startTime;
-        requireNonNull(systemProperties, "systemProperties is null");
-        if (Boolean.parseBoolean(systemProperties.get(RECOVERY_ENABLED))
-                || Boolean.parseBoolean(systemProperties.get(SNAPSHOT_ENABLED))) {
-            // Snapshot: it's possible to disable snapshot at a later point, so systemProperties can't be immutable
-            this.systemProperties = new HashMap<>(systemProperties);
-        }
-        else {
-            this.systemProperties = ImmutableMap.copyOf(systemProperties);
-        }
+        this.systemProperties = ImmutableMap.copyOf(requireNonNull(systemProperties, "systemProperties is null"));
         this.sessionPropertyManager = requireNonNull(sessionPropertyManager, "sessionPropertyManager is null");
         this.preparedStatements = requireNonNull(preparedStatements, "preparedStatements is null");
         this.pageMetadataEnabled = pageMetadataEnabled;
@@ -163,14 +150,19 @@ public final class Session
         return queryId;
     }
 
+    public List<QueryId> getBatchQueries ()
+    {
+        return batchQueries;
+    }
+
+    public void setBatchQueries (List<QueryId> batchIds)
+    {
+        batchQueries = ImmutableList.copyOf(batchIds);
+    }
+
     public String getUser()
     {
         return identity.getUser();
-    }
-
-    public Set<String> getGroups()
-    {
-        return identity.getGroups();
     }
 
     public Identity getIdentity()
@@ -200,11 +192,7 @@ public final class Session
 
     public TimeZoneKey getTimeZoneKey()
     {
-        String timeZoneId = getSystemProperty(TIME_ZONE_ID, String.class);
-        if (timeZoneId == null) {
-            return timeZoneKey;
-        }
-        return TimeZoneKey.getTimeZoneKey(timeZoneId);
+        return timeZoneKey;
     }
 
     public Locale getLocale()
@@ -320,12 +308,6 @@ public final class Session
         this.pageMetadataEnabled = pageMetadataEnabled;
     }
 
-    public void disableSnapshot()
-    {
-        systemProperties.put(RECOVERY_ENABLED, "false");
-        systemProperties.put(SNAPSHOT_ENABLED, "false");
-    }
-
     public Session beginTransactionId(TransactionId transactionId, TransactionManager transactionManager, AccessControl accessControl)
     {
         requireNonNull(transactionId, "transactionId is null");
@@ -342,14 +324,14 @@ public final class Session
         }
 
         // Now that there is a transaction, the catalog name can be resolved to a connector, and the catalog properties can be validated
-        ImmutableMap.Builder<CatalogName, Map<String, String>> connProperties = ImmutableMap.builder();
+        ImmutableMap.Builder<CatalogName, Map<String, String>> connectorProperties = ImmutableMap.builder();
         for (Entry<String, Map<String, String>> catalogEntry : unprocessedCatalogProperties.entrySet()) {
             String catalogName = catalogEntry.getKey();
             Map<String, String> catalogProperties = catalogEntry.getValue();
             if (catalogProperties.isEmpty()) {
                 continue;
             }
-            CatalogName tmpCatalog = transactionManager.getOptionalCatalogMetadata(transactionId, catalogName)
+            CatalogName catalog = transactionManager.getOptionalCatalogMetadata(transactionId, catalogName)
                     .orElseThrow(() -> new PrestoException(NOT_FOUND, "Session property catalog does not exist: " + catalogName))
                     .getCatalogName();
 
@@ -358,29 +340,29 @@ public final class Session
                 accessControl.checkCanSetCatalogSessionProperty(transactionId, identity, catalogName, property.getKey());
 
                 // validate session property value
-                sessionPropertyManager.validateCatalogSessionProperty(tmpCatalog, catalogName, property.getKey(), property.getValue());
+                sessionPropertyManager.validateCatalogSessionProperty(catalog, catalogName, property.getKey(), property.getValue());
             }
-            connProperties.put(tmpCatalog, catalogProperties);
+            connectorProperties.put(catalog, catalogProperties);
         }
 
         ImmutableMap.Builder<String, SelectedRole> roles = ImmutableMap.builder();
         for (Entry<String, SelectedRole> entry : identity.getRoles().entrySet()) {
             String catalogName = entry.getKey();
             SelectedRole role = entry.getValue();
-            CatalogName tmpCatalog = transactionManager.getOptionalCatalogMetadata(transactionId, catalogName)
+            CatalogName catalog = transactionManager.getOptionalCatalogMetadata(transactionId, catalogName)
                     .orElseThrow(() -> new PrestoException(NOT_FOUND, "Catalog does not exist: " + catalogName))
                     .getCatalogName();
             if (role.getType() == SelectedRole.Type.ROLE) {
                 accessControl.checkCanSetRole(transactionId, identity, role.getRole().get(), catalogName);
             }
-            roles.put(tmpCatalog.getCatalogName(), role);
+            roles.put(catalog.getCatalogName(), role);
 
-            String informationSchemaCatalogName = createInformationSchemaCatalogName(tmpCatalog).getCatalogName();
+            String informationSchemaCatalogName = createInformationSchemaCatalogName(catalog).getCatalogName();
             if (transactionManager.getCatalogNames(transactionId).containsKey(informationSchemaCatalogName)) {
                 roles.put(informationSchemaCatalogName, role);
             }
 
-            String systemTablesCatalogName = createSystemTablesCatalogName(tmpCatalog).getCatalogName();
+            String systemTablesCatalogName = createSystemTablesCatalogName(catalog).getCatalogName();
             if (transactionManager.getCatalogNames(transactionId).containsKey(systemTablesCatalogName)) {
                 roles.put(systemTablesCatalogName, role);
             }
@@ -390,7 +372,7 @@ public final class Session
                 queryId,
                 Optional.of(transactionId),
                 clientTransactionSupport,
-                new Identity(identity.getUser(), identity.getGroups(), identity.getPrincipal(), roles.build(), identity.getExtraCredentials()),
+                new Identity(identity.getUser(), identity.getPrincipal(), roles.build(), identity.getExtraCredentials()),
                 source,
                 catalog,
                 schema,
@@ -406,7 +388,7 @@ public final class Session
                 resourceEstimates,
                 startTime,
                 systemProperties,
-                connProperties.build(),
+                connectorProperties.build(),
                 ImmutableMap.of(),
                 sessionPropertyManager,
                 preparedStatements,
@@ -423,17 +405,17 @@ public final class Session
                 !this.transactionId.isPresent() && this.connectorProperties.isEmpty(),
                 "Session properties cannot be overridden once a transaction is active");
 
-        Map<String, String> tmpSystemProperties = new HashMap<>();
-        tmpSystemProperties.putAll(systemPropertyDefaults);
-        tmpSystemProperties.putAll(this.systemProperties);
+        Map<String, String> systemProperties = new HashMap<>();
+        systemProperties.putAll(systemPropertyDefaults);
+        systemProperties.putAll(this.systemProperties);
 
-        Map<String, Map<String, String>> connProperties = catalogPropertyDefaults.entrySet().stream()
+        Map<String, Map<String, String>> connectorProperties = catalogPropertyDefaults.entrySet().stream()
                 .map(entry -> Maps.immutableEntry(entry.getKey(), new HashMap<>(entry.getValue())))
                 .collect(Collectors.toMap(Entry::getKey, Entry::getValue));
         for (Entry<String, Map<String, String>> catalogProperties : this.unprocessedCatalogProperties.entrySet()) {
-            String tmpCatalog = catalogProperties.getKey();
+            String catalog = catalogProperties.getKey();
             for (Entry<String, String> entry : catalogProperties.getValue().entrySet()) {
-                connProperties.computeIfAbsent(tmpCatalog, id -> new HashMap<>())
+                connectorProperties.computeIfAbsent(catalog, id -> new HashMap<>())
                         .put(entry.getKey(), entry.getValue());
             }
         }
@@ -457,9 +439,9 @@ public final class Session
                 clientCapabilities,
                 resourceEstimates,
                 startTime,
-                tmpSystemProperties,
+                systemProperties,
                 ImmutableMap.of(),
-                connProperties,
+                connectorProperties,
                 sessionPropertyManager,
                 preparedStatements,
                 pageMetadataEnabled);
@@ -483,7 +465,7 @@ public final class Session
                 sessionPropertyManager);
     }
 
-    public ConnectorSession toPerTaskConnectorSession(CatalogName catalogName, Optional<DriverPipelineTaskId> driverTaskId)
+    public ConnectorSession toPerTaskConnectorSession(CatalogName catalogName, Optional<DriverTaskId> driverTaskId)
     {
         requireNonNull(catalogName, "catalogName is null");
 
@@ -504,7 +486,6 @@ public final class Session
                 transactionId,
                 clientTransactionSupport,
                 identity.getUser(),
-                identity.getGroups(),
                 identity.getPrincipal().map(Principal::toString),
                 source,
                 catalog,
@@ -535,7 +516,6 @@ public final class Session
                 .add("queryId", queryId)
                 .add("transactionId", transactionId)
                 .add("user", getUser())
-                .add("groups", getGroups())
                 .add("principal", getIdentity().getPrincipal().orElse(null))
                 .add("source", source.orElse(null))
                 .add("catalog", catalog.orElse(null))

@@ -45,6 +45,7 @@ import static java.util.Objects.requireNonNull;
 public class QueryInfo
 {
     private final QueryId queryId;
+    private final List<QueryId> batchQueries;
     private final SessionRepresentation session;
     private final QueryState state;
     private final MemoryPoolId memoryPool;
@@ -75,6 +76,96 @@ public class QueryInfo
     private final boolean completeInfo;
     private final Optional<ResourceGroupId> resourceGroupId;
     private final boolean runningAsync;
+
+    @JsonCreator
+    public QueryInfo(
+            @JsonProperty("queryId") QueryId queryId,
+            @JsonProperty("batchQueries") List<QueryId> batchQueries,
+            @JsonProperty("session") SessionRepresentation session,
+            @JsonProperty("state") QueryState state,
+            @JsonProperty("memoryPool") MemoryPoolId memoryPool,
+            @JsonProperty("scheduled") boolean scheduled,
+            @JsonProperty("self") URI self,
+            @JsonProperty("fieldNames") List<String> fieldNames,
+            @JsonProperty("query") String query,
+            @JsonProperty("preparedQuery") Optional<String> preparedQuery,
+            @JsonProperty("queryStats") QueryStats queryStats,
+            @JsonProperty("setCatalog") Optional<String> setCatalog,
+            @JsonProperty("setSchema") Optional<String> setSchema,
+            @JsonProperty("setPath") Optional<String> setPath,
+            @JsonProperty("setSessionProperties") Map<String, String> setSessionProperties,
+            @JsonProperty("resetSessionProperties") Set<String> resetSessionProperties,
+            @JsonProperty("setRoles") Map<String, SelectedRole> setRoles,
+            @JsonProperty("addedPreparedStatements") Map<String, String> addedPreparedStatements,
+            @JsonProperty("deallocatedPreparedStatements") Set<String> deallocatedPreparedStatements,
+            @JsonProperty("startedTransactionId") Optional<TransactionId> startedTransactionId,
+            @JsonProperty("clearTransactionId") boolean clearTransactionId,
+            @JsonProperty("updateType") String updateType,
+            @JsonProperty("outputStage") Optional<StageInfo> outputStage,
+            @JsonProperty("failureInfo") ExecutionFailureInfo failureInfo,
+            @JsonProperty("errorCode") ErrorCode errorCode,
+            @JsonProperty("warnings") List<PrestoWarning> warnings,
+            @JsonProperty("inputs") Set<Input> inputs,
+            @JsonProperty("output") Optional<Output> output,
+            @JsonProperty("completeInfo") boolean completeInfo,
+            @JsonProperty("resourceGroupId") Optional<ResourceGroupId> resourceGroupId,
+            @JsonProperty("runningAsync") boolean runningAsync)
+    {
+        requireNonNull(queryId, "queryId is null");
+        requireNonNull(session, "session is null");
+        requireNonNull(state, "state is null");
+        requireNonNull(self, "self is null");
+        requireNonNull(fieldNames, "fieldNames is null");
+        requireNonNull(queryStats, "queryStats is null");
+        requireNonNull(setCatalog, "setCatalog is null");
+        requireNonNull(setSchema, "setSchema is null");
+        requireNonNull(setPath, "setPath is null");
+        requireNonNull(setSessionProperties, "setSessionProperties is null");
+        requireNonNull(resetSessionProperties, "resetSessionProperties is null");
+        requireNonNull(addedPreparedStatements, "addedPreparedStatemetns is null");
+        requireNonNull(deallocatedPreparedStatements, "deallocatedPreparedStatements is null");
+        requireNonNull(startedTransactionId, "startedTransactionId is null");
+        requireNonNull(query, "query is null");
+        requireNonNull(preparedQuery, "preparedQuery is null");
+        requireNonNull(outputStage, "outputStage is null");
+        requireNonNull(inputs, "inputs is null");
+        requireNonNull(output, "output is null");
+        requireNonNull(resourceGroupId, "resourceGroupId is null");
+        requireNonNull(warnings, "warnings is null");
+
+        this.queryId = queryId;
+        this.batchQueries = ImmutableList.copyOf(batchQueries);
+        this.session = session;
+        this.state = state;
+        this.memoryPool = requireNonNull(memoryPool, "memoryPool is null");
+        this.scheduled = scheduled;
+        this.self = self;
+        this.fieldNames = ImmutableList.copyOf(fieldNames);
+        this.query = query;
+        this.preparedQuery = preparedQuery;
+        this.queryStats = queryStats;
+        this.setCatalog = setCatalog;
+        this.setSchema = setSchema;
+        this.setPath = setPath;
+        this.setSessionProperties = ImmutableMap.copyOf(setSessionProperties);
+        this.resetSessionProperties = ImmutableSet.copyOf(resetSessionProperties);
+        this.setRoles = ImmutableMap.copyOf(setRoles);
+        this.addedPreparedStatements = ImmutableMap.copyOf(addedPreparedStatements);
+        this.deallocatedPreparedStatements = ImmutableSet.copyOf(deallocatedPreparedStatements);
+        this.startedTransactionId = startedTransactionId;
+        this.clearTransactionId = clearTransactionId;
+        this.updateType = updateType;
+        this.outputStage = outputStage;
+        this.failureInfo = failureInfo;
+        this.errorType = errorCode == null ? null : errorCode.getType();
+        this.errorCode = errorCode;
+        this.warnings = ImmutableList.copyOf(warnings);
+        this.inputs = ImmutableSet.copyOf(inputs);
+        this.output = output;
+        this.completeInfo = completeInfo;
+        this.resourceGroupId = resourceGroupId;
+        this.runningAsync = runningAsync;
+    }
 
     @JsonCreator
     public QueryInfo(
@@ -132,6 +223,7 @@ public class QueryInfo
         requireNonNull(warnings, "warnings is null");
 
         this.queryId = queryId;
+        this.batchQueries = null;
         this.session = session;
         this.state = state;
         this.memoryPool = requireNonNull(memoryPool, "memoryPool is null");
@@ -168,6 +260,12 @@ public class QueryInfo
     public QueryId getQueryId()
     {
         return queryId;
+    }
+
+    @JsonProperty
+    public List<QueryId> getBatchQueries()
+    {
+        return batchQueries;
     }
 
     @JsonProperty
@@ -327,13 +425,7 @@ public class QueryInfo
     @JsonProperty
     public boolean isFinalQueryInfo()
     {
-        return state.isDone() && areAllStagesDone();
-    }
-
-    public boolean areAllStagesDone()
-    {
-        // Snapshot: also used during resume, to determine if all old stages have finished
-        return getAllStages(outputStage).stream().allMatch(StageInfo::isFinalStageInfo);
+        return state.isDone() && getAllStages(outputStage).stream().allMatch(StageInfo::isFinalStageInfo);
     }
 
     @JsonProperty

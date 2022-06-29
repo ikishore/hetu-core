@@ -30,7 +30,6 @@ import io.prestosql.operator.scalar.AbstractTestFunctions;
 import io.prestosql.spi.Page;
 import io.prestosql.spi.block.Block;
 import io.prestosql.spi.block.BlockBuilder;
-import io.prestosql.spi.connector.QualifiedObjectName;
 import io.prestosql.spi.function.FunctionKind;
 import io.prestosql.spi.function.Signature;
 import io.prestosql.spi.type.TypeSignature;
@@ -99,8 +98,8 @@ public class TestSpatialPartitioningInternalAggregation
 
     private InternalAggregationFunction getFunction()
     {
-        return functionAssertions.getMetadata().getFunctionAndTypeManager().getAggregateFunctionImplementation(new Signature(
-                QualifiedObjectName.valueOfDefaultFunction("spatial_partitioning"),
+        return functionAssertions.getMetadata().getAggregateFunctionImplementation(new Signature(
+                "spatial_partitioning",
                 FunctionKind.AGGREGATE,
                 TypeSignature.parseTypeSignature(VARCHAR),
                 TypeSignature.parseTypeSignature(GEOMETRY_TYPE_NAME),

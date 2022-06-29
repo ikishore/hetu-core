@@ -18,13 +18,9 @@ import io.prestosql.array.LongBigArray;
 import io.prestosql.spi.PrestoException;
 import io.prestosql.spi.block.Block;
 import io.prestosql.spi.block.BlockBuilder;
-import io.prestosql.spi.snapshot.BlockEncodingSerdeProvider;
-import io.prestosql.spi.snapshot.RestorableConfig;
 import io.prestosql.spi.type.Type;
 import io.prestosql.type.TypeUtils;
 import org.openjdk.jol.info.ClassLayout;
-
-import java.io.Serializable;
 
 import static com.google.common.base.Preconditions.checkArgument;
 import static com.google.common.base.Preconditions.checkState;
@@ -55,7 +51,6 @@ import static java.util.Objects.requireNonNull;
  * </pre>
  */
 
-@RestorableConfig(uncapturedFields = {"bucketNodeFactory", "type", "valuePositions"})
 public class GroupedTypedHistogram
         implements TypedHistogram
 {
@@ -298,19 +293,19 @@ public class GroupedTypedHistogram
 
         for (int i = 0; i < nextNodePointer; i++) {
             // find the old one
-            int tmpBucketId = getBucketIdForNode(i, newMask);
+            int bucketId = getBucketIdForNode(i, newMask);
             int probeCount = 1;
 
-            int originalBucket = tmpBucketId;
+            int originalBucket = bucketId;
             // find new one
-            while (newBuckets.get(tmpBucketId) != -1) {
+            while (newBuckets.get(bucketId) != -1) {
                 int probe = nextProbe(probeCount);
-                tmpBucketId = nextBucketId(originalBucket, newMask, probe);
+                bucketId = nextBucketId(originalBucket, newMask, probe);
                 probeCount++;
             }
 
             // record the mapping
-            newBuckets.set(tmpBucketId, i);
+            newBuckets.set(bucketId, i);
         }
         buckets = newBuckets;
         bucketCount = newBucketCount;
@@ -344,9 +339,9 @@ public class GroupedTypedHistogram
     private int getBucketIdForNode(int nodePointer, int mask)
     {
         long valueAndGroupHash = valueAndGroupHashes.get(nodePointer); // without mask
-        int tmpBucketId = (int) (valueAndGroupHash & mask);
+        int bucketId = (int) (valueAndGroupHash & mask);
 
-        return tmpBucketId;
+        return bucketId;
     }
 
     //short-lived abstraction that is basically a position into parallel arrays that we can treat as one data structure
@@ -477,25 +472,25 @@ public class GroupedTypedHistogram
             long valueHash = murmurHash3(TypeUtils.hashPosition(type, block, position));
             long groupIdHash = murmurHash3(groupId);
             long valueAndGroupHash = combineGroupAndValueHash(groupIdHash, valueHash);
-            int tmpBucketId = (int) (valueAndGroupHash & mask);
+            int bucketId = (int) (valueAndGroupHash & mask);
             int nodePointer;
             int probeCount = 1;
-            int originalBucketId = tmpBucketId;
+            int originalBucketId = bucketId;
             // look for an empty slot or a slot containing this group x key
             while (true) {
-                nodePointer = buckets.get(tmpBucketId);
+                nodePointer = buckets.get(bucketId);
 
                 if (nodePointer == EMPTY_BUCKET) {
-                    return new BucketDataNode(tmpBucketId, new ValueNode(nextNodePointer), valueHash, valueAndGroupHash, nextNodePointer, true);
+                    return new BucketDataNode(bucketId, new ValueNode(nextNodePointer), valueHash, valueAndGroupHash, nextNodePointer, true);
                 }
                 else if (groupAndValueMatches(groupId, block, position, nodePointer, valuePositions.get(nodePointer))) {
                     // value match
-                    return new BucketDataNode(tmpBucketId, new ValueNode(nodePointer), valueHash, valueAndGroupHash, nodePointer, false);
+                    return new BucketDataNode(bucketId, new ValueNode(nodePointer), valueHash, valueAndGroupHash, nodePointer, false);
                 }
                 else {
                     // keep looking
                     int probe = nextProbe(probeCount);
-                    tmpBucketId = nextBucketId(originalBucketId, mask, probe);
+                    bucketId = nextBucketId(originalBucketId, mask, probe);
                     probeCount++;
                 }
             }
@@ -517,68 +512,5 @@ public class GroupedTypedHistogram
     private interface NodeReader
     {
         void read(int nodePointer);
-    }
-
-    @Override
-    public Object capture(BlockEncodingSerdeProvider serdeProvider)
-    {
-        GroupedTypedHistogramState myState = new GroupedTypedHistogramState();
-        myState.values = values.capture(serdeProvider);
-        myState.counts = counts.capture(serdeProvider);
-        myState.groupIds = groupIds.capture(serdeProvider);
-        myState.nextPointers = nextPointers.capture(serdeProvider);
-        myState.valuesPositions = valuePositions.capture(serdeProvider);
-        myState.valueAndGroupHashes = valueAndGroupHashes.capture(serdeProvider);
-        myState.headPointers = headPointers.capture(serdeProvider);
-        myState.buckets = buckets.capture(serdeProvider);
-        myState.nextNodePointer = nextNodePointer;
-        myState.mask = mask;
-        myState.bucketCount = bucketCount;
-        myState.maxFill = maxFill;
-        myState.currentGroupId = currentGroupId;
-        myState.numberOfGroups = numberOfGroups;
-        myState.valueStore = valueStore.capture(serdeProvider);
-        return myState;
-    }
-
-    @Override
-    public void restore(Object state, BlockEncodingSerdeProvider serdeProvider)
-    {
-        GroupedTypedHistogramState myState = (GroupedTypedHistogramState) state;
-        this.values.restore(myState.values, serdeProvider);
-        this.counts.restore(myState.counts, serdeProvider);
-        this.groupIds.restore(myState.groupIds, serdeProvider);
-        this.nextPointers.restore(myState.nextPointers, serdeProvider);
-        this.valuePositions.restore(myState.valuesPositions, serdeProvider);
-        this.valueAndGroupHashes.restore(myState.valueAndGroupHashes, serdeProvider);
-        this.headPointers.restore(myState.headPointers, serdeProvider);
-        this.buckets.restore(myState.buckets, serdeProvider);
-        this.nextNodePointer = myState.nextNodePointer;
-        this.mask = myState.mask;
-        this.bucketCount = myState.bucketCount;
-        this.maxFill = myState.maxFill;
-        this.currentGroupId = myState.currentGroupId;
-        this.numberOfGroups = myState.numberOfGroups;
-        this.valueStore.restore(myState.valueStore, serdeProvider);
-    }
-
-    private static class GroupedTypedHistogramState
-            implements Serializable
-    {
-        private Object values;
-        private Object counts;
-        private Object groupIds;
-        private Object nextPointers;
-        private Object valuesPositions;
-        private Object valueAndGroupHashes;
-        private Object headPointers;
-        private Object buckets;
-        private int nextNodePointer;
-        private int mask;
-        private int bucketCount;
-        private int maxFill;
-        private int currentGroupId;
-        private long numberOfGroups;
-        private Object valueStore;
     }
 }

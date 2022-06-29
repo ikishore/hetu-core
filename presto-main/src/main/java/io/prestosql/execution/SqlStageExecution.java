@@ -20,11 +20,8 @@ import com.google.common.collect.ImmutableMultimap;
 import com.google.common.collect.ImmutableSet;
 import com.google.common.collect.Multimap;
 import com.google.common.collect.Sets;
-import io.airlift.http.client.HttpStatus;
-import io.airlift.log.Logger;
 import io.airlift.units.Duration;
 import io.prestosql.Session;
-import io.prestosql.SystemSessionProperties;
 import io.prestosql.dynamicfilter.DynamicFilterService;
 import io.prestosql.execution.StateMachine.StateChangeListener;
 import io.prestosql.execution.buffer.OutputBuffers;
@@ -32,10 +29,6 @@ import io.prestosql.execution.scheduler.SplitSchedulerStats;
 import io.prestosql.failuredetector.FailureDetector;
 import io.prestosql.metadata.InternalNode;
 import io.prestosql.metadata.Split;
-import io.prestosql.operator.HttpPageBufferClient;
-import io.prestosql.server.remotetask.SimpleHttpResponseHandler;
-import io.prestosql.snapshot.QueryRecoveryManager;
-import io.prestosql.snapshot.QuerySnapshotManager;
 import io.prestosql.spi.PrestoException;
 import io.prestosql.spi.QueryId;
 import io.prestosql.spi.plan.JoinNode;
@@ -54,7 +47,6 @@ import javax.annotation.concurrent.ThreadSafe;
 import java.net.URI;
 import java.util.ArrayList;
 import java.util.Collection;
-import java.util.Collections;
 import java.util.HashSet;
 import java.util.List;
 import java.util.Map;
@@ -88,8 +80,6 @@ import static java.util.Objects.requireNonNull;
 @ThreadSafe
 public final class SqlStageExecution
 {
-    private static final Logger log = Logger.get(SqlStageExecution.class);
-
     private final StageStateMachine stateMachine;
     private final RemoteTaskFactory remoteTaskFactory;
     private final NodeTaskMap nodeTaskMap;
@@ -132,12 +122,6 @@ public final class SqlStageExecution
 
     private PlanNodeId parentId;
 
-    private final QuerySnapshotManager snapshotManager;
-    private final QueryRecoveryManager queryRecoveryManager;
-    private boolean throttledSchedule;
-    private boolean restoreInProgress;
-    private long captureSnapshotId;
-
     public static SqlStageExecution createSqlStageExecution(
             StageId stageId,
             URI location,
@@ -150,9 +134,7 @@ public final class SqlStageExecution
             ExecutorService executor,
             FailureDetector failureDetector,
             SplitSchedulerStats schedulerStats,
-            DynamicFilterService dynamicFilterService,
-            QuerySnapshotManager snapshotManager,
-            QueryRecoveryManager queryRecoveryManager)
+            DynamicFilterService dynamicFilterService)
     {
         requireNonNull(stageId, "stageId is null");
         requireNonNull(location, "location is null");
@@ -172,22 +154,12 @@ public final class SqlStageExecution
                 summarizeTaskInfo,
                 executor,
                 failureDetector,
-                dynamicFilterService,
-                snapshotManager,
-                queryRecoveryManager);
+                dynamicFilterService);
         sqlStageExecution.initialize();
         return sqlStageExecution;
     }
 
-    private SqlStageExecution(StageStateMachine stateMachine,
-            RemoteTaskFactory remoteTaskFactory,
-            NodeTaskMap nodeTaskMap,
-            boolean summarizeTaskInfo,
-            Executor executor,
-            FailureDetector failureDetector,
-            DynamicFilterService dynamicFilterService,
-            QuerySnapshotManager snapshotManager,
-            QueryRecoveryManager queryRecoveryManager)
+    private SqlStageExecution(StageStateMachine stateMachine, RemoteTaskFactory remoteTaskFactory, NodeTaskMap nodeTaskMap, boolean summarizeTaskInfo, Executor executor, FailureDetector failureDetector, DynamicFilterService dynamicFilterService)
     {
         this.stateMachine = stateMachine;
         this.remoteTaskFactory = requireNonNull(remoteTaskFactory, "remoteTaskFactory is null");
@@ -196,8 +168,6 @@ public final class SqlStageExecution
         this.executor = requireNonNull(executor, "executor is null");
         this.failureDetector = requireNonNull(failureDetector, "failureDetector is null");
         this.dynamicFilterService = requireNonNull(dynamicFilterService, "dynamicFilterService is null");
-        this.snapshotManager = requireNonNull(snapshotManager, "snapshotManager is null");
-        this.queryRecoveryManager = requireNonNull(queryRecoveryManager, "recoveryManager is null");
 
         ImmutableMap.Builder<PlanFragmentId, RemoteSourceNode> fragmentToExchangeSource = ImmutableMap.builder();
         for (RemoteSourceNode remoteSourceNode : stateMachine.getFragment().getRemoteSourceNodes()) {
@@ -217,10 +187,6 @@ public final class SqlStageExecution
                 }
             });
         }
-
-        this.throttledSchedule = false;
-        this.restoreInProgress = false;
-        this.captureSnapshotId = 0;
     }
 
     private void traverseNodesForDynamicFiltering(List<PlanNode> nodes)
@@ -331,37 +297,6 @@ public final class SqlStageExecution
         getAllTasks().forEach(RemoteTask::cancel);
     }
 
-    public synchronized void cancelToResume()
-    {
-        stateMachine.transitionToRecovering();
-        getAllTasks().forEach(RemoteTask::cancelToResume);
-    }
-
-    public synchronized void suspend()
-    {
-        stateMachine.transitionToSuspend();
-        getAllTasks().forEach(RemoteTask::suspend);
-    }
-
-    public synchronized void resume()
-    {
-        stateMachine.transitionToRunning();
-        getAllTasks().forEach(RemoteTask::resume);
-    }
-
-    public void OnSnapshotXCompleted(boolean capture, long snapshotId)
-    {
-        log.debug("OnSnapshotXCompleted() is called!, capture: %b, snapshotId: %d", capture, snapshotId);
-        if (!capture) {
-            restoreInProgress = false;
-            captureSnapshotId = 0;
-        }
-        // For capture completed, update snapshot id
-        else {
-            captureSnapshotId = snapshotId;
-        }
-    }
-
     public synchronized void abort()
     {
         stateMachine.transitionToAborted();
@@ -393,7 +328,7 @@ public final class SqlStageExecution
 
     public StageInfo getStageInfo()
     {
-        return stateMachine.getStageInfo(this::getAllTaskInfo, restoreInProgress, captureSnapshotId);
+        return stateMachine.getStageInfo(this::getAllTaskInfo);
     }
 
     private Iterable<TaskInfo> getAllTaskInfo()
@@ -421,7 +356,8 @@ public final class SqlStageExecution
         for (RemoteTask task : getAllTasks()) {
             ImmutableMultimap.Builder<PlanNodeId, Split> newSplits = ImmutableMultimap.builder();
             for (RemoteTask sourceTask : sourceTasks) {
-                newSplits.put(remoteSource.getId(), newConnectSplit(task.getTaskId(), sourceTask));
+                URI exchangeLocation = sourceTask.getTaskStatus().getSelf();
+                newSplits.put(remoteSource.getId(), createRemoteSplitFor(task.getTaskId(), exchangeLocation));
             }
             task.addSplits(newSplits.build());
         }
@@ -485,7 +421,7 @@ public final class SqlStageExecution
             return Optional.empty();
         }
         checkState(!splitsScheduled.get(), "scheduleTask can not be called once splits have been scheduled");
-        return Optional.of(scheduleTask(node, new TaskId(stateMachine.getStageId(), partition), generateInstanceId(), ImmutableMultimap.of(), totalPartitions));
+        return Optional.of(scheduleTask(node, new TaskId(stateMachine.getStageId(), partition), ImmutableMultimap.of(), totalPartitions));
     }
 
     public synchronized Set<RemoteTask> scheduleSplits(InternalNode node, Multimap<PlanNodeId, Split> splits, Multimap<PlanNodeId, Lifespan> noMoreSplitsNotification)
@@ -501,18 +437,17 @@ public final class SqlStageExecution
         checkArgument(stateMachine.getFragment().getPartitionedSources().containsAll(splits.keySet()), "Invalid splits");
 
         ImmutableSet.Builder<RemoteTask> newTasks = ImmutableSet.builder();
-        Collection<RemoteTask> remoteTasks = this.tasks.get(node);
+        Collection<RemoteTask> tasks = this.tasks.get(node);
         RemoteTask task;
-        if (remoteTasks == null) {
+        if (tasks == null) {
             // The output buffer depends on the task id starting from 0 and being sequential, since each
             // task is assigned a private buffer based on task id.
             TaskId taskId = new TaskId(stateMachine.getStageId(), nextTaskId.getAndIncrement());
-            String instanceId = generateInstanceId();
-            task = scheduleTask(node, taskId, instanceId, splits, OptionalInt.empty());
+            task = scheduleTask(node, taskId, splits, OptionalInt.empty());
             newTasks.add(task);
         }
         else {
-            task = remoteTasks.iterator().next();
+            task = tasks.iterator().next();
             task.addSplits(splits);
         }
         if (noMoreSplitsNotification.size() > 1) {
@@ -527,45 +462,34 @@ public final class SqlStageExecution
         return newTasks.build();
     }
 
-    private String generateInstanceId()
-    {
-        return queryRecoveryManager.getResumeCount() + "-" + UUID.randomUUID();
-    }
-
-    private synchronized RemoteTask scheduleTask(InternalNode node, TaskId taskId, String instanceId, Multimap<PlanNodeId, Split> sourceSplits, OptionalInt totalPartitions)
+    private synchronized RemoteTask scheduleTask(InternalNode node, TaskId taskId, Multimap<PlanNodeId, Split> sourceSplits, OptionalInt totalPartitions)
     {
         checkArgument(!allTasks.contains(taskId), "A task with id %s already exists", taskId);
-        if (SystemSessionProperties.isSnapshotEnabled(stateMachine.getSession())) {
-            // Snapshot: inform snapshot manager so it knows about all tasks,
-            // and can determine if a snapshot is complete for all tasks.
-            snapshotManager.addNewTask(taskId);
-        }
 
         ImmutableMultimap.Builder<PlanNodeId, Split> initialSplits = ImmutableMultimap.builder();
         initialSplits.putAll(sourceSplits);
 
         sourceTasks.forEach((planNodeId, task) -> {
-            if (task.getTaskStatus().getState() != TaskState.FINISHED) {
-                initialSplits.put(planNodeId, newConnectSplit(taskId, task));
+            TaskStatus status = task.getTaskStatus();
+            if (status.getState() != TaskState.FINISHED) {
+                initialSplits.put(planNodeId, createRemoteSplitFor(taskId, status.getSelf()));
             }
         });
 
-        OutputBuffers localOutputBuffers = this.outputBuffers.get();
-        checkState(localOutputBuffers != null, "Initial output buffers must be set before a task can be scheduled");
+        OutputBuffers outputBuffers = this.outputBuffers.get();
+        checkState(outputBuffers != null, "Initial output buffers must be set before a task can be scheduled");
 
         RemoteTask task = remoteTaskFactory.createRemoteTask(
                 stateMachine.getSession(),
                 taskId,
-                instanceId,
                 node,
                 stateMachine.getFragment(),
                 initialSplits.build(),
                 totalPartitions,
-                localOutputBuffers,
+                outputBuffers,
                 nodeTaskMap.createPartitionedSplitCountTracker(node, taskId),
                 summarizeTaskInfo,
-                Optional.ofNullable(parentId),
-                snapshotManager);
+                Optional.ofNullable(parentId));
 
         completeSources.forEach(task::noMoreSplits);
 
@@ -597,16 +521,11 @@ public final class SqlStageExecution
         stateMachine.recordGetSplitTime(start);
     }
 
-    private static Split newConnectSplit(TaskId taskId, RemoteTask sourceTask)
-    {
-        return createRemoteSplitFor(taskId, sourceTask.getInstanceId(), sourceTask.getTaskStatus().getSelf());
-    }
-
-    private static Split createRemoteSplitFor(TaskId taskId, String instanceId, URI taskLocation)
+    private static Split createRemoteSplitFor(TaskId taskId, URI taskLocation)
     {
         // Fetch the results from the buffer assigned to the task based on id
         URI splitLocation = uriBuilderFrom(taskLocation).appendPath("results").appendPath(String.valueOf(taskId.getId())).build();
-        return new Split(REMOTE_CONNECTOR_ID, new RemoteSplit(splitLocation, instanceId), Lifespan.taskWide());
+        return new Split(REMOTE_CONNECTOR_ID, new RemoteSplit(splitLocation), Lifespan.taskWide());
     }
 
     private synchronized void updateTaskStatus(TaskStatus taskStatus)
@@ -617,51 +536,16 @@ public final class SqlStageExecution
                 return;
             }
 
-            boolean isRecoveryEnabled = SystemSessionProperties.isRecoveryEnabled(stateMachine.getSession());
-
             TaskState taskState = taskStatus.getState();
-            if (taskState == TaskState.RESUMABLE_FAILURE) {
-                log.debug("Task %s on node %s failed but is resumable. Triggering rescheduling.", taskStatus.getTaskId(), taskStatus.getNodeId());
-                queryRecoveryManager.startRecovery();
-                return;
-            }
             if (taskState == TaskState.FAILED) {
                 RuntimeException failure = taskStatus.getFailures().stream()
                         .findFirst()
                         .map(this::rewriteTransportFailure)
                         .map(ExecutionFailureInfo::toException)
                         .orElse(new PrestoException(GENERIC_INTERNAL_ERROR, "A task failed for an unknown reason"));
-                // Snapshot: if remote task failed because they received unexpecte response (5xx or missing/wrong header), then we treat it as resumable.
-                if (isRecoveryEnabled && failure.getMessage() != null) {
-                    String message = failure.getMessage();
-                    // message contains "<HttpPageBufferClient.PAGE_TRANSPORT_ERROR_PREFIX> <code>!"
-                    // See HttpPageBufferClient.java, PageResponseHandler#handle() method
-                    int index = message.indexOf(HttpPageBufferClient.PAGE_TRANSPORT_ERROR_PREFIX);
-                    if (index >= 0) {
-                        index += HttpPageBufferClient.PAGE_TRANSPORT_ERROR_PREFIX.length() + 1;  // point to numeric response code; skip over space
-                        int responseCode = Integer.parseInt(message.substring(index, message.indexOf('!', index)));
-                        if (responseCode >= 500 || responseCode == HttpStatus.OK.code()) {
-                            log.debug(failure, "Task %s on node %s failed but is resumable. Triggering rescheduling.", taskStatus.getTaskId(), taskStatus.getNodeId());
-                            queryRecoveryManager.startRecovery();
-                            return;
-                        }
-                    }
-                    else if (message.contains(SimpleHttpResponseHandler.EXPECT_200_SAW_5XX)) {
-                        // SimpleHttpResponseHandler can also produce errors that are resumable
-                        log.debug(failure, "Task %s on node %s failed but is resumable. Triggering rescheduling.", taskStatus.getTaskId(), taskStatus.getNodeId());
-                        queryRecoveryManager.startRecovery();
-                        return;
-                    }
-                }
                 stateMachine.transitionToFailed(failure);
             }
             else if (taskState == TaskState.ABORTED) {
-                if (isRecoveryEnabled) {
-                    log.debug("Task %s on node %s was aborted prematually. Triggering rescheduling.", taskStatus.getTaskId(), taskStatus.getNodeId());
-                    //TODO Need to check if we need to check for stage state done or not before calling startrecovery
-                    queryRecoveryManager.startRecovery();
-                    return;
-                }
                 // A task should only be in the aborted state if the STAGE is done (ABORTED or FAILED)
                 stateMachine.transitionToFailed(new PrestoException(GENERIC_INTERNAL_ERROR, "A task is in the ABORTED state but stage is " + stageState));
             }
@@ -675,10 +559,6 @@ public final class SqlStageExecution
                 }
                 if (finishedTasks.containsAll(allTasks)) {
                     stateMachine.transitionToFinished();
-                    if (isRecoveryEnabled) {
-                        // Snapshot: when tasks finish, inform snapshot manager, so they no longer need to be tracked
-                        snapshotManager.updateFinishedQueryComponents(finishedTasks);
-                    }
                 }
             }
         }
@@ -725,7 +605,7 @@ public final class SqlStageExecution
             queryIdReuseTableScanMappingIdFinishedMap.remove(state.getStageId().getQueryId());
             return uuidList;
         }
-        return Collections.emptyList();
+        return null;
     }
 
     private synchronized void updateFinalTaskInfo(TaskInfo finalTaskInfo)
@@ -740,8 +620,7 @@ public final class SqlStageExecution
             List<TaskInfo> finalTaskInfos = getAllTasks().stream()
                     .map(RemoteTask::getTaskInfo)
                     .collect(toImmutableList());
-            // Once stage is done, consider restore is complete
-            stateMachine.setAllTasksFinal(finalTaskInfos, false, captureSnapshotId);
+            stateMachine.setAllTasksFinal(finalTaskInfos);
         }
     }
 
@@ -767,11 +646,6 @@ public final class SqlStageExecution
     public String toString()
     {
         return stateMachine.toString();
-    }
-
-    public void setResuming(long restoringSnapshotId)
-    {
-        restoreInProgress = true;
     }
 
     private class StageTaskListener
@@ -854,15 +728,5 @@ public final class SqlStageExecution
     public void setParentId(PlanNodeId parentId)
     {
         this.parentId = parentId;
-    }
-
-    public boolean isThrottledSchedule()
-    {
-        return throttledSchedule;
-    }
-
-    public void setThrottledSchedule(boolean throttledSchedule)
-    {
-        this.throttledSchedule = throttledSchedule;
     }
 }

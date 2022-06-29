@@ -23,16 +23,6 @@ public interface SpillContext
 {
     void updateBytes(long bytes);
 
-    default void updateWriteTime(long millis)
-    {
-        /* do nothing */
-    }
-
-    default void updateReadTime(long millis)
-    {
-        /* do nothing */
-    }
-
     default SpillContext newLocalSpillContext()
     {
         return new LocalSpillContext(this);

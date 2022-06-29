@@ -32,7 +32,6 @@ import io.prestosql.spi.metadata.TableHandle;
 import io.prestosql.spi.plan.PlanNode;
 import io.prestosql.spi.plan.PlanNodeId;
 import io.prestosql.spi.plan.Symbol;
-import io.prestosql.spi.type.Type;
 import io.prestosql.sql.planner.PartitioningScheme;
 import io.prestosql.sql.tree.Expression;
 
@@ -90,14 +89,14 @@ public class TableWriterNode
         this.statisticsAggregationDescriptor = requireNonNull(statisticsAggregationDescriptor, "statisticsAggregationDescriptor is null");
         checkArgument(statisticsAggregation.isPresent() == statisticsAggregationDescriptor.isPresent(), "statisticsAggregation and statisticsAggregationDescriptor must be either present or absent");
 
-        ImmutableList.Builder<Symbol> outputBuilder = ImmutableList.<Symbol>builder()
+        ImmutableList.Builder<Symbol> outputs = ImmutableList.<Symbol>builder()
                 .add(rowCountSymbol)
                 .add(fragmentSymbol);
         statisticsAggregation.ifPresent(aggregation -> {
-            outputBuilder.addAll(aggregation.getGroupingSymbols());
-            outputBuilder.addAll(aggregation.getAggregations().keySet());
+            outputs.addAll(aggregation.getGroupingSymbols());
+            outputs.addAll(aggregation.getAggregations().keySet());
         });
-        this.outputs = outputBuilder.build();
+        this.outputs = outputs.build();
     }
 
     @JsonProperty
@@ -182,7 +181,6 @@ public class TableWriterNode
     @JsonSubTypes({
             @JsonSubTypes.Type(value = CreateTarget.class, name = "CreateTarget"),
             @JsonSubTypes.Type(value = InsertTarget.class, name = "InsertTarget"),
-            @JsonSubTypes.Type(value = UpdateAsInsertTarget.class, name = "UpdateAsInsertTarget"),
             @JsonSubTypes.Type(value = UpdateTarget.class, name = "UpdateTarget"),
             @JsonSubTypes.Type(value = DeleteTarget.class, name = "DeleteTarget"),
             @JsonSubTypes.Type(value = DeleteAsInsertTarget.class, name = "DeleteAsInsertTarget"),
@@ -423,14 +421,14 @@ public class TableWriterNode
         }
     }
 
-    public static class UpdateAsInsertTarget
+    public static class UpdateTarget
             extends WriterTarget
     {
         private final UpdateTableHandle handle;
         private final SchemaTableName schemaTableName;
 
         @JsonCreator
-        public UpdateAsInsertTarget(
+        public UpdateTarget(
                 @JsonProperty("handle") UpdateTableHandle handle,
                 @JsonProperty("schemaTableName") SchemaTableName schemaTableName)
         {
@@ -448,59 +446,6 @@ public class TableWriterNode
         public SchemaTableName getSchemaTableName()
         {
             return schemaTableName;
-        }
-
-        @Override
-        public String toString()
-        {
-            return handle.toString();
-        }
-    }
-
-    public static class UpdateTarget
-            extends WriterTarget
-    {
-        private final TableHandle handle;
-        private final SchemaTableName schemaTableName;
-        private final List<String> updatedColumns;
-        private final List<Type> updatedColumnTypes;
-
-        @JsonCreator
-        public UpdateTarget(
-                @JsonProperty("handle") TableHandle handle,
-                @JsonProperty("schemaTableName") SchemaTableName schemaTableName,
-                @JsonProperty("updatedColumns") List<String> updatedColumns,
-                @JsonProperty("updatedColumnTypes") List<Type> updatedColumnTypes)
-        {
-            this.handle = requireNonNull(handle, "handle is null");
-            this.schemaTableName = requireNonNull(schemaTableName, "schemaTableName is null");
-            checkArgument(updatedColumns.size() == updatedColumnTypes.size(), "updatedColumns size %s must equal updatedColumnHandles size %s", updatedColumns.size(), updatedColumnTypes.size());
-            this.updatedColumns = requireNonNull(updatedColumns, "updatedColumns is null");
-            this.updatedColumnTypes = requireNonNull(updatedColumnTypes, "updatedColumnTypes is null");
-        }
-
-        @JsonProperty
-        public TableHandle getHandle()
-        {
-            return handle;
-        }
-
-        @JsonProperty
-        public SchemaTableName getSchemaTableName()
-        {
-            return schemaTableName;
-        }
-
-        @JsonProperty
-        public List<String> getUpdatedColumns()
-        {
-            return updatedColumns;
-        }
-
-        @JsonProperty
-        public List<Type> getUpdatedColumnTypes()
-        {
-            return updatedColumnTypes;
         }
 
         @Override

@@ -18,7 +18,6 @@ import com.google.common.collect.ImmutableMap;
 import com.google.common.collect.ImmutableSet;
 import io.prestosql.matching.Captures;
 import io.prestosql.matching.Pattern;
-import io.prestosql.metadata.FunctionAndTypeManager;
 import io.prestosql.metadata.Metadata;
 import io.prestosql.spi.plan.AggregationNode;
 import io.prestosql.spi.plan.Assignments;
@@ -31,9 +30,7 @@ import io.prestosql.spi.plan.ValuesNode;
 import io.prestosql.spi.plan.WindowNode;
 import io.prestosql.spi.relation.CallExpression;
 import io.prestosql.spi.relation.RowExpression;
-import io.prestosql.spi.relation.SpecialForm;
 import io.prestosql.spi.type.Type;
-import io.prestosql.sql.DynamicFilters;
 import io.prestosql.sql.planner.iterative.Rule;
 import io.prestosql.sql.planner.plan.ApplyNode;
 import io.prestosql.sql.planner.plan.SpatialJoinNode;
@@ -52,7 +49,6 @@ import java.util.Set;
 
 import static com.google.common.base.Preconditions.checkState;
 import static com.google.common.collect.ImmutableMap.builder;
-import static io.prestosql.spi.relation.SpecialForm.Form.OR;
 import static io.prestosql.sql.planner.plan.Patterns.aggregation;
 import static io.prestosql.sql.planner.plan.Patterns.applyNode;
 import static io.prestosql.sql.planner.plan.Patterns.filter;
@@ -66,7 +62,6 @@ import static io.prestosql.sql.planner.plan.Patterns.tableWriterNode;
 import static io.prestosql.sql.planner.plan.Patterns.vacuumTableNode;
 import static io.prestosql.sql.planner.plan.Patterns.values;
 import static io.prestosql.sql.planner.plan.Patterns.window;
-import static io.prestosql.sql.relational.Expressions.call;
 import static java.util.Objects.requireNonNull;
 
 public class RowExpressionRewriteRuleSet
@@ -88,16 +83,16 @@ public class RowExpressionRewriteRuleSet
         return ImmutableSet.of(
                 valueRowExpressionRewriteRule(),
                 tableScanRowExpressionRewriteRule(),
-                filterRowExpressionRewriteRule(metadata),
+                filterRowExpressionRewriteRule(),
                 projectRowExpressionRewriteRule(),
                 applyNodeRowExpressionRewriteRule(),
                 windowRowExpressionRewriteRule(metadata),
                 joinRowExpressionRewriteRule(),
                 spatialJoinRowExpressionRewriteRule(),
-                aggregationRowExpressionRewriteRule(metadata),
-                tableFinishRowExpressionRewriteRule(metadata),
-                tableWriterRowExpressionRewriteRule(metadata),
-                vacuumTableRowExpressionRewriteRule(metadata),
+                aggregationRowExpressionRewriteRule(),
+                tableFinishRowExpressionRewriteRule(),
+                tableWriterRowExpressionRewriteRule(),
+                vacuumTableRowExpressionRewriteRule(),
                 tableDeleteRowExpressionRewriteRule());
     }
 
@@ -111,9 +106,9 @@ public class RowExpressionRewriteRuleSet
         return new ValuesRowExpressionRewrite();
     }
 
-    public Rule<FilterNode> filterRowExpressionRewriteRule(Metadata metadata)
+    public Rule<FilterNode> filterRowExpressionRewriteRule()
     {
-        return new FilterRowExpressionRewrite(metadata);
+        return new FilterRowExpressionRewrite();
     }
 
     public Rule<TableScanNode> tableScanRowExpressionRewriteRule()
@@ -146,24 +141,24 @@ public class RowExpressionRewriteRuleSet
         return new SpatialJoinRowExpressionRewrite();
     }
 
-    public Rule<TableFinishNode> tableFinishRowExpressionRewriteRule(Metadata metadata)
+    public Rule<TableFinishNode> tableFinishRowExpressionRewriteRule()
     {
-        return new TableFinishRowExpressionRewrite(metadata);
+        return new TableFinishRowExpressionRewrite();
     }
 
-    public Rule<TableWriterNode> tableWriterRowExpressionRewriteRule(Metadata metadata)
+    public Rule<TableWriterNode> tableWriterRowExpressionRewriteRule()
     {
-        return new TableWriterRowExpressionRewrite(metadata);
+        return new TableWriterRowExpressionRewrite();
     }
 
-    public Rule<VacuumTableNode> vacuumTableRowExpressionRewriteRule(Metadata metadata)
+    public Rule<VacuumTableNode> vacuumTableRowExpressionRewriteRule()
     {
-        return new VacuumTableRowExpressionRewrite(metadata);
+        return new VacuumTableRowExpressionRewrite();
     }
 
-    public Rule<AggregationNode> aggregationRowExpressionRewriteRule(Metadata metadata)
+    public Rule<AggregationNode> aggregationRowExpressionRewriteRule()
     {
-        return new AggregationRowExpressionRewrite(metadata);
+        return new AggregationRowExpressionRewrite();
     }
 
     private final class ProjectRowExpressionRewrite
@@ -267,7 +262,7 @@ public class RowExpressionRewriteRuleSet
     private final class WindowRowExpressionRewrite
             implements Rule<WindowNode>
     {
-        private final Metadata metadata;
+        private Metadata metadata;
 
         public WindowRowExpressionRewrite(Metadata metadata)
         {
@@ -288,7 +283,9 @@ public class RowExpressionRewriteRuleSet
             ImmutableMap.Builder<Symbol, WindowNode.Function> functions = builder();
             for (Map.Entry<Symbol, WindowNode.Function> entry : windowNode.getWindowFunctions().entrySet()) {
                 ImmutableList.Builder<RowExpression> newArguments = ImmutableList.builder();
-                CallExpression callExpression = entry.getValue().getFunctionCall();
+                CallExpression callExpression = new CallExpression(entry.getValue().getSignature(),
+                        metadata.getType(entry.getValue().getSignature().getReturnType()),
+                        entry.getValue().getArguments(), Optional.empty());
                 for (RowExpression argument : callExpression.getArguments()) {
                     RowExpression rewritten = rewriter.rewrite(argument, context);
                     if (rewritten != argument) {
@@ -299,11 +296,7 @@ public class RowExpressionRewriteRuleSet
                 functions.put(
                         entry.getKey(),
                         new WindowNode.Function(
-                                call(
-                                        callExpression.getDisplayName(),
-                                        callExpression.getFunctionHandle(),
-                                        callExpression.getType(),
-                                        newArguments.build()),
+                                callExpression.getSignature(),
                                 newArguments.build(),
                                 entry.getValue().getFrame()));
             }
@@ -366,13 +359,6 @@ public class RowExpressionRewriteRuleSet
     private final class FilterRowExpressionRewrite
             implements Rule<FilterNode>
     {
-        private final Metadata metadata;
-
-        public FilterRowExpressionRewrite(Metadata metadata)
-        {
-            this.metadata = metadata;
-        }
-
         @Override
         public Pattern<FilterNode> getPattern()
         {
@@ -383,10 +369,6 @@ public class RowExpressionRewriteRuleSet
         public Result apply(FilterNode filterNode, Captures captures, Context context)
         {
             checkState(filterNode.getSource() != null);
-            RowExpression dynamicFilter = DynamicFilters.extractDynamicFilterExpression(filterNode.getPredicate(), metadata);
-            if (dynamicFilter instanceof SpecialForm && ((SpecialForm) dynamicFilter).getForm() == OR) {
-                return Result.empty();
-            }
             RowExpression rewritten = rewriter.rewrite(filterNode.getPredicate(), context);
 
             if (filterNode.getPredicate().equals(rewritten)) {
@@ -429,7 +411,7 @@ public class RowExpressionRewriteRuleSet
         }
     }
 
-    public final class ValuesRowExpressionRewrite
+    private final class ValuesRowExpressionRewrite
             implements Rule<ValuesNode>
     {
         @Override
@@ -464,13 +446,6 @@ public class RowExpressionRewriteRuleSet
     private final class AggregationRowExpressionRewrite
             implements Rule<AggregationNode>
     {
-        private final Metadata metadata;
-
-        public AggregationRowExpressionRewrite(Metadata metadata)
-        {
-            this.metadata = metadata;
-        }
-
         @Override
         public Pattern<AggregationNode> getPattern()
         {
@@ -486,7 +461,7 @@ public class RowExpressionRewriteRuleSet
             ImmutableMap.Builder<Symbol, AggregationNode.Aggregation> rewrittenAggregation = builder();
             for (Map.Entry<Symbol, AggregationNode.Aggregation> entry : node.getAggregations().entrySet()) {
                 Type returnType = context.getSymbolAllocator().getSymbols().get(entry.getKey());
-                AggregationNode.Aggregation rewritten = rewriteAggregation(entry.getValue(), returnType, context, metadata.getFunctionAndTypeManager());
+                AggregationNode.Aggregation rewritten = rewriteAggregation(entry.getValue(), returnType, context);
                 rewrittenAggregation.put(entry.getKey(), rewritten);
                 if (!rewritten.equals(entry.getValue())) {
                     changed = true;
@@ -502,9 +477,7 @@ public class RowExpressionRewriteRuleSet
                         node.getPreGroupedSymbols(),
                         node.getStep(),
                         node.getHashSymbol(),
-                        node.getGroupIdSymbol(),
-                        node.getAggregationType(),
-                        node.getFinalizeSymbol());
+                        node.getGroupIdSymbol());
                 return Result.ofPlanNode(aggregationNode);
             }
             return Result.empty();
@@ -514,13 +487,6 @@ public class RowExpressionRewriteRuleSet
     private final class TableFinishRowExpressionRewrite
             implements Rule<TableFinishNode>
     {
-        private final Metadata metadata;
-
-        public TableFinishRowExpressionRewrite(Metadata metadata)
-        {
-            this.metadata = metadata;
-        }
-
         @Override
         public Pattern<TableFinishNode> getPattern()
         {
@@ -536,7 +502,7 @@ public class RowExpressionRewriteRuleSet
                 return Result.empty();
             }
 
-            Optional<StatisticAggregations> rewrittenStatisticsAggregation = translateStatisticAggregation(node.getStatisticsAggregation().get(), context, metadata.getFunctionAndTypeManager());
+            Optional<StatisticAggregations> rewrittenStatisticsAggregation = translateStatisticAggregation(node.getStatisticsAggregation().get(), context);
 
             if (rewrittenStatisticsAggregation.isPresent()) {
                 return Result.ofPlanNode(new TableFinishNode(
@@ -551,13 +517,13 @@ public class RowExpressionRewriteRuleSet
         }
     }
 
-    private Optional<StatisticAggregations> translateStatisticAggregation(StatisticAggregations statisticAggregations, Rule.Context context, FunctionAndTypeManager functionAndTypeManager)
+    private Optional<StatisticAggregations> translateStatisticAggregation(StatisticAggregations statisticAggregations, Rule.Context context)
     {
         ImmutableMap.Builder<Symbol, AggregationNode.Aggregation> rewrittenAggregation = builder();
         boolean changed = false;
         for (Map.Entry<Symbol, AggregationNode.Aggregation> entry : statisticAggregations.getAggregations().entrySet()) {
             Type returnType = context.getSymbolAllocator().getSymbols().get(entry.getKey());
-            AggregationNode.Aggregation rewritten = rewriteAggregation(entry.getValue(), returnType, context, functionAndTypeManager);
+            AggregationNode.Aggregation rewritten = rewriteAggregation(entry.getValue(), returnType, context);
             rewrittenAggregation.put(entry.getKey(), rewritten);
             if (!rewritten.equals(entry.getValue())) {
                 changed = true;
@@ -572,13 +538,6 @@ public class RowExpressionRewriteRuleSet
     private final class TableWriterRowExpressionRewrite
             implements Rule<TableWriterNode>
     {
-        private final Metadata metadata;
-
-        public TableWriterRowExpressionRewrite(Metadata metadata)
-        {
-            this.metadata = metadata;
-        }
-
         @Override
         public Pattern<TableWriterNode> getPattern()
         {
@@ -594,7 +553,7 @@ public class RowExpressionRewriteRuleSet
                 return Result.empty();
             }
 
-            Optional<StatisticAggregations> rewrittenStatisticsAggregation = translateStatisticAggregation(node.getStatisticsAggregation().get(), context, metadata.getFunctionAndTypeManager());
+            Optional<StatisticAggregations> rewrittenStatisticsAggregation = translateStatisticAggregation(node.getStatisticsAggregation().get(), context);
 
             if (rewrittenStatisticsAggregation.isPresent()) {
                 return Result.ofPlanNode(new TableWriterNode(
@@ -616,13 +575,6 @@ public class RowExpressionRewriteRuleSet
     private final class VacuumTableRowExpressionRewrite
             implements Rule<VacuumTableNode>
     {
-        private final Metadata metadata;
-
-        public VacuumTableRowExpressionRewrite(Metadata metadata)
-        {
-            this.metadata = metadata;
-        }
-
         @Override
         public Pattern<VacuumTableNode> getPattern()
         {
@@ -636,7 +588,7 @@ public class RowExpressionRewriteRuleSet
                 return Result.empty();
             }
 
-            Optional<StatisticAggregations> rewrittenStatisticsAggregation = translateStatisticAggregation(node.getStatisticsAggregation().get(), context, metadata.getFunctionAndTypeManager());
+            Optional<StatisticAggregations> rewrittenStatisticsAggregation = translateStatisticAggregation(node.getStatisticsAggregation().get(), context);
 
             if (rewrittenStatisticsAggregation.isPresent()) {
                 return Result.ofPlanNode(new VacuumTableNode(
@@ -655,16 +607,12 @@ public class RowExpressionRewriteRuleSet
         }
     }
 
-    private AggregationNode.Aggregation rewriteAggregation(AggregationNode.Aggregation aggregation, Type returnType, Rule.Context context, FunctionAndTypeManager functionAndTypeManager)
+    private AggregationNode.Aggregation rewriteAggregation(AggregationNode.Aggregation aggregation, Type returnType, Rule.Context context)
     {
-        CallExpression callExpression = new CallExpression(
-                aggregation.getFunctionCall().getDisplayName(),
-                aggregation.getFunctionHandle(),
-                returnType, aggregation.getArguments(),
-                Optional.empty());
+        CallExpression callExpression = new CallExpression(aggregation.getSignature(), returnType, aggregation.getArguments(), Optional.empty());
         RowExpression expression = rewriter.rewrite(callExpression, context);
         return new AggregationNode.Aggregation(
-                aggregation.getFunctionCall(),
+                aggregation.getSignature(),
                 ((CallExpression) expression).getArguments(),
                 aggregation.isDistinct(),
                 aggregation.getFilter(),

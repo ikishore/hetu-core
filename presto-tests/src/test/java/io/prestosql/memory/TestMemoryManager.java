@@ -14,7 +14,6 @@
 package io.prestosql.memory;
 
 import com.google.common.collect.ImmutableMap;
-import io.airlift.log.Logger;
 import io.prestosql.Session;
 import io.prestosql.plugin.tpch.TpchPlugin;
 import io.prestosql.server.BasicQueryInfo;
@@ -56,7 +55,6 @@ import static org.testng.Assert.fail;
 @Test(singleThreaded = true)
 public class TestMemoryManager
 {
-    private static final Logger LOG = Logger.get(TestMemoryManager.class);
     private static final Session SESSION = testSessionBuilder()
             .setCatalog("tpch")
             // Use sf1000 to make sure this takes at least one second, so that the memory manager will fail the query
@@ -100,7 +98,6 @@ public class TestMemoryManager
             }
             catch (RuntimeException e) {
                 // expected
-                LOG.info("Error message: " + e.getMessage());
             }
             Session session = testSessionBuilder()
                     .setCatalog("tpch")
@@ -119,7 +116,6 @@ public class TestMemoryManager
                 .put("task.verbose-stats", "true")
                 .put("query.low-memory-killer.delay", "5s")
                 .put("query.low-memory-killer.policy", "total-reservation")
-                .put("experimental.reserved-pool-enabled", "true")
                 .build();
 
         try (DistributedQueryRunner queryRunner = createQueryRunner(TINY_SESSION, properties)) {
@@ -217,10 +213,8 @@ public class TestMemoryManager
     public void testNoLeak()
             throws Exception
     {
-        // TableScan operator
-        testNoLeak("SELECT clerk FROM orders");
-        // ScanFilterProjectOperator and AggregationOperator
-        testNoLeak("SELECT COUNT(*), clerk FROM orders WHERE orderstatus='O' GROUP BY clerk");
+        testNoLeak("SELECT clerk FROM orders"); // TableScan operator
+        testNoLeak("SELECT COUNT(*), clerk FROM orders WHERE orderstatus='O' GROUP BY clerk"); // ScanFilterProjectOperator, AggregationOperator
     }
 
     private void testNoLeak(@Language("SQL") String query)
@@ -228,7 +222,6 @@ public class TestMemoryManager
     {
         Map<String, String> properties = ImmutableMap.<String, String>builder()
                 .put("task.verbose-stats", "true")
-                .put("experimental.reserved-pool-enabled", "true")
                 .build();
 
         try (DistributedQueryRunner queryRunner = createQueryRunner(TINY_SESSION, properties)) {
@@ -255,7 +248,6 @@ public class TestMemoryManager
     {
         Map<String, String> properties = ImmutableMap.<String, String>builder()
                 .put("task.verbose-stats", "true")
-                .put("experimental.reserved-pool-enabled", "true")
                 .build();
 
         try (DistributedQueryRunner queryRunner = createQueryRunner(TINY_SESSION, properties)) {
@@ -347,7 +339,7 @@ public class TestMemoryManager
         return stats.isFullyBlocked() || stats.getRunningDrivers() == 0;
     }
 
-    @Test(timeOut = 180_000, expectedExceptions = RuntimeException.class, expectedExceptionsMessageRegExp = ".*Query exceeded distributed user memory limit of 1kB.*")
+    @Test(timeOut = 60_000, expectedExceptions = RuntimeException.class, expectedExceptionsMessageRegExp = ".*Query exceeded distributed user memory limit of 1kB.*")
     public void testQueryUserMemoryLimit()
             throws Exception
     {
@@ -374,7 +366,7 @@ public class TestMemoryManager
         }
     }
 
-    @Test(timeOut = 180_000, expectedExceptions = RuntimeException.class, expectedExceptionsMessageRegExp = ".*Query exceeded per-node user memory limit of 1kB.*")
+    @Test(timeOut = 60_000, expectedExceptions = RuntimeException.class, expectedExceptionsMessageRegExp = ".*Query exceeded per-node user memory limit of 1kB.*")
     public void testQueryMemoryPerNodeLimit()
             throws Exception
     {

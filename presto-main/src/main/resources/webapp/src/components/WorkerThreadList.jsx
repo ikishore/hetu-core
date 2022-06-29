@@ -50,7 +50,7 @@ export class WorkerThreadList extends React.Component {
                 initialized: true,
             });
         }.bind(this))
-        .fail(function () {
+        .error(function () {
             this.setState({
                 initialized: true,
             });

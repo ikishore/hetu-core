@@ -17,11 +17,9 @@ import com.google.common.base.Functions;
 import com.google.common.collect.ImmutableList;
 import com.google.common.collect.ImmutableSet;
 import io.prestosql.operator.scalar.CustomFunctions;
-import io.prestosql.spi.connector.QualifiedObjectName;
-import io.prestosql.spi.function.BuiltInFunctionHandle;
-import io.prestosql.spi.function.BuiltInScalarFunctionImplementation;
 import io.prestosql.spi.function.OperatorType;
 import io.prestosql.spi.function.ScalarFunction;
+import io.prestosql.spi.function.ScalarFunctionImplementation;
 import io.prestosql.spi.function.Signature;
 import io.prestosql.spi.function.SignatureBuilder;
 import io.prestosql.spi.function.SqlFunction;
@@ -36,24 +34,20 @@ import org.testng.annotations.Test;
 import java.lang.invoke.MethodHandles;
 import java.util.Arrays;
 import java.util.List;
-import java.util.Optional;
 import java.util.Set;
 
 import static com.google.common.collect.ImmutableList.toImmutableList;
 import static com.google.common.collect.ImmutableSet.toImmutableSet;
 import static com.google.common.collect.Lists.transform;
 import static io.prestosql.metadata.MetadataManager.createTestMetadataManager;
-import static io.prestosql.spi.function.BuiltInScalarFunctionImplementation.ArgumentProperty.valueTypeArgumentProperty;
-import static io.prestosql.spi.function.BuiltInScalarFunctionImplementation.NullConvention.RETURN_NULL_ON_NULL;
 import static io.prestosql.spi.function.FunctionKind.SCALAR;
-import static io.prestosql.spi.function.Signature.internalOperator;
+import static io.prestosql.spi.function.ScalarFunctionImplementation.ArgumentProperty.valueTypeArgumentProperty;
+import static io.prestosql.spi.function.ScalarFunctionImplementation.NullConvention.RETURN_NULL_ON_NULL;
 import static io.prestosql.spi.function.Signature.mangleOperatorName;
-import static io.prestosql.spi.function.Signature.operatorNameWithDefaultFunctionPrefix;
 import static io.prestosql.spi.function.Signature.typeVariable;
 import static io.prestosql.spi.function.Signature.unmangleOperator;
 import static io.prestosql.spi.type.HyperLogLogType.HYPER_LOG_LOG;
 import static io.prestosql.sql.analyzer.TypeSignatureProvider.fromTypeSignatures;
-import static io.prestosql.sql.analyzer.TypeSignatureProvider.fromTypes;
 import static java.lang.String.format;
 import static java.util.Collections.nCopies;
 import static java.util.stream.Collectors.toList;
@@ -66,8 +60,8 @@ public class TestFunctionRegistry
     @Test
     public void testIdentityCast()
     {
-        Signature exactOperator = internalOperator(OperatorType.CAST, HYPER_LOG_LOG.getTypeSignature(), HYPER_LOG_LOG.getTypeSignature());
-        assertEquals(exactOperator.getName().toString(), operatorNameWithDefaultFunctionPrefix(OperatorType.CAST));
+        Signature exactOperator = createTestMetadataManager().getCoercion(HYPER_LOG_LOG.getTypeSignature(), HYPER_LOG_LOG.getTypeSignature());
+        assertEquals(exactOperator.getName(), mangleOperatorName(OperatorType.CAST));
         assertEquals(transform(exactOperator.getArgumentTypes(), Functions.toStringFunction()), ImmutableList.of(StandardTypes.HYPER_LOG_LOG));
         assertEquals(exactOperator.getReturnType().getBase(), StandardTypes.HYPER_LOG_LOG);
     }
@@ -78,7 +72,7 @@ public class TestFunctionRegistry
         Metadata metadata = createTestMetadataManager();
         boolean foundOperator = false;
         for (SqlFunction function : listOperators(metadata)) {
-            OperatorType operatorType = unmangleOperator(function.getSignature().getName().getObjectName());
+            OperatorType operatorType = unmangleOperator(function.getSignature().getName());
             if (operatorType == OperatorType.CAST || operatorType == OperatorType.SATURATED_FLOOR_CAST) {
                 continue;
             }
@@ -91,7 +85,7 @@ public class TestFunctionRegistry
             List<Type> argumentTypes = function.getSignature().getArgumentTypes().stream()
                     .map(metadata::getType)
                     .collect(toImmutableList());
-            Signature exactOperator = metadata.getFunctionAndTypeManager().resolveBuiltInFunction(QualifiedName.of(mangleOperatorName(operatorType)), fromTypes(argumentTypes));
+            Signature exactOperator = metadata.resolveOperator(operatorType, argumentTypes);
             assertEquals(exactOperator, function.getSignature());
             foundOperator = true;
         }
@@ -109,20 +103,20 @@ public class TestFunctionRegistry
                 .collect(toImmutableList());
 
         Metadata metadata = createTestMetadataManager();
-        metadata.getFunctionAndTypeManager().registerBuiltInFunctions(functions);
-        int before = metadata.listFunctions(Optional.empty()).size();
-        metadata.getFunctionAndTypeManager().registerBuiltInFunctions(functions);
-        assertEquals(metadata.listFunctions(Optional.empty()).size(), before);
+        metadata.addFunctions(functions);
+        int before = metadata.listFunctions().size();
+        metadata.addFunctions(functions);
+        assertEquals(metadata.listFunctions().size(), before);
     }
 
-    @Test(expectedExceptions = IllegalStateException.class, expectedExceptionsMessageRegExp = "'presto.default.sum' is both an aggregation and a scalar function")
+    @Test(expectedExceptions = IllegalStateException.class, expectedExceptionsMessageRegExp = "'sum' is both an aggregation and a scalar function")
     public void testConflictingScalarAggregation()
     {
         List<SqlFunction> functions = new FunctionListBuilder()
                 .scalars(ScalarSum.class)
                 .getFunctions();
 
-        createTestMetadataManager().getFunctionAndTypeManager().registerBuiltInFunctions(functions);
+        createTestMetadataManager().addFunctions(functions);
     }
 
     @Test
@@ -269,11 +263,11 @@ public class TestFunctionRegistry
     private static List<SqlFunction> listOperators(Metadata metadata)
     {
         Set<String> operatorNames = Arrays.stream(OperatorType.values())
-                .map(Signature::operatorNameWithDefaultFunctionPrefix)
+                .map(Signature::mangleOperatorName)
                 .collect(toImmutableSet());
 
-        return metadata.listFunctionsWithoutFilterOut(Optional.empty()).stream()
-                .filter(function -> operatorNames.contains(function.getSignature().getName().toString()))
+        return metadata.listFunctions().stream()
+                .filter(function -> operatorNames.contains(function.getSignature().getName()))
                 .collect(toImmutableList());
     }
 
@@ -352,8 +346,8 @@ public class TestFunctionRegistry
         private Signature resolveSignature()
         {
             Metadata metadata = createTestMetadataManager();
-            metadata.getFunctionAndTypeManager().registerBuiltInFunctions(createFunctionsFromSignatures());
-            return ((BuiltInFunctionHandle) metadata.getFunctionAndTypeManager().resolveFunction(Optional.empty(), QualifiedObjectName.valueOfDefaultFunction(TEST_FUNCTION_NAME), fromTypeSignatures(parameterTypes))).getSignature();
+            metadata.addFunctions(createFunctionsFromSignatures());
+            return metadata.resolveFunction(QualifiedName.of(TEST_FUNCTION_NAME), fromTypeSignatures(parameterTypes));
         }
 
         private List<SqlFunction> createFunctionsFromSignatures()
@@ -364,18 +358,19 @@ public class TestFunctionRegistry
                 functions.add(new SqlScalarFunction(signature)
                 {
                     @Override
-                    public BuiltInScalarFunctionImplementation specialize(BoundVariables boundVariables, int arity, FunctionAndTypeManager functionAndTypeManager)
+                    public ScalarFunctionImplementation specialize(BoundVariables boundVariables, int arity, Metadata metadata)
                     {
-                        return new BuiltInScalarFunctionImplementation(
+                        return new ScalarFunctionImplementation(
                                 false,
                                 nCopies(arity, valueTypeArgumentProperty(RETURN_NULL_ON_NULL)),
-                                MethodHandles.identity(Void.class));
+                                MethodHandles.identity(Void.class),
+                                true);
                     }
 
                     @Override
                     public boolean isHidden()
                     {
-                        return true;
+                        return false;
                     }
 
                     @Override

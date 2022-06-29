@@ -32,11 +32,11 @@ public class FixedPageSource
     {
         this.pages = requireNonNull(pages, "pages is null").iterator();
 
-        long localMemoryUsageBytes = 0;
+        long memoryUsageBytes = 0;
         for (Page page : pages) {
-            localMemoryUsageBytes += page.getRetainedSizeInBytes();
+            memoryUsageBytes += page.getRetainedSizeInBytes();
         }
-        this.memoryUsageBytes = localMemoryUsageBytes;
+        this.memoryUsageBytes = memoryUsageBytes;
     }
 
     @Override

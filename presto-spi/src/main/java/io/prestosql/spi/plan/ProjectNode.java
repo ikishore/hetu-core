@@ -20,6 +20,7 @@ import com.google.common.collect.Iterables;
 
 import javax.annotation.concurrent.Immutable;
 
+import java.util.ArrayList;
 import java.util.List;
 
 import static java.util.Objects.requireNonNull;
@@ -49,7 +50,25 @@ public class ProjectNode
     @Override
     public List<Symbol> getOutputSymbols()
     {
-        return assignments.getOutputs();
+        List<Symbol> symbols = new ArrayList<>(assignments.getOutputs());
+
+        Symbol query_set = null;
+        int idx = -1;
+        int curIdx = 0;
+        for (Symbol symbol : symbols) {
+            if (symbol.getName().startsWith("query_set")) {
+                query_set = symbol;
+                idx = curIdx;
+            }
+            curIdx++;
+        }
+
+        if (query_set != null) {
+            symbols.remove(idx);
+            symbols.add(query_set);
+        }
+
+        return symbols;
     }
 
     @JsonProperty

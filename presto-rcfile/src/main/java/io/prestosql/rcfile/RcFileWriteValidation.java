@@ -127,11 +127,11 @@ public class RcFileWriteValidation
         {
             this.types = ImmutableList.copyOf(requireNonNull(types, "types is null"));
 
-            ImmutableList.Builder<XxHash64> localColumnHashes = ImmutableList.builder();
+            ImmutableList.Builder<XxHash64> columnHashes = ImmutableList.builder();
             for (Type ignored : types) {
-                localColumnHashes.add(new XxHash64());
+                columnHashes.add(new XxHash64());
             }
-            this.columnHashes = localColumnHashes.build();
+            this.columnHashes = columnHashes.build();
         }
 
         public static WriteChecksumBuilder createWriteChecksumBuilder(Map<Integer, Type> readColumns)
@@ -143,13 +143,13 @@ public class RcFileWriteValidation
                     .max().getAsInt() + 1;
             checkArgument(readColumns.size() == columnCount, "checksum requires all columns to be read");
 
-            ImmutableList.Builder<Type> localTypes = ImmutableList.builder();
+            ImmutableList.Builder<Type> types = ImmutableList.builder();
             for (int column = 0; column < columnCount; column++) {
                 Type type = readColumns.get(column);
                 checkArgument(type != null, "checksum requires all columns to be read");
-                localTypes.add(type);
+                types.add(type);
             }
-            return new WriteChecksumBuilder(localTypes.build());
+            return new WriteChecksumBuilder(types.build());
         }
 
         public void addRowGroup(int rowCount)

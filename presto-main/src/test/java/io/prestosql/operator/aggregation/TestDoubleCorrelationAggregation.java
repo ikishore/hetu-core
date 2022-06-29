@@ -82,8 +82,7 @@ public class TestDoubleCorrelationAggregation
     {
         PearsonsCorrelation corr = new PearsonsCorrelation();
         double expected = corr.correlation(x, y);
-        final float epsilon = 0.0000001f;
-        checkArgument(Double.isFinite(expected) && Math.abs(expected - 0.0) >= epsilon && Math.abs(expected - 1.0) >= epsilon, "Expected result is trivial");
+        checkArgument(Double.isFinite(expected) && expected != 0.0 && expected != 1.0, "Expected result is trivial");
         testAggregation(expected, createDoublesBlock(box(y)), createDoublesBlock(box(x)));
     }
 

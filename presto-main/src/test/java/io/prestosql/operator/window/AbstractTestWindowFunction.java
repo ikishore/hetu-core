@@ -30,7 +30,7 @@ public abstract class AbstractTestWindowFunction
     protected LocalQueryRunner queryRunner;
 
     @BeforeClass
-    public void initTestWindowFunction()
+    public final void initTestWindowFunction()
     {
         queryRunner = new LocalQueryRunner(TEST_SESSION);
     }

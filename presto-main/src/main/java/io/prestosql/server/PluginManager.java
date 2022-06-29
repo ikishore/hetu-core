@@ -23,15 +23,12 @@ import io.prestosql.connector.ConnectorManager;
 import io.prestosql.cube.CubeManager;
 import io.prestosql.eventlistener.EventListenerManager;
 import io.prestosql.execution.resourcegroups.ResourceGroupManager;
-import io.prestosql.failuredetector.FailureDetectorManager;
-import io.prestosql.failuredetector.FailureDetectorPlugin;
 import io.prestosql.filesystem.FileSystemClientManager;
 import io.prestosql.heuristicindex.HeuristicIndexerManager;
 import io.prestosql.metadata.MetadataManager;
 import io.prestosql.metastore.HetuMetaStoreManager;
 import io.prestosql.queryeditorui.store.connectors.ConnectorCache;
 import io.prestosql.security.AccessControlManager;
-import io.prestosql.security.GroupProviderManager;
 import io.prestosql.seedstore.SeedStoreManager;
 import io.prestosql.server.security.PasswordAuthenticatorManager;
 import io.prestosql.spi.Plugin;
@@ -40,14 +37,11 @@ import io.prestosql.spi.classloader.ThreadContextClassLoader;
 import io.prestosql.spi.connector.ConnectorFactory;
 import io.prestosql.spi.cube.CubeProvider;
 import io.prestosql.spi.eventlistener.EventListenerFactory;
-import io.prestosql.spi.failuredetector.FailureRetryFactory;
 import io.prestosql.spi.filesystem.HetuFileSystemClientFactory;
-import io.prestosql.spi.function.FunctionNamespaceManagerFactory;
 import io.prestosql.spi.function.SqlFunction;
 import io.prestosql.spi.heuristicindex.IndexFactory;
 import io.prestosql.spi.metastore.HetuMetaStoreFactory;
 import io.prestosql.spi.resourcegroups.ResourceGroupConfigurationManagerFactory;
-import io.prestosql.spi.security.GroupProviderFactory;
 import io.prestosql.spi.security.PasswordAuthenticatorFactory;
 import io.prestosql.spi.security.SystemAccessControlFactory;
 import io.prestosql.spi.seedstore.SeedStoreFactory;
@@ -91,8 +85,11 @@ public class PluginManager
             .add("io.airlift.slice.")
             .add("io.airlift.units.")
             .add("org.openjdk.jol.")
+            .add("io.hete.core.metadata.")
+            .add("io.hete.core.operator.scalar.")
+            .add("io.hete.core.type.")
+            .add("io.hete.core.util.")
             .add("io.prestosql.sql.tree.")
-            .add("nova.hetu.omniruntime.vector.")
             .build();
 
     private static final Logger log = Logger.get(PluginManager.class);
@@ -106,14 +103,12 @@ public class PluginManager
     private final AccessControlManager accessControlManager;
     private final PasswordAuthenticatorManager passwordAuthenticatorManager;
     private final EventListenerManager eventListenerManager;
-    private final GroupProviderManager groupProviderManager;
     private final CubeManager cubeManager;
     private final StateStoreProvider localStateStoreProvider;
     private final StateStoreLauncher stateStoreLauncher;
     private final SeedStoreManager seedStoreManager;
     private final HetuMetaStoreManager hetuMetaStoreManager;
     private final FileSystemClientManager fileSystemClientManager;
-    private final FailureDetectorManager failureDetectorManager;
     private final HeuristicIndexerManager heuristicIndexerManager;
     private final SessionPropertyDefaults sessionPropertyDefaults;
     private final ArtifactResolver resolver;
@@ -133,7 +128,6 @@ public class PluginManager
             AccessControlManager accessControlManager,
             PasswordAuthenticatorManager passwordAuthenticatorManager,
             EventListenerManager eventListenerManager,
-            GroupProviderManager groupProviderManager,
             CubeManager cubeManager,
             StateStoreProvider localStateStoreProvider, // StateStoreProvider
             StateStoreLauncher stateStoreLauncher,
@@ -141,8 +135,7 @@ public class PluginManager
             SeedStoreManager seedStoreManager,
             FileSystemClientManager fileSystemClientManager,
             HetuMetaStoreManager hetuMetaStoreManager,
-            HeuristicIndexerManager heuristicIndexerManager,
-            FailureDetectorManager failureDetectorManager)
+            HeuristicIndexerManager heuristicIndexerManager)
     {
         requireNonNull(nodeInfo, "nodeInfo is null");
         requireNonNull(config, "config is null");
@@ -164,7 +157,6 @@ public class PluginManager
         this.accessControlManager = requireNonNull(accessControlManager, "accessControlManager is null");
         this.passwordAuthenticatorManager = requireNonNull(passwordAuthenticatorManager, "passwordAuthenticatorManager is null");
         this.eventListenerManager = requireNonNull(eventListenerManager, "eventListenerManager is null");
-        this.groupProviderManager = requireNonNull(groupProviderManager, "groupProviderManager is null");
         this.cubeManager = requireNonNull(cubeManager, "cubeManager is null");
         // LocalStateProvider
         this.localStateStoreProvider = requireNonNull(localStateStoreProvider, "stateStoreManager is null");
@@ -174,7 +166,6 @@ public class PluginManager
         this.fileSystemClientManager = requireNonNull(fileSystemClientManager, "fileSystemClientManager is null");
         this.hetuMetaStoreManager = requireNonNull(hetuMetaStoreManager, "hetuMetaStoreManager is null");
         this.heuristicIndexerManager = requireNonNull(heuristicIndexerManager, "heuristicIndexerManager is null");
-        this.failureDetectorManager = requireNonNull(failureDetectorManager, "failureDetectorManager is null");
     }
 
     public void loadPlugins()
@@ -225,9 +216,9 @@ public class PluginManager
     private void loadPlugin(URLClassLoader pluginClassLoader, boolean onlyInstallFunctionsPlugin)
     {
         ServiceLoader<Plugin> serviceLoader = ServiceLoader.load(Plugin.class, pluginClassLoader);
-        List<Plugin> pluginSet = ImmutableList.copyOf(serviceLoader);
-        checkState(!pluginSet.isEmpty(), "No service providers of type %s", Plugin.class.getName());
-        for (Plugin plugin : pluginSet) {
+        List<Plugin> plugins = ImmutableList.copyOf(serviceLoader);
+        checkState(!plugins.isEmpty(), "No service providers of type %s", Plugin.class.getName());
+        for (Plugin plugin : plugins) {
             String name = plugin.getClass().getName();
             log.info("Installing %s", name);
             if (onlyInstallFunctionsPlugin) {
@@ -248,12 +239,11 @@ public class PluginManager
     {
         for (Class<?> functionClass : plugin.getFunctions()) {
             log.info("Registering functions from %s", functionClass.getName());
-            metadataManager.getFunctionAndTypeManager().registerBuiltInFunctions(extractFunctions(functionClass));
+            metadataManager.addFunctions(extractFunctions(functionClass));
         }
-
         for (Object dynamicHiveFunction : plugin.getDynamicHiveFunctions()) {
             log.info("Registering function %s", ((SqlFunction) dynamicHiveFunction).getSignature());
-            metadataManager.getFunctionAndTypeManager().registerBuiltInFunctions(ImmutableList.of((SqlFunction) dynamicHiveFunction));
+            metadataManager.addFunctions(ImmutableList.of((SqlFunction) dynamicHiveFunction));
         }
     }
 
@@ -261,17 +251,17 @@ public class PluginManager
     {
         for (BlockEncoding blockEncoding : plugin.getBlockEncodings()) {
             log.info("Registering block encoding %s", blockEncoding.getName());
-            metadataManager.getFunctionAndTypeManager().addBlockEncoding(blockEncoding);
+            metadataManager.addBlockEncoding(blockEncoding);
         }
 
         for (Type type : plugin.getTypes()) {
             log.info("Registering type %s", type.getTypeSignature());
-            metadataManager.getFunctionAndTypeManager().addType(type);
+            metadataManager.addType(type);
         }
 
         for (ParametricType parametricType : plugin.getParametricTypes()) {
             log.info("Registering parametric type %s", parametricType.getName());
-            metadataManager.getFunctionAndTypeManager().addParametricType(parametricType);
+            metadataManager.addParametricType(parametricType);
         }
 
         for (ConnectorFactory connectorFactory : plugin.getConnectorFactories()) {
@@ -283,11 +273,6 @@ public class PluginManager
         for (SessionPropertyConfigurationManagerFactory sessionConfigFactory : plugin.getSessionPropertyConfigurationManagerFactories()) {
             log.info("Registering session property configuration manager %s", sessionConfigFactory.getName());
             sessionPropertyDefaults.addConfigurationManagerFactory(sessionConfigFactory);
-        }
-
-        for (FunctionNamespaceManagerFactory functionNamespaceManagerFactory : plugin.getFunctionNamespaceManagerFactories()) {
-            log.info("Registering function namespace manager %s", functionNamespaceManagerFactory.getName());
-            metadataManager.getFunctionAndTypeManager().addFunctionNamespaceFactory(functionNamespaceManagerFactory);
         }
 
         for (ResourceGroupConfigurationManagerFactory configurationManagerFactory : plugin.getResourceGroupConfigurationManagerFactories()) {
@@ -308,11 +293,6 @@ public class PluginManager
         for (EventListenerFactory eventListenerFactory : plugin.getEventListenerFactories()) {
             log.info("Registering event listener %s", eventListenerFactory.getName());
             eventListenerManager.addEventListenerFactory(eventListenerFactory);
-        }
-
-        for (GroupProviderFactory groupProviderFactory : plugin.getGroupProviderFactories()) {
-            log.info("Registering group provider %s", groupProviderFactory.getName());
-            groupProviderManager.addGroupProviderFactory(groupProviderFactory);
         }
 
         // Install StateStorePlugin
@@ -350,13 +330,6 @@ public class PluginManager
             heuristicIndexerManager.loadIndexFactories(indexFactory);
         }
 
-        // to-do: make failure detector as a plugin
-        FailureDetectorPlugin fplugin = new FailureDetectorPlugin();
-        for (FailureRetryFactory failureRetryFactory : fplugin.getFailureRetryFactory()) {
-            log.info("Registering failure retry policy provider %s", failureRetryFactory.getName());
-            FailureDetectorManager.addFailureRetryFactory(failureRetryFactory);
-        }
-
         installFunctionsPlugin(plugin);
     }
 
@@ -376,13 +349,14 @@ public class PluginManager
     private URLClassLoader buildClassLoaderFromPom(File pomFile)
             throws Exception
     {
+        System.out.println("POM:" + pomFile.toURI());
         List<Artifact> artifacts = resolver.resolvePom(pomFile);
         URLClassLoader classLoader = createClassLoader(artifacts, pomFile.getPath());
 
         Artifact artifact = artifacts.get(0);
-        Set<String> pluginSet = discoverPlugins(artifact, classLoader);
-        if (!pluginSet.isEmpty()) {
-            writePluginServices(pluginSet, artifact.getFile());
+        Set<String> plugins = discoverPlugins(artifact, classLoader);
+        if (!plugins.isEmpty()) {
+            writePluginServices(plugins, artifact.getFile());
         }
 
         return classLoader;

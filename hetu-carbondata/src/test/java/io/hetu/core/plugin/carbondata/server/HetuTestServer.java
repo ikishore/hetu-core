@@ -1,5 +1,5 @@
 /*
- * Copyright (C) 2018-2021. Huawei Technologies Co., Ltd. All rights reserved.
+ * Copyright (C) 2018-2020. Huawei Technologies Co., Ltd. All rights reserved.
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
  * You may obtain a copy of the License at
@@ -91,11 +91,11 @@ public class HetuTestServer
         carbonProperties.putAll(properties);
 
         logger.info("------------ Starting Presto Server -------------");
-        DistributedQueryRunner distributedQueryRunner = createQueryRunner(hetuProperties);
+        DistributedQueryRunner queryRunner = createQueryRunner(hetuProperties);
         Connection connection = createJdbcConnection(dbName);
         statement = (PrestoStatement) connection.createStatement();
 
-        logger.info("STARTED SERVER AT :" + distributedQueryRunner.getCoordinator().getBaseUrl());
+        logger.info("STARTED SERVER AT :" + queryRunner.getCoordinator().getBaseUrl());
     }
 
     public void stopServer() throws SQLException
@@ -123,19 +123,13 @@ public class HetuTestServer
     public List<Map<String, Object>> executeQuery(String query) throws SQLException
     {
         logger.info(">>>>> Executing Query: " + query);
-        ResultSet rs = null;
         try {
-            rs = statement.executeQuery(query);
+            ResultSet rs = statement.executeQuery(query);
             return convertResultSetToList(rs);
         }
         catch (SQLException e) {
             logger.error("Exception Occured: " + e.getMessage() + "\n Failed Query: " + query);
             throw e;
-        }
-        finally {
-            if (rs != null) {
-                rs.close();
-            }
         }
     }
 
@@ -192,7 +186,7 @@ public class HetuTestServer
     {
         try {
             queryRunner.installPlugin(new CarbondataPlugin());
-            Map<String, String> carbonPropertiesMap = ImmutableMap.<String, String>builder()
+            Map<String, String> carbonProperties = ImmutableMap.<String, String>builder()
                     .putAll(this.carbonProperties)
                     .put("carbon.unsafe.working.memory.in.mb", "512")
                     .build();
@@ -203,7 +197,7 @@ public class HetuTestServer
                     .build();
 
             // CreateCatalog will create a catalog for CarbonData in etc/catalog.
-            queryRunner.createCatalog(carbonDataCatalog, carbonDataConnector, carbonPropertiesMap);
+            queryRunner.createCatalog(carbonDataCatalog, carbonDataConnector, carbonProperties);
             queryRunner.createCatalog(carbonDataCatalogLocationDisabled, carbonDataConnector, carbonPropertiesLocationDisabled);
         }
         catch (RuntimeException e) {

@@ -1,5 +1,5 @@
 /*
- * Copyright (C) 2018-2021. Huawei Technologies Co., Ltd. All rights reserved.
+ * Copyright (C) 2018-2020. Huawei Technologies Co., Ltd. All rights reserved.
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
  * You may obtain a copy of the License at
@@ -14,11 +14,9 @@
  */
 package io.hetu.core.plugin.hbase.connector;
 
-import io.airlift.log.Logger;
 import io.hetu.core.plugin.hbase.client.TestHBaseConnection;
 import io.hetu.core.plugin.hbase.conf.HBaseConfig;
 import io.hetu.core.plugin.hbase.metadata.HBaseMetastore;
-import org.apache.hadoop.hbase.client.Connection;
 import org.apache.hadoop.hbase.client.HBaseAdmin;
 
 import java.io.IOException;
@@ -31,8 +29,6 @@ import java.io.IOException;
 public class TestHBaseClientConnection
         extends HBaseConnection
 {
-    private static final Logger LOG = Logger.get(TestHBaseClientConnection.class);
-
     public TestHBaseClientConnection(HBaseConfig conf, HBaseMetastore metastore)
     {
         super(metastore, conf);
@@ -41,17 +37,12 @@ public class TestHBaseClientConnection
     /**
      * init
      */
-    public Connection createConnection()
+    public void init()
+            throws IOException
     {
         this.conn = new TestHBaseConnection();
-        try {
-            if (conn.getAdmin() instanceof HBaseAdmin) {
-                this.hbaseAdmin = (HBaseAdmin) conn.getAdmin();
-            }
+        if (conn.getAdmin() instanceof HBaseAdmin) {
+            this.hbaseAdmin = (HBaseAdmin) conn.getAdmin();
         }
-        catch (IOException e) {
-            LOG.info("Error message: " + e.getStackTrace());
-        }
-        return conn;
     }
 }

@@ -16,7 +16,6 @@ package io.hetu.core.eventlistener;
 
 import io.airlift.configuration.ConfigurationFactory;
 import io.hetu.core.eventlistener.listeners.BaseEventListener;
-import io.hetu.core.eventlistener.util.HetuLogUtil;
 import io.prestosql.spi.eventlistener.EventListener;
 import io.prestosql.spi.eventlistener.EventListenerFactory;
 
@@ -25,7 +24,6 @@ import java.util.Map;
 public class HetuEventListenerFactory
         implements EventListenerFactory
 {
-    @Override
     public String getName()
     {
         return "hetu-listener";
@@ -37,12 +35,10 @@ public class HetuEventListenerFactory
      * @param properties properties
      * @return event listener
      */
-    @Override
     public EventListener create(Map<String, String> properties)
     {
         ConfigurationFactory configurationFactory = new ConfigurationFactory(properties);
         HetuEventListenerConfig config = configurationFactory.build(HetuEventListenerConfig.class);
-        HetuLogUtil.create(config);
         return BaseEventListener.create(config);
     }
 }

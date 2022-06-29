@@ -1,5 +1,5 @@
 /*
- * Copyright (C) 2018-2021. Huawei Technologies Co., Ltd. All rights reserved.
+ * Copyright (C) 2018-2020. Huawei Technologies Co., Ltd. All rights reserved.
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
  * You may obtain a copy of the License at
@@ -78,7 +78,7 @@ public class TestTransformUnCorrelatedInPredicateSubQuerySelfJoinToAggregate
     @Test
     public void testDoesNotFire()
     {
-        tester.assertThat(new TransformUnCorrelatedInPredicateSubQuerySelfJoinToAggregate(tester().getMetadata()))
+        tester.assertThat(new TransformUnCorrelatedInPredicateSubQuerySelfJoinToAggregate())
                 .on(p -> p.apply(
                         Assignments.of(p.symbol("x"), OriginalExpressionUtils.castToRowExpression(new ExistsPredicate(new LongLiteral("1")))),
                         emptyList(),
@@ -90,7 +90,7 @@ public class TestTransformUnCorrelatedInPredicateSubQuerySelfJoinToAggregate
     @Test
     public void testDoesFireOnInPredicate()
     {
-        tester.assertThat(new TransformUnCorrelatedInPredicateSubQuerySelfJoinToAggregate(tester().getMetadata()))
+        tester.assertThat(new TransformUnCorrelatedInPredicateSubQuerySelfJoinToAggregate())
                 .on(p -> {
                     Symbol o1 = p.symbol("o1", DATE);
                     Symbol t1 = p.symbol("t1", DOUBLE);

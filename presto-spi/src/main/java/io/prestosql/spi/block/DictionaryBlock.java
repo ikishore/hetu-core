@@ -41,8 +41,8 @@ public class DictionaryBlock<T>
 
     private final int positionCount;
     private final Block<T> dictionary;
-    protected final int idsOffset;
-    protected final int[] ids;
+    private final int idsOffset;
+    private final int[] ids;
     private final long retainedSizeInBytes;
     private volatile long sizeInBytes = -1;
     private volatile long logicalSizeInBytes = -1;
@@ -213,17 +213,17 @@ public class DictionaryBlock<T>
 
     private void calculateCompactSize()
     {
-        int positionUniqueIds = 0;
+        int uniqueIds = 0;
         boolean[] used = new boolean[dictionary.getPositionCount()];
         for (int i = 0; i < positionCount; i++) {
             int position = getId(i);
             if (!used[position]) {
-                positionUniqueIds++;
+                uniqueIds++;
                 used[position] = true;
             }
         }
         this.sizeInBytes = dictionary.getPositionsSizeInBytes(used) + (Integer.BYTES * (long) positionCount);
-        this.uniqueIds = positionUniqueIds;
+        this.uniqueIds = uniqueIds;
     }
 
     @Override
@@ -235,7 +235,7 @@ public class DictionaryBlock<T>
 
         // Calculation of logical size can be performed as part of calculateCompactSize() with minor modifications.
         // Keeping this calculation separate as this is a little more expensive and may not be called as often.
-        long blockSizeInBytes = 0;
+        long sizeInBytes = 0;
         long[] seenSizes = new long[dictionary.getPositionCount()];
         Arrays.fill(seenSizes, -1L);
         for (int i = 0; i < getPositionCount(); i++) {
@@ -243,11 +243,11 @@ public class DictionaryBlock<T>
             if (seenSizes[position] < 0) {
                 seenSizes[position] = dictionary.getRegionSizeInBytes(position, 1);
             }
-            blockSizeInBytes += seenSizes[position];
+            sizeInBytes += seenSizes[position];
         }
 
-        logicalSizeInBytes = blockSizeInBytes;
-        return blockSizeInBytes;
+        logicalSizeInBytes = sizeInBytes;
+        return sizeInBytes;
     }
 
     @Override
@@ -397,21 +397,9 @@ public class DictionaryBlock<T>
         return dictionary;
     }
 
-    public Slice getIds()
+    Slice getIds()
     {
         return Slices.wrappedIntArray(ids, idsOffset, positionCount);
-    }
-
-    public int[] getIdsArray()
-    {
-        if (idsOffset == 0) {
-            return ids;
-        }
-        else {
-            int[] res = new int[positionCount];
-            System.arraycopy(ids, idsOffset, res, 0, positionCount);
-            return res;
-        }
     }
 
     public int getId(int position)

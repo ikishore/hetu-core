@@ -14,7 +14,6 @@
 package io.prestosql.sql.planner;
 
 import com.google.common.annotations.VisibleForTesting;
-import com.google.common.collect.ImmutableList;
 import io.airlift.log.Logger;
 import io.prestosql.Session;
 import io.prestosql.connector.DataCenterUtility;
@@ -34,7 +33,6 @@ import io.prestosql.sql.DynamicFilters;
 import io.prestosql.sql.rewrite.DynamicFilterContext;
 import sun.reflect.generics.reflectiveObjects.NotImplementedException;
 
-import java.util.ArrayList;
 import java.util.HashMap;
 import java.util.HashSet;
 import java.util.List;
@@ -86,7 +84,7 @@ public class LocalDynamicFiltersCollector
         }
     }
 
-    void initContext(List<List<DynamicFilters.Descriptor>> descriptors, Map<Integer, Symbol> layOut)
+    void initContext(List<DynamicFilters.Descriptor> descriptors, Map<Integer, Symbol> layOut)
     {
         if (context == null) {
             context = new DynamicFilterContext(descriptors, layOut);
@@ -114,84 +112,78 @@ public class LocalDynamicFiltersCollector
      * @param tableScan TableScanNode that has DynamicFilter applied
      * @return ColumnHandle to DynamicFilter mapping that contains any DynamicFilter that are ready for use
      */
-    List<Map<ColumnHandle, DynamicFilter>> getDynamicFilters(TableScanNode tableScan)
+    Map<ColumnHandle, DynamicFilter> getDynamicFilters(TableScanNode tableScan)
     {
         Map<Symbol, ColumnHandle> assignments = tableScan.getAssignments();
         // Skips symbols irrelevant to this table scan node.
         Set<String> columnNames = new HashSet<>();
-        List<Map<ColumnHandle, DynamicFilter>> resultList = new ArrayList<>();
-        for (int i = 0; i < context.getDisjunctSize(); i++) {
-            Map<ColumnHandle, DynamicFilter> result = new HashMap<ColumnHandle, DynamicFilter>();
-            for (Map.Entry<Symbol, ColumnHandle> entry : assignments.entrySet()) {
-                final Symbol columnSymbol = entry.getKey();
-                final ColumnHandle columnHandle = entry.getValue();
-                try {
-                    columnNames.add(columnHandle.getColumnName());
-                }
-                catch (NotImplementedException e) {
-                    // ignore this exception, maybe some implementation class not implement the default method.
+        Map<ColumnHandle, DynamicFilter> result = new HashMap<>();
+        for (Map.Entry<Symbol, ColumnHandle> entry : assignments.entrySet()) {
+            final Symbol columnSymbol = entry.getKey();
+            final ColumnHandle columnHandle = entry.getValue();
+            try {
+                columnNames.add(columnHandle.getColumnName());
+            }
+            catch (NotImplementedException e) {
+                // ignore this exception, maybe some implementation class not implement the default method.
+            }
+
+            final List<String> filterIds = context.getId(columnSymbol);
+            if (filterIds == null || filterIds.isEmpty()) {
+                continue;
+            }
+
+            for (String filterId : filterIds) {
+                // Try to get dynamic filter from local cache first
+                String cacheKey = createCacheKey(filterId, queryId);
+                DynamicFilter cachedDynamicFilter = cachedDynamicFilters.get(filterId);
+                if (cachedDynamicFilter == null) {
+                    cachedDynamicFilter = dynamicFilterCacheManager.getDynamicFilter(cacheKey);
                 }
 
-                final List<String> filterIds = context.getId(columnSymbol, i);
-                if (filterIds == null || filterIds.isEmpty()) {
+                if (cachedDynamicFilter != null) {
+                    //Combine multiple dynamic filters for same column handle
+                    DynamicFilter dynamicFilter = result.get(columnHandle);
+                    //Same dynamic filter might be referred in multiple table scans for different columns due multi table joins.
+                    //So clone before setting the columnHandle to avoid race in setting the columnHandle.
+                    cachedDynamicFilter = cachedDynamicFilter.clone();
+                    cachedDynamicFilter.setColumnHandle(columnHandle);
+                    if (dynamicFilter == null) {
+                        dynamicFilter = cachedDynamicFilter;
+                    }
+                    else {
+                        dynamicFilter = DynamicFilterFactory.combine(columnHandle, dynamicFilter, cachedDynamicFilter);
+                    }
+                    dynamicFilter.setColumnHandle(columnHandle);
+                    result.put(columnHandle, dynamicFilter);
                     continue;
                 }
 
-                for (String filterId : filterIds) {
-                    // Try to get dynamic filter from local cache first
-                    String cacheKey = createCacheKey(filterId, queryId);
-                    DynamicFilter cachedDynamicFilter = cachedDynamicFilters.get(filterId);
-                    if (cachedDynamicFilter == null) {
-                        cachedDynamicFilter = dynamicFilterCacheManager.getDynamicFilter(cacheKey);
-                    }
-
-                    if (cachedDynamicFilter != null) {
-                        //Combine multiple dynamic filters for same column handle
-                        DynamicFilter dynamicFilter = result.get(columnHandle);
-                        //Same dynamic filter might be referred in multiple table scans for different columns due multi table joins.
-                        //So clone before setting the columnHandle to avoid race in setting the columnHandle.
-                        cachedDynamicFilter = cachedDynamicFilter.clone();
-                        cachedDynamicFilter.setColumnHandle(columnHandle);
-                        if (dynamicFilter == null) {
-                            dynamicFilter = cachedDynamicFilter;
-                        }
-                        else {
-                            dynamicFilter = DynamicFilterFactory.combine(columnHandle, dynamicFilter, cachedDynamicFilter);
-                        }
-                        dynamicFilter.setColumnHandle(columnHandle);
-                        result.put(columnHandle, dynamicFilter);
-                        continue;
-                    }
-
-                    // Local dynamic filters
-                    if (predicates.containsKey(filterId)) {
-                        Optional<RowExpression> filter = context.getFilter(filterId, i);
-                        Optional<Predicate<List>> filterPredicate = DynamicFilters.createDynamicFilterPredicate(filter);
-                        DynamicFilter dynamicFilter = DynamicFilterFactory.create(filterId, columnHandle, predicates.get(filterId), LOCAL, filterPredicate, filter);
-                        cachedDynamicFilters.put(filterId, dynamicFilter);
-                        result.put(columnHandle, dynamicFilter);
-                    }
+                // Local dynamic filters
+                if (predicates.containsKey(filterId)) {
+                    Optional<RowExpression> filter = context.getFilter(filterId);
+                    Optional<Predicate<List>> filterPredicate = DynamicFilters.createDynamicFilterPredicate(filter);
+                    DynamicFilter dynamicFilter = DynamicFilterFactory.create(filterId, columnHandle, predicates.get(filterId), LOCAL, filterPredicate);
+                    cachedDynamicFilters.put(filterId, dynamicFilter);
+                    result.put(columnHandle, dynamicFilter);
                 }
-            }
-            if (!result.isEmpty()) {
-                resultList.add(result);
             }
         }
 
         if (isCrossRegionDynamicFilterEnabled(session)) {
             if (!metadataOptional.isPresent()) {
-                return resultList;
+                return result;
             }
 
             // check the tableScan is a dc connector table,if a dc table, should consider push down the cross region bloom filter to next cluster
             if (!DataCenterUtility.isDCCatalog(metadataOptional.get(), tableScan.getTable().getCatalogName().getCatalogName())) {
-                return resultList;
+                return result;
             }
             // stateMap, key is dc-connector-table column name, value is bloomFilter bytes
             Map<String, byte[]> newBloomFilterFromStateStoreCache = dynamicFilterCacheManager.getBloomFitler(session.getQueryId().getId() + CROSS_LAYER_DYNAMIC_FILTER);
 
             if (newBloomFilterFromStateStoreCache == null) {
-                return resultList;
+                return result;
             }
 
             // check tableScan contains the stateMap.key, if contains, should push the filter to next cluster
@@ -209,28 +201,22 @@ public class LocalDynamicFiltersCollector
                 };
 
                 BloomFilterDynamicFilter newBloomDynamicFilter = new BloomFilterDynamicFilter("", columnHandle, entry.getValue(), GLOBAL);
-
-                for (Map<ColumnHandle, DynamicFilter> result : resultList) {
-                    if (result.keySet().contains(entry.getKey())) {
-                        DynamicFilter existsFilter = result.get(entry.getKey());
-                        if (existsFilter instanceof BloomFilterDynamicFilter) {
-                            BloomFilter existsBloomFilter = ((BloomFilterDynamicFilter) existsFilter).getBloomFilterDeserialized();
-                            existsBloomFilter.merge(newBloomDynamicFilter.getBloomFilterDeserialized());
-                            DynamicFilter newDynamicFilter = new BloomFilterDynamicFilter(existsFilter.getFilterId(), columnHandle, existsBloomFilter, GLOBAL);
-                            result.put(columnHandle, newDynamicFilter);
-                        }
+                if (result.keySet().contains(entry.getKey())) {
+                    DynamicFilter existsFilter = result.get(entry.getKey());
+                    if (existsFilter instanceof BloomFilterDynamicFilter) {
+                        BloomFilter existsBloomFilter = ((BloomFilterDynamicFilter) existsFilter).getBloomFilterDeserialized();
+                        existsBloomFilter.merge(newBloomDynamicFilter.getBloomFilterDeserialized());
+                        DynamicFilter newDynamicFilter = new BloomFilterDynamicFilter(existsFilter.getFilterId(), columnHandle, existsBloomFilter, GLOBAL);
+                        result.put(columnHandle, newDynamicFilter);
                     }
-                    else {
-                        result.put(columnHandle, newBloomDynamicFilter);
-                    }
+                }
+                else {
+                    result.put(columnHandle, newBloomDynamicFilter);
                 }
             }
         }
 
-        if (resultList.size() != context.getDisjunctSize()) {
-            return ImmutableList.of();
-        }
-        return resultList;
+        return result;
     }
 
     public boolean checkTableIsDcTable(TableScanNode tableScanNode)
@@ -248,10 +234,8 @@ public class LocalDynamicFiltersCollector
     public void removeDynamicFilter(Boolean taskFinished)
     {
         if (context != null) {
-            for (int i = 0; i < context.getDisjunctSize(); i++) {
-                for (String filterId : context.getFilterIds(i)) {
-                    dynamicFilterCacheManager.removeDynamicFilter(createCacheKey(filterId, queryId), taskId);
-                }
+            for (String filterId : context.getFilterIds()) {
+                dynamicFilterCacheManager.removeDynamicFilter(createCacheKey(filterId, queryId), taskId);
             }
         }
     }

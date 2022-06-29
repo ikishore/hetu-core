@@ -201,21 +201,21 @@ public interface HiveCoercer
             requireNonNull(toHiveType, "toHiveType is null");
             List<HiveType> fromFieldTypes = extractStructFieldTypes(fromHiveType);
             List<HiveType> toFieldTypes = extractStructFieldTypes(toHiveType);
-            ImmutableList.Builder<Optional<Function<Block, Block>>> coercersBuilder = ImmutableList.builder();
+            ImmutableList.Builder<Optional<Function<Block, Block>>> coercers = ImmutableList.builder();
             this.nullBlocks = new Block[toFieldTypes.size()];
             for (int i = 0; i < toFieldTypes.size(); i++) {
                 if (i >= fromFieldTypes.size()) {
                     nullBlocks[i] = toFieldTypes.get(i).getType(typeManager).createBlockBuilder(null, 1).appendNull().build();
-                    coercersBuilder.add(Optional.empty());
+                    coercers.add(Optional.empty());
                 }
                 else if (!fromFieldTypes.get(i).equals(toFieldTypes.get(i))) {
-                    coercersBuilder.add(Optional.of(createCoercer(typeManager, fromFieldTypes.get(i), toFieldTypes.get(i))));
+                    coercers.add(Optional.of(createCoercer(typeManager, fromFieldTypes.get(i), toFieldTypes.get(i))));
                 }
                 else {
-                    coercersBuilder.add(Optional.empty());
+                    coercers.add(Optional.empty());
                 }
             }
-            this.coercers = coercersBuilder.build();
+            this.coercers = coercers.build();
         }
 
         @Override

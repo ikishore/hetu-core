@@ -22,8 +22,6 @@ import io.prestosql.spi.Page;
 import io.prestosql.spi.block.Block;
 import io.prestosql.spi.block.BlockBuilder;
 import io.prestosql.spi.block.DictionaryBlock;
-import io.prestosql.spi.connector.QualifiedObjectName;
-import io.prestosql.spi.function.BuiltInFunctionHandle;
 import io.prestosql.spi.function.FunctionKind;
 import io.prestosql.spi.function.Signature;
 import io.prestosql.spi.relation.CallExpression;
@@ -141,14 +139,13 @@ public class BenchmarkMapConcat
             ImmutableList.Builder<RowExpression> projectionsBuilder = ImmutableList.builder();
 
             Signature signature = new Signature(
-                    QualifiedObjectName.valueOfDefaultFunction(name),
+                    name,
                     FunctionKind.SCALAR,
                     mapType.getTypeSignature(),
                     mapType.getTypeSignature(),
                     mapType.getTypeSignature());
             projectionsBuilder.add(new CallExpression(
-                    signature.getName().getObjectName(),
-                    new BuiltInFunctionHandle(signature),
+                    signature,
                     mapType,
                     ImmutableList.of(field(0, mapType), field(1, mapType)),
                     Optional.empty()));

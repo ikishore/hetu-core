@@ -1,5 +1,6 @@
 <?xml version="1.0" encoding="UTF-8"?>
-<project xmlns="http://maven.apache.org/POM/4.0.0" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" xsi:schemaLocation="http://maven.apache.org/POM/4.0.0 http://maven.apache.org/xsd/maven-4.0.0.xsd">
+<project xmlns="http://maven.apache.org/POM/4.0.0" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+         xsi:schemaLocation="http://maven.apache.org/POM/4.0.0 http://maven.apache.org/xsd/maven-4.0.0.xsd">
     <modelVersion>4.0.0</modelVersion>
 
     <parent>
@@ -10,7 +11,7 @@
 
     <groupId>io.hetu.core</groupId>
     <artifactId>presto-root</artifactId>
-    <version>1.7.0-SNAPSHOT</version>
+    <version>1.2.0-SNAPSHOT</version>
     <packaging>pom</packaging>
 
     <name>presto-root</name>
@@ -43,13 +44,12 @@
         <dep.aws-sdk.version>1.11.445</dep.aws-sdk.version>
         <dep.okhttp.version>3.9.0</dep.okhttp.version>
         <dep.jdbi3.version>3.4.0</dep.jdbi3.version>
-        <dep.netty.version>4.1.72.Final</dep.netty.version>
-        <dep.drift.version>1.18</dep.drift.version>
+        <dep.drift.version>1.14</dep.drift.version>
         <dep.joda.version>2.10.5</dep.joda.version>
         <dep.tempto.version>165</dep.tempto.version>
         <dep.testng.version>6.10</dep.testng.version>
         <dep.assertj-core.version>3.8.0</dep.assertj-core.version>
-        <dep.logback.version>1.2.9</dep.logback.version>
+        <dep.logback.version>1.2.3</dep.logback.version>
         <dep.jmxutils.version>1.21</dep.jmxutils.version>
         <dep.junit.version>4.13.1</dep.junit.version>
         <dep.gcs.version>1.9.10</dep.gcs.version>
@@ -57,12 +57,9 @@
         <dep.prestosql.apache.hadoop.version>3.2.0-8</dep.prestosql.apache.hadoop.version>
         <carbon.version>2.0.1</carbon.version>
         <dep.prestosql.version>316</dep.prestosql.version>
-        <dep.jackson.version>2.11.4</dep.jackson.version>
         <dep.hetu.version>${project.version}</dep.hetu.version>
-        <dep.jetty.version>9.4.43.v20210629</dep.jetty.version>
-        <dep.bcprov.version>1.66</dep.bcprov.version>
-        <dep.hudi.version>0.7.0</dep.hudi.version>
-        <dep.kryo.version>5.0.3</dep.kryo.version>
+        <dep.jetty.version>9.4.30.v20200611</dep.jetty.version>
+        <dep.bcprov.version>1.64</dep.bcprov.version>
         <!--
           America/Bahia_Banderas has:
            - offset change since 1970 (offset Jan 1970: -08:00, offset Jan 2018: -06:00)
@@ -86,8 +83,8 @@
         <module>presto-record-decoder</module>
         <module>presto-expressions</module>
         <module>presto-kafka</module>
-        <module>presto-redis</module>
-        <module>presto-memory</module>
+	<module>presto-memory</module>
+	<module>presto-pmemory</module>
         <module>presto-orc</module>
         <module>presto-parquet</module>
         <module>presto-rcfile</module>
@@ -153,10 +150,6 @@
         <module>hetu-server-rpm</module>
         <module>hetu-common</module>
         <module>hetu-hazelcast</module>
-        <module>hetu-function-namespace-managers</module>
-        <module>hetu-greenplum</module>
-        <module>hetu-clickhouse</module>
-        <module>hetu-kylin</module>
     </modules>
 
     <dependencyManagement>
@@ -165,12 +158,6 @@
                 <groupId>commons-codec</groupId>
                 <artifactId>commons-codec</artifactId>
                 <version>${dep.commons-codec.version}</version>
-            </dependency>
-
-            <dependency>
-                <groupId>org.bouncycastle</groupId>
-                <artifactId>bcprov-jdk15on</artifactId>
-                <version>${dep.bcprov.version}</version>
             </dependency>
 
             <dependency>
@@ -363,6 +350,12 @@
                 <artifactId>presto-memory</artifactId>
                 <version>${project.version}</version>
             </dependency>
+		
+	    <dependency>
+                <groupId>io.hetu.core</groupId>
+                <artifactId>presto-pmemory</artifactId>
+                <version>${project.version}</version>
+            </dependency>
 
             <dependency>
                 <groupId>io.hetu.core</groupId>
@@ -525,7 +518,7 @@
             <dependency>
                 <groupId>io.prestosql.hive</groupId>
                 <artifactId>hive-apache</artifactId>
-                <version>3.1.2-1</version>
+                <version>3.0.0-2</version>
             </dependency>
 
             <dependency>
@@ -587,13 +580,13 @@
             <dependency>
                 <groupId>io.hetu.core</groupId>
                 <artifactId>hetu-cube</artifactId>
-                <version>${project.version}</version>
+                <version>${dep.hetu.version}</version>
             </dependency>
 
             <dependency>
                 <groupId>io.hetu.core</groupId>
                 <artifactId>hetu-startree</artifactId>
-                <version>${project.version}</version>
+                <version>${dep.hetu.version}</version>
             </dependency>
 
             <dependency>
@@ -804,18 +797,6 @@
                 <groupId>io.airlift.drift</groupId>
                 <artifactId>drift-transport-netty</artifactId>
                 <version>${dep.drift.version}</version>
-                <exclusions>
-                    <exclusion>
-                        <groupId>io.netty</groupId>
-                        <artifactId>netty-all</artifactId>
-                    </exclusion>
-                </exclusions>
-            </dependency>
-
-            <dependency>
-                <groupId>io.netty</groupId>
-                <artifactId>netty-all</artifactId>
-                <version>${dep.netty.version}</version>
             </dependency>
 
             <dependency>
@@ -1024,73 +1005,13 @@
             <dependency>
                 <groupId>org.apache.commons</groupId>
                 <artifactId>commons-lang3</artifactId>
-                <version>3.11</version>
+                <version>3.10</version>
             </dependency>
 
             <dependency>
                 <groupId>org.codehaus.jettison</groupId>
                 <artifactId>jettison</artifactId>
-                <version>1.4.1</version>
-            </dependency>
-
-            <dependency>
-                <groupId>org.apache.hadoop</groupId>
-                <artifactId>hadoop-distcp</artifactId>
-                <version>2.10.1</version>
-            </dependency>
-
-            <dependency>
-                <groupId>org.apache.hive</groupId>
-                <artifactId>hive-contrib</artifactId>
-                <version>3.1.2</version>
-            </dependency>
-            
-            <dependency>
-                <groupId>org.apache.hudi</groupId>
-                <artifactId>hudi-hadoop-mr</artifactId>
-                <version>${dep.hudi.version}</version>
-                <exclusions>
-                    <exclusion>
-                        <groupId>org.objenesis</groupId>
-                        <artifactId>objenesis</artifactId>
-                    </exclusion>
-                    <exclusion>
-                        <groupId>commons-logging</groupId>
-                        <artifactId>commons-logging</artifactId>
-                    </exclusion>
-                    <exclusion>
-                        <groupId>org.slf4j</groupId>
-                        <artifactId>jcl-over-slf4j</artifactId>
-                    </exclusion>
-                    <exclusion>
-                        <groupId>com.fasterxml.jackson.core</groupId>
-                        <artifactId>jackson-annotations</artifactId>
-                    </exclusion>
-                    <exclusion>
-                        <groupId>com.fasterxml.jackson.core</groupId>
-                        <artifactId>jackson-databind</artifactId>
-                    </exclusion>
-                    <exclusion>
-                        <groupId>org.apache.httpcomponents</groupId>
-                        <artifactId>httpclient</artifactId>
-                    </exclusion>
-                    <exclusion>
-                        <groupId>org.apache.httpcomponents</groupId>
-                        <artifactId>fluent-hc</artifactId>
-                    </exclusion>
-                    <exclusion>
-                        <groupId>org.rocksdb</groupId>
-                        <artifactId>rocksdbjni</artifactId>
-                    </exclusion>
-                    <exclusion>
-                        <groupId>com.esotericsoftware</groupId>
-                        <artifactId>kryo-shaded</artifactId>
-                    </exclusion>
-                    <exclusion>
-                        <groupId>org.apache.hbase</groupId>
-                        <artifactId>hbase-server</artifactId>
-                    </exclusion>
-                </exclusions>
+                <version>1.4.0</version>
             </dependency>
 
             <dependency>
@@ -1257,7 +1178,7 @@
             <dependency>
                 <groupId>org.xerial.snappy</groupId>
                 <artifactId>snappy-java</artifactId>
-                <version>1.1.8.4</version>
+                <version>1.1.2.6</version>
             </dependency>
 
             <dependency>
@@ -1468,7 +1389,7 @@
             <dependency>
                 <groupId>commons-io</groupId>
                 <artifactId>commons-io</artifactId>
-                <version>2.8.0</version>
+                <version>2.6</version>
             </dependency>
             <dependency>
                 <groupId>org.apache.httpcomponents</groupId>
@@ -1493,7 +1414,7 @@
             <dependency>
                 <groupId>org.mockito</groupId>
                 <artifactId>mockito-core</artifactId>
-                <version>1.10.19</version>
+                <version>1.9.5</version>
             </dependency>
             <dependency>
                 <groupId>com.google.guava</groupId>
@@ -1578,21 +1499,6 @@
                 <version>${dep.jetty.version}</version>
             </dependency>
             <!--jetty manual upgrade of version end-->
-            <dependency>
-                <groupId>org.apache.kylin</groupId>
-                <artifactId>kylin-jdbc</artifactId>
-                <version>3.0.2</version>
-            </dependency>
-            <dependency>
-                <groupId>org.apache.calcite</groupId>
-                <artifactId>calcite-core</artifactId>
-                <version>1.18.0</version>
-            </dependency>
-            <dependency>
-                <groupId>com.esotericsoftware</groupId>
-                <artifactId>kryo</artifactId>
-                <version>${dep.kryo.version}</version>
-            </dependency>
         </dependencies>
     </dependencyManagement>
 
@@ -1677,13 +1583,6 @@
                             </requireUpperBoundDeps>
                         </rules>
                     </configuration>
-                    <dependencies>
-                        <dependency>
-                            <groupId>org.codehaus.mojo</groupId>
-                            <artifactId>extra-enforcer-rules</artifactId>
-                            <version>1.3</version>
-                        </dependency>
-                    </dependencies>
                 </plugin>
 
                 <plugin>
@@ -1727,10 +1626,6 @@
                             <item>${air.main.basedir}/src/main/resource/license/license-header.txt</item>
                             <item>${air.main.basedir}/src/main/resource/license/license-header-alternate-2010.txt</item>
                             <item>${air.main.basedir}/src/main/resource/license/license-header-alternate-2012.txt</item>
-                            <item>${air.main.basedir}/src/main/resource/license/license-header-alternate-2020.txt</item>
-                            <item>${air.main.basedir}/src/main/resource/license/license-header-alternate-2021.txt</item>
-                            <item>${air.main.basedir}/src/main/resource/license/license-header-alternate-2022.txt</item>
-                            <item>${air.main.basedir}/src/main/resource/license/license-header-third.txt</item>
                         </validHeaders>
                     </configuration>
                 </plugin>

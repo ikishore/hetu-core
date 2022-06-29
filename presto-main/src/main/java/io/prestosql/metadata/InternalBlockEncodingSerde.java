@@ -24,14 +24,14 @@ import java.util.Optional;
 import static java.nio.charset.StandardCharsets.UTF_8;
 import static java.util.Objects.requireNonNull;
 
-public class InternalBlockEncodingSerde
+final class InternalBlockEncodingSerde
         implements BlockEncodingSerde
 {
-    private final FunctionAndTypeManager functionAndTypeManager;
+    private final Metadata metadata;
 
-    public InternalBlockEncodingSerde(FunctionAndTypeManager metadata)
+    public InternalBlockEncodingSerde(Metadata metadata)
     {
-        this.functionAndTypeManager = requireNonNull(metadata, "metadata is null");
+        this.metadata = requireNonNull(metadata, "metadata is null");
     }
 
     @Override
@@ -41,7 +41,7 @@ public class InternalBlockEncodingSerde
         String encodingName = readLengthPrefixedString(input);
 
         // look up the encoding factory
-        BlockEncoding blockEncoding = functionAndTypeManager.getBlockEncoding(encodingName);
+        BlockEncoding blockEncoding = metadata.getBlockEncoding(encodingName);
 
         // load read the encoding factory from the output stream
         return blockEncoding.readBlock(this, input);
@@ -50,18 +50,17 @@ public class InternalBlockEncodingSerde
     @Override
     public void writeBlock(SliceOutput output, Block block)
     {
-        Block blockToWrite = block;
         while (true) {
             // get the encoding name
-            String encodingName = blockToWrite.getEncodingName();
+            String encodingName = block.getEncodingName();
 
             // look up the BlockEncoding
-            BlockEncoding blockEncoding = functionAndTypeManager.getBlockEncoding(encodingName);
+            BlockEncoding blockEncoding = metadata.getBlockEncoding(encodingName);
 
             // see if a replacement block should be written instead
-            Optional<Block> replacementBlock = blockEncoding.replacementBlockForWrite(blockToWrite);
+            Optional<Block> replacementBlock = blockEncoding.replacementBlockForWrite(block);
             if (replacementBlock.isPresent()) {
-                blockToWrite = replacementBlock.get();
+                block = replacementBlock.get();
                 continue;
             }
 
@@ -69,13 +68,13 @@ public class InternalBlockEncodingSerde
             writeLengthPrefixedString(output, encodingName);
 
             // write the block to the output
-            blockEncoding.writeBlock(this, output, blockToWrite);
+            blockEncoding.writeBlock(this, output, block);
 
             break;
         }
     }
 
-    protected static String readLengthPrefixedString(SliceInput input)
+    private static String readLengthPrefixedString(SliceInput input)
     {
         int length = input.readInt();
         byte[] bytes = new byte[length];

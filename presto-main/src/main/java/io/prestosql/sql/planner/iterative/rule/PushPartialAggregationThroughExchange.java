@@ -19,14 +19,13 @@ import io.prestosql.matching.Captures;
 import io.prestosql.matching.Pattern;
 import io.prestosql.metadata.Metadata;
 import io.prestosql.operator.aggregation.InternalAggregationFunction;
-import io.prestosql.spi.function.FunctionHandle;
+import io.prestosql.spi.function.Signature;
 import io.prestosql.spi.plan.AggregationNode;
 import io.prestosql.spi.plan.Assignments;
 import io.prestosql.spi.plan.CTEScanNode;
 import io.prestosql.spi.plan.PlanNode;
 import io.prestosql.spi.plan.ProjectNode;
 import io.prestosql.spi.plan.Symbol;
-import io.prestosql.spi.relation.CallExpression;
 import io.prestosql.spi.relation.LambdaDefinitionExpression;
 import io.prestosql.spi.relation.RowExpression;
 import io.prestosql.spi.relation.VariableReferenceExpression;
@@ -40,6 +39,7 @@ import io.prestosql.sql.planner.plan.ExchangeNode;
 import java.util.ArrayList;
 import java.util.Collections;
 import java.util.HashMap;
+import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
@@ -203,32 +203,25 @@ public class PushPartialAggregationThroughExchange
                 partitioning,
                 partials,
                 ImmutableList.copyOf(Collections.nCopies(partials.size(), aggregation.getOutputSymbols())),
-                Optional.empty(),
-                aggregation.getAggregationType());
+                Optional.empty());
     }
 
     private PlanNode split(AggregationNode node, Context context)
     {
         // otherwise, add a partial and final with an exchange in between
         Map<Symbol, AggregationNode.Aggregation> intermediateAggregation = new HashMap<>();
-        Map<Symbol, AggregationNode.Aggregation> finalAggregation = new HashMap<>();
+        Map<Symbol, AggregationNode.Aggregation> finalAggregation = new LinkedHashMap<>();
         for (Map.Entry<Symbol, AggregationNode.Aggregation> entry : node.getAggregations().entrySet()) {
             AggregationNode.Aggregation originalAggregation = entry.getValue();
-            String functionName = metadata.getFunctionAndTypeManager().getFunctionMetadata(originalAggregation.getFunctionHandle()).getName().getObjectName();
-            FunctionHandle functionHandle = originalAggregation.getFunctionHandle();
-            InternalAggregationFunction function = metadata.getFunctionAndTypeManager().getAggregateFunctionImplementation(functionHandle);
-            Symbol intermediateSymbol = context.getSymbolAllocator().newSymbol(functionName, function.getIntermediateType());
+            Signature signature = originalAggregation.getSignature();
+            InternalAggregationFunction function = metadata.getAggregateFunctionImplementation(signature);
+            Symbol intermediateSymbol = context.getSymbolAllocator().newSymbol(signature.getName(), function.getIntermediateType());
 
             checkState(!originalAggregation.getOrderingScheme().isPresent(), "Aggregate with ORDER BY does not support partial aggregation");
             intermediateAggregation.put(
                     intermediateSymbol,
                     new AggregationNode.Aggregation(
-                            new CallExpression(
-                                    functionName,
-                                    functionHandle,
-                                    function.getIntermediateType(),
-                                    originalAggregation.getArguments(),
-                                    Optional.empty()),
+                            signature,
                             originalAggregation.getArguments(),
                             originalAggregation.isDistinct(),
                             originalAggregation.getFilter(),
@@ -239,18 +232,7 @@ public class PushPartialAggregationThroughExchange
             finalAggregation.put(
                     entry.getKey(),
                     new AggregationNode.Aggregation(
-                            new CallExpression(
-                                    functionName,
-                                    functionHandle,
-                                    function.getFinalType(),
-                                    ImmutableList.<RowExpression>builder()
-                                            .add(new VariableReferenceExpression(intermediateSymbol.getName(), function.getIntermediateType()))
-                                            .addAll(originalAggregation.getArguments()
-                                                    .stream()
-                                                    .filter(PushPartialAggregationThroughExchange::isLambda)
-                                                    .collect(toImmutableList()))
-                                            .build(),
-                                    Optional.empty()),
+                            signature,
                             ImmutableList.<RowExpression>builder()
                                     .add(new VariableReferenceExpression(intermediateSymbol.getName(), function.getIntermediateType()))
                                     .addAll(originalAggregation.getArguments().stream()
@@ -273,9 +255,7 @@ public class PushPartialAggregationThroughExchange
                 ImmutableList.of(),
                 PARTIAL,
                 node.getHashSymbol(),
-                node.getGroupIdSymbol(),
-                node.getAggregationType(),
-                node.getFinalizeSymbol());
+                node.getGroupIdSymbol());
 
         return new AggregationNode(
                 node.getId(),
@@ -287,9 +267,7 @@ public class PushPartialAggregationThroughExchange
                 ImmutableList.of(),
                 FINAL,
                 node.getHashSymbol(),
-                node.getGroupIdSymbol(),
-                node.getAggregationType(),
-                node.getFinalizeSymbol());
+                node.getGroupIdSymbol());
     }
 
     private static boolean isLambda(RowExpression rowExpression)

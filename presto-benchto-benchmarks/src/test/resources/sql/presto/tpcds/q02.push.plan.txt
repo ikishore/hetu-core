@@ -3,10 +3,10 @@ remote exchange (GATHER, SINGLE, [])
         remote exchange (REPARTITION, ROUND_ROBIN, [])
             join (INNER, PARTITIONED):
                 join (INNER, PARTITIONED):
-                    final hashaggregation over (d_week_seq)
+                    final aggregation over (d_week_seq)
                         local exchange (GATHER, SINGLE, [])
                             remote exchange (REPARTITION, HASH, ["d_week_seq"])
-                                partial hashaggregation over (d_week_seq)
+                                partial aggregation over (d_week_seq)
                                     join (INNER, PARTITIONED):
                                         remote exchange (REPARTITION, HASH, ["d_date_sk"])
                                             scan date_dim
@@ -16,23 +16,23 @@ remote exchange (GATHER, SINGLE, [])
                                             remote exchange (REPARTITION, HASH, ["cs_sold_date_sk"])
                                                 scan catalog_sales
                     local exchange (GATHER, SINGLE, [])
-                        remote exchange (REPARTITION, HASH, ["d_week_seq_57"])
+                        remote exchange (REPARTITION, HASH, ["d_week_seq_85"])
                             scan date_dim (pushdown = true)
                 local exchange (GATHER, SINGLE, [])
-                    remote exchange (REPARTITION, HASH, ["subtract"])
+                    remote exchange (REPARTITION, HASH, ["expr_402"])
                         join (INNER, PARTITIONED):
-                            final hashaggregation over (d_week_seq_181)
+                            final aggregation over (d_week_seq_237)
                                 local exchange (GATHER, SINGLE, [])
-                                    remote exchange (REPARTITION, HASH, ["d_week_seq_181"])
-                                        partial hashaggregation over (d_week_seq_181)
+                                    remote exchange (REPARTITION, HASH, ["d_week_seq_237"])
+                                        partial aggregation over (d_week_seq_237)
                                             join (INNER, PARTITIONED):
-                                                remote exchange (REPARTITION, HASH, ["d_date_sk_177"])
+                                                remote exchange (REPARTITION, HASH, ["d_date_sk_233"])
                                                     scan date_dim
                                                 local exchange (GATHER, SINGLE, [])
-                                                    remote exchange (REPARTITION, HASH, ["ws_sold_date_sk_91"])
+                                                    remote exchange (REPARTITION, HASH, ["ws_sold_date_sk_135"])
                                                         scan web_sales
-                                                    remote exchange (REPARTITION, HASH, ["cs_sold_date_sk_132"])
+                                                    remote exchange (REPARTITION, HASH, ["cs_sold_date_sk_182"])
                                                         scan catalog_sales
                             local exchange (GATHER, SINGLE, [])
-                                remote exchange (REPARTITION, HASH, ["d_week_seq_250"])
+                                remote exchange (REPARTITION, HASH, ["d_week_seq_322"])
                                     scan date_dim (pushdown = true)

@@ -57,11 +57,12 @@ import static java.util.concurrent.TimeUnit.MINUTES;
         "hive.optimized-reader.enabled",
         "hive.orc.optimized-writer.enabled",
         "hive.rcfile-optimized-writer.enabled",
-        "hive.time-zone",
 })
 public class HiveConfig
 {
     private static final Splitter SPLITTER = Splitter.on(',').trimResults().omitEmptyStrings();
+
+    private String timeZone = TimeZone.getDefault().getID();
 
     private DataSize maxSplitSize = new DataSize(64, MEGABYTE);
     private int maxPartitionsPerScan = 100_000;
@@ -85,10 +86,6 @@ public class HiveConfig
 
     private Duration metastoreCacheTtl = new Duration(0, TimeUnit.SECONDS);
     private Duration metastoreRefreshInterval = new Duration(1, TimeUnit.SECONDS);
-
-    private Duration metastoreDBCacheTtl = new Duration(0, TimeUnit.SECONDS);
-    private Duration metastoreDBRefreshInterval = new Duration(1, TimeUnit.SECONDS);
-
     private long metastoreCacheMaximumSize = 10000;
     private long perTransactionMetastoreCacheMaximumSize = 1000;
     private int maxMetastoreRefreshThreads = 100;
@@ -118,9 +115,6 @@ public class HiveConfig
 
     private DataSize textMaxLineLength = new DataSize(100, MEGABYTE);
 
-    private String orcLegacyTimeZone = TimeZone.getDefault().getID();
-
-    private String parquetTimeZone = TimeZone.getDefault().getID();
     private boolean useParquetColumnNames;
     private boolean failOnCorruptedParquetStatistics = true;
     private DataSize parquetMaxReadBlockSize = new DataSize(16, MEGABYTE);
@@ -156,7 +150,6 @@ public class HiveConfig
     private Duration orcRowDataCacheTtl = new Duration(4, HOURS);
     private DataSize orcRowDataCacheMaximumWeight = new DataSize(20, GIGABYTE);
 
-    private String rcfileTimeZone = TimeZone.getDefault().getID();
     private boolean rcfileWriterValidate;
 
     private HiveMetastoreAuthenticationType hiveMetastoreAuthenticationType = HiveMetastoreAuthenticationType.NONE;
@@ -208,7 +201,6 @@ public class HiveConfig
     private double vacuumDeltaPercentThreshold = 0.1;
     private boolean autoVacuumEnabled;
     private boolean orcPredicatePushdownEnabled;
-    private int hmsWriteBatchSize = 8;
 
     public int getMaxInitialSplits()
     {
@@ -341,6 +333,24 @@ public class HiveConfig
         return recursiveDirWalkerEnabled;
     }
 
+    public DateTimeZone getDateTimeZone()
+    {
+        return DateTimeZone.forTimeZone(TimeZone.getTimeZone(timeZone));
+    }
+
+    @NotNull
+    public String getTimeZone()
+    {
+        return timeZone;
+    }
+
+    @Config("hive.time-zone")
+    public HiveConfig setTimeZone(String id)
+    {
+        this.timeZone = (id != null) ? id : TimeZone.getDefault().getID();
+        return this;
+    }
+
     @NotNull
     public DataSize getMaxSplitSize()
     {
@@ -450,32 +460,6 @@ public class HiveConfig
         return this;
     }
 
-    @NotNull
-    public @MinDuration("0ms") Duration getMetastoreDBCacheTtl()
-    {
-        return metastoreDBCacheTtl;
-    }
-
-    @Config("hive.metastore-db-cache-ttl")
-    public HiveConfig setMetastoreDBCacheTtl(Duration metastoreCacheTtl)
-    {
-        this.metastoreDBCacheTtl = metastoreCacheTtl;
-        return this;
-    }
-
-    @NotNull
-    public @MinDuration("1ms") Duration getMetastoreDBRefreshInterval()
-    {
-        return metastoreDBRefreshInterval;
-    }
-
-    @Config("hive.metastore-db-refresh-interval")
-    public HiveConfig setMetastoreDBRefreshInterval(Duration metastoreDBRefreshInterval)
-    {
-        this.metastoreDBRefreshInterval = metastoreDBRefreshInterval;
-        return this;
-    }
-
     @Min(1)
     public long getMetastoreCacheMaximumSize()
     {
@@ -502,7 +486,7 @@ public class HiveConfig
         return this;
     }
 
-    @Min(10)
+    @Min(1)
     public int getMaxMetastoreRefreshThreads()
     {
         return maxMetastoreRefreshThreads;
@@ -962,25 +946,6 @@ public class HiveConfig
         return this;
     }
 
-    public DateTimeZone getRcfileDateTimeZone()
-    {
-        return DateTimeZone.forTimeZone(TimeZone.getTimeZone(rcfileTimeZone));
-    }
-
-    @NotNull
-    public String getRcfileTimeZone()
-    {
-        return rcfileTimeZone;
-    }
-
-    @Config("hive.rcfile.time-zone")
-    @ConfigDescription("Time zone for RCFile binary read and write")
-    public HiveConfig setRcfileTimeZone(String rcfileTimeZone)
-    {
-        this.rcfileTimeZone = rcfileTimeZone;
-        return this;
-    }
-
     public boolean isRcfileWriterValidate()
     {
         return rcfileWriterValidate;
@@ -1019,44 +984,6 @@ public class HiveConfig
     public HiveConfig setTextMaxLineLength(DataSize textMaxLineLength)
     {
         this.textMaxLineLength = textMaxLineLength;
-        return this;
-    }
-
-    public DateTimeZone getOrcLegacyDateTimeZone()
-    {
-        return DateTimeZone.forTimeZone(TimeZone.getTimeZone(orcLegacyTimeZone));
-    }
-
-    @NotNull
-    public String getOrcLegacyTimeZone()
-    {
-        return orcLegacyTimeZone;
-    }
-
-    @Config("hive.orc.time-zone")
-    @ConfigDescription("Time zone for legacy ORC files that do not contain a time zone")
-    public HiveConfig setOrcLegacyTimeZone(String orcLegacyTimeZone)
-    {
-        this.orcLegacyTimeZone = orcLegacyTimeZone;
-        return this;
-    }
-
-    public DateTimeZone getParquetDateTimeZone()
-    {
-        return DateTimeZone.forTimeZone(TimeZone.getTimeZone(parquetTimeZone));
-    }
-
-    @NotNull
-    public String getParquetTimeZone()
-    {
-        return parquetTimeZone;
-    }
-
-    @Config("hive.parquet.time-zone")
-    @ConfigDescription("Time zone for Parquet read and write")
-    public HiveConfig setParquetTimeZone(String parquetTimeZone)
-    {
-        this.parquetTimeZone = parquetTimeZone;
         return this;
     }
 
@@ -1144,19 +1071,6 @@ public class HiveConfig
     public HiveConfig setFileStatusCacheExpireAfterWrite(Duration fileStatusCacheExpireAfterWrite)
     {
         this.fileStatusCacheExpireAfterWrite = fileStatusCacheExpireAfterWrite;
-        return this;
-    }
-
-    public int getMetastoreWriteBatchSize()
-    {
-        return hmsWriteBatchSize;
-    }
-
-    @Config("hive.metastore-write-batch-size")
-    @ConfigDescription("Batch size for writing to hms")
-    public HiveConfig setMetastoreWriteBatchSize(int hmsWriteBatchSize)
-    {
-        this.hmsWriteBatchSize = hmsWriteBatchSize;
         return this;
     }
 

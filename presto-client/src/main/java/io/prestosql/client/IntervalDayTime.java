@@ -51,44 +51,42 @@ public final class IntervalDayTime
 
     public static String formatMillis(long millis)
     {
-        long ms = millis;
-        if (ms == Long.MIN_VALUE) {
+        if (millis == Long.MIN_VALUE) {
             return LONG_MIN_VALUE;
         }
         String sign = "";
-        if (ms < 0) {
+        if (millis < 0) {
             sign = "-";
-            ms = -ms;
+            millis = -millis;
         }
 
-        long day = ms / MILLIS_IN_DAY;
-        ms %= MILLIS_IN_DAY;
-        long hour = ms / MILLIS_IN_HOUR;
-        ms %= MILLIS_IN_HOUR;
-        long minute = ms / MILLIS_IN_MINUTE;
-        ms %= MILLIS_IN_MINUTE;
-        long second = ms / MILLIS_IN_SECOND;
-        ms %= MILLIS_IN_SECOND;
+        long day = millis / MILLIS_IN_DAY;
+        millis %= MILLIS_IN_DAY;
+        long hour = millis / MILLIS_IN_HOUR;
+        millis %= MILLIS_IN_HOUR;
+        long minute = millis / MILLIS_IN_MINUTE;
+        millis %= MILLIS_IN_MINUTE;
+        long second = millis / MILLIS_IN_SECOND;
+        millis %= MILLIS_IN_SECOND;
 
-        return format("%s%d %02d:%02d:%02d.%03d", sign, day, hour, minute, second, ms);
+        return format("%s%d %02d:%02d:%02d.%03d", sign, day, hour, minute, second, millis);
     }
 
     public static long parseMillis(String value)
     {
-        String val = value;
-        if (val.equals(LONG_MIN_VALUE)) {
+        if (value.equals(LONG_MIN_VALUE)) {
             return Long.MIN_VALUE;
         }
 
         long signum = 1;
-        if (val.startsWith("-")) {
+        if (value.startsWith("-")) {
             signum = -1;
-            val = val.substring(1);
+            value = value.substring(1);
         }
 
-        Matcher matcher = FORMAT.matcher(val);
+        Matcher matcher = FORMAT.matcher(value);
         if (!matcher.matches()) {
-            throw new IllegalArgumentException("Invalid day-time interval: " + val);
+            throw new IllegalArgumentException("Invalid day-time interval: " + value);
         }
 
         long days = parseLong(matcher.group(1));

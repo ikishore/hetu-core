@@ -40,6 +40,7 @@ public interface OperatorInfo
      */
     default boolean isFinal()
     {
-        return false;
+        return true;
+        //return false;
     }
 }

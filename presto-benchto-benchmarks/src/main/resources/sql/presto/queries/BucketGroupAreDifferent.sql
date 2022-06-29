@@ -1,2 +1,0 @@
-select avg(${database}.${schema}.store_sales_item_customer_solddate_buckArr1_buckCount4.ss_item_sk),${database}.${schema}.store_sales_item_customer_solddate_buckArr1_buckCount4.ss_customer_sk from ${database}.${schema}.store_sales_item_customer_solddate_buckArr1_buckCount4
-group by ${database}.${schema}.store_sales_item_customer_solddate_buckArr1_buckCount4.ss_item_sk, ${database}.${schema}.store_sales_item_customer_solddate_buckArr1_buckCount4.ss_customer_sk

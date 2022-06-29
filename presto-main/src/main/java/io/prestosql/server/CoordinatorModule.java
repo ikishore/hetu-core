@@ -23,9 +23,9 @@ import com.google.inject.util.Modules;
 import io.airlift.concurrent.BoundedExecutor;
 import io.airlift.configuration.AbstractConfigurationAwareModule;
 import io.airlift.discovery.server.EmbeddedDiscoveryModule;
+import io.airlift.units.Duration;
 import io.prestosql.catalog.CatalogModule;
 import io.prestosql.catalog.DynamicCatalogConfig;
-import io.prestosql.catalog.showcatalog.ShowCatalogModule;
 import io.prestosql.client.QueryResults;
 import io.prestosql.cost.CostCalculator;
 import io.prestosql.cost.CostCalculator.EstimatedExchanges;
@@ -101,7 +101,6 @@ import io.prestosql.execution.scheduler.AllAtOnceExecutionPolicy;
 import io.prestosql.execution.scheduler.ExecutionPolicy;
 import io.prestosql.execution.scheduler.PhasedExecutionPolicy;
 import io.prestosql.execution.scheduler.SplitSchedulerStats;
-import io.prestosql.failuredetector.CoordinatorGossipFailureDetectorModule;
 import io.prestosql.failuredetector.FailureDetectorModule;
 import io.prestosql.memory.ClusterMemoryManager;
 import io.prestosql.memory.ForMemoryManager;
@@ -114,7 +113,6 @@ import io.prestosql.memory.TotalReservationOnBlockedNodesLowMemoryKiller;
 import io.prestosql.metadata.CatalogManager;
 import io.prestosql.operator.ForScheduler;
 import io.prestosql.queryeditorui.QueryEditorUIModule;
-import io.prestosql.queryhistory.QueryHistoryModule;
 import io.prestosql.server.remotetask.RemoteTaskStats;
 import io.prestosql.spi.memory.ClusterMemoryPoolManager;
 import io.prestosql.spi.resourcegroups.QueryType;
@@ -193,28 +191,15 @@ import static io.prestosql.util.StatementUtils.getAllQueryTypes;
 import static java.util.concurrent.Executors.newCachedThreadPool;
 import static java.util.concurrent.Executors.newScheduledThreadPool;
 import static java.util.concurrent.Executors.newSingleThreadScheduledExecutor;
+import static java.util.concurrent.TimeUnit.SECONDS;
 import static org.weakref.jmx.guice.ExportBinder.newExporter;
 
 public class CoordinatorModule
         extends AbstractConfigurationAwareModule
 {
-    private boolean gossip;
-
-    public CoordinatorModule(boolean gossip)
-    {
-        this.gossip = gossip;
-    }
-
-    public CoordinatorModule()
-    {
-        this(false);
-    }
-
     @Override
     protected void setup(Binder binder)
     {
-        ServerConfig serverConfig = buildConfigObject(ServerConfig.class);
-
         httpServerBinder(binder).bindResource("/ui", "webapp").withWelcomeFile("queryeditor.html");
         httpServerBinder(binder).bindResource("/tableau", "webapp/tableau");
 
@@ -242,26 +227,13 @@ public class CoordinatorModule
         // catalog resource
         install(installModuleIf(DynamicCatalogConfig.class, DynamicCatalogConfig::isDynamicCatalogEnabled, new CatalogModule()));
 
-        //showcatalog resourece
-        install(new ShowCatalogModule());
-
-        //QueryHistory Module
-        binder.install(new QueryHistoryModule());
-
         // resource for serving static content
         jaxrsBinder(binder).bind(WebUiResource.class);
 
         // failure detector
-        if (gossip) {
-            binder.install(new CoordinatorGossipFailureDetectorModule());
-            jaxrsBinder(binder).bind(GossipNodeResource.class);
-            jaxrsBinder(binder).bind(WorkerResource.class);
-        }
-        else {
-            binder.install(new FailureDetectorModule());
-            jaxrsBinder(binder).bind(NodeResource.class);
-            jaxrsBinder(binder).bind(WorkerResource.class);
-        }
+        binder.install(new FailureDetectorModule());
+        jaxrsBinder(binder).bind(NodeResource.class);
+        jaxrsBinder(binder).bind(WorkerResource.class);
         httpClientBinder(binder).bindHttpClient("workerInfo", ForWorkerInfo.class);
 
         // query monitor
@@ -301,8 +273,8 @@ public class CoordinatorModule
         httpClientBinder(binder).bindHttpClient("memoryManager", ForMemoryManager.class)
                 .withTracing()
                 .withConfigDefaults(config -> {
-                    config.setIdleTimeout(serverConfig.getHttpClientIdleTimeout());
-                    config.setRequestTimeout(serverConfig.getHttpClientRequestTimeout());
+                    config.setIdleTimeout(new Duration(30, SECONDS));
+                    config.setRequestTimeout(new Duration(10, SECONDS));
                 });
         bindLowMemoryKiller(LowMemoryKillerPolicy.NONE, NoneLowMemoryKiller.class);
         bindLowMemoryKiller(LowMemoryKillerPolicy.TOTAL_RESERVATION, TotalReservationLowMemoryKiller.class);
@@ -350,8 +322,8 @@ public class CoordinatorModule
                 .withTracing()
                 .withFilter(GenerateTraceTokenRequestFilter.class)
                 .withConfigDefaults(config -> {
-                    config.setIdleTimeout(serverConfig.getHttpClientIdleTimeout());
-                    config.setRequestTimeout(serverConfig.getHttpClientRequestTimeout());
+                    config.setIdleTimeout(new Duration(30, SECONDS));
+                    config.setRequestTimeout(new Duration(10, SECONDS));
                     config.setMaxConnectionsPerServer(250);
                 });
 

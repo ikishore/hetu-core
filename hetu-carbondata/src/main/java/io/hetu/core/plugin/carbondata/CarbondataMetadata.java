@@ -92,28 +92,15 @@ import org.apache.carbondata.common.logging.LogServiceFactory;
 import org.apache.carbondata.core.constants.CarbonCommonConstants;
 import org.apache.carbondata.core.datastore.filesystem.CarbonFile;
 import org.apache.carbondata.core.datastore.impl.FileFactory;
-import org.apache.carbondata.core.features.TableOperation;
-import org.apache.carbondata.core.fileoperations.FileWriteOperation;
 import org.apache.carbondata.core.index.Segment;
 import org.apache.carbondata.core.locks.CarbonLockFactory;
 import org.apache.carbondata.core.locks.CarbonLockUtil;
 import org.apache.carbondata.core.locks.ICarbonLock;
 import org.apache.carbondata.core.locks.LockUsage;
 import org.apache.carbondata.core.metadata.AbsoluteTableIdentifier;
-import org.apache.carbondata.core.metadata.CarbonMetadata;
 import org.apache.carbondata.core.metadata.CarbonTableIdentifier;
 import org.apache.carbondata.core.metadata.SegmentFileStore;
-import org.apache.carbondata.core.metadata.converter.SchemaConverter;
-import org.apache.carbondata.core.metadata.converter.ThriftWrapperSchemaConverterImpl;
-import org.apache.carbondata.core.metadata.datatype.DataTypes;
-import org.apache.carbondata.core.metadata.datatype.StructField;
-import org.apache.carbondata.core.metadata.schema.PartitionInfo;
-import org.apache.carbondata.core.metadata.schema.SchemaEvolutionEntry;
 import org.apache.carbondata.core.metadata.schema.table.CarbonTable;
-import org.apache.carbondata.core.metadata.schema.table.TableInfo;
-import org.apache.carbondata.core.metadata.schema.table.TableSchema;
-import org.apache.carbondata.core.metadata.schema.table.TableSchemaBuilder;
-import org.apache.carbondata.core.metadata.schema.table.column.ColumnSchema;
 import org.apache.carbondata.core.mutate.CarbonUpdateUtil;
 import org.apache.carbondata.core.mutate.SegmentUpdateDetails;
 import org.apache.carbondata.core.mutate.data.BlockMappingVO;
@@ -126,7 +113,6 @@ import org.apache.carbondata.core.util.CarbonUtil;
 import org.apache.carbondata.core.util.ObjectSerializationUtil;
 import org.apache.carbondata.core.util.ThreadLocalSessionInfo;
 import org.apache.carbondata.core.util.path.CarbonTablePath;
-import org.apache.carbondata.core.writer.ThriftWriter;
 import org.apache.carbondata.hadoop.api.CarbonOutputCommitter;
 import org.apache.carbondata.hadoop.api.CarbonTableInputFormat;
 import org.apache.carbondata.hadoop.api.CarbonTableOutputFormat;
@@ -156,21 +142,19 @@ import org.apache.hadoop.mapreduce.TaskType;
 import org.apache.hadoop.mapreduce.task.JobContextImpl;
 import org.apache.hadoop.mapreduce.task.TaskAttemptContextImpl;
 import org.apache.log4j.Logger;
+import org.joda.time.DateTimeZone;
 
 import java.io.File;
 import java.io.IOException;
 import java.text.SimpleDateFormat;
 import java.util.ArrayList;
-import java.util.Arrays;
 import java.util.Collection;
-import java.util.Comparator;
 import java.util.Date;
 import java.util.HashMap;
 import java.util.HashSet;
 import java.util.List;
 import java.util.Locale;
 import java.util.Map;
-import java.util.NoSuchElementException;
 import java.util.Optional;
 import java.util.Properties;
 import java.util.Set;
@@ -237,10 +221,6 @@ public class CarbondataMetadata
     private List<SegmentUpdateDetails> blockUpdateDetailsList;
     private State currentState = State.OTHER;
     private CarbonLoadModel carbonLoadModel;
-    private AbsoluteTableIdentifier absoluteTableIdentifier;
-    private TableInfo tableInfo;
-    private SchemaTableName schemaTableName;
-
     private String user;
     private Optional<String> tableStorageLocation;
     private String carbondataTableStore;
@@ -265,14 +245,11 @@ public class CarbondataMetadata
         CREATE_TABLE_AS,
         DROP_TABLE,
         OTHER,
-        ADD_COLUMN,
-        DROP_COLUMN,
-        RENAME_COLUMN
     }
 
     public CarbondataMetadata(SemiTransactionalHiveMetastore metastore,
-            HdfsEnvironment hdfsEnvironment, HivePartitionManager partitionManager,
-            boolean writesToNonManagedTablesEnabled,
+            HdfsEnvironment hdfsEnvironment, HivePartitionManager partitionManager, DateTimeZone timeZone,
+            boolean allowCorruptWritesForTesting, boolean writesToNonManagedTablesEnabled,
             boolean createsOfNonManagedTablesEnabled, boolean tableCreatesWithLocationAllowed,
             TypeManager typeManager, LocationService locationService,
             JsonCodec<PartitionUpdate> partitionUpdateCodec,
@@ -282,7 +259,7 @@ public class CarbondataMetadata
             CarbondataTableReader carbondataTableReader, String carbondataTableStore, long carbondataMajorVacuumSegSize, long carbondataMinorVacuumSegCount,
             ScheduledExecutorService executorService, ScheduledExecutorService hiveMetastoreClientService)
     {
-        super(metastore, hdfsEnvironment, partitionManager,
+        super(metastore, hdfsEnvironment, partitionManager, timeZone, allowCorruptWritesForTesting,
                 writesToNonManagedTablesEnabled, createsOfNonManagedTablesEnabled, tableCreatesWithLocationAllowed,
                 typeManager, locationService, partitionUpdateCodec, typeTranslator, hetuVersion,
                 hiveStatisticsProvider, accessControlMetadata, false, 2, 0.0, executorService,
@@ -306,13 +283,13 @@ public class CarbondataMetadata
 
     private void setupCommitWriter(Properties hiveSchema, Path outputPath, Configuration initialConfiguration, boolean isOverwrite) throws PrestoException
     {
-        CarbonLoadModel finalCarbonLoadModel;
+        CarbonLoadModel carbonLoadModel;
         TaskAttemptID taskAttemptID = TaskAttemptID.forName(initialConfiguration.get("mapred.task.id"));
         try {
             ThreadLocalSessionInfo.setConfigurationToCurrentThread(initialConfiguration);
-            finalCarbonLoadModel = HiveCarbonUtil.getCarbonLoadModel(hiveSchema, initialConfiguration);
-            finalCarbonLoadModel.setBadRecordsAction(TableOptionConstant.BAD_RECORDS_ACTION.getName() + ",force");
-            CarbonTableOutputFormat.setLoadModel(initialConfiguration, finalCarbonLoadModel);
+            carbonLoadModel = HiveCarbonUtil.getCarbonLoadModel(hiveSchema, initialConfiguration);
+            carbonLoadModel.setBadRecordsAction(TableOptionConstant.BAD_RECORDS_ACTION.getName() + ",force");
+            CarbonTableOutputFormat.setLoadModel(initialConfiguration, carbonLoadModel);
         }
         catch (IOException ex) {
             LOG.error("Error while creating carbon load model", ex);
@@ -360,13 +337,13 @@ public class CarbondataMetadata
         this.user = session.getUser();
         return hdfsEnvironment.doAs(user, () -> {
             SchemaTableName tableName = parent.getSchemaTableName();
-            Optional<Table> finalTable =
+            Optional<Table> table =
                     metastore.getTable(new HiveIdentity(session), tableName.getSchemaName(), tableName.getTableName());
-            if (finalTable.isPresent() && finalTable.get().getPartitionColumns().size() > 0) {
+            if (table.isPresent() && table.get().getPartitionColumns().size() > 0) {
                 throw new PrestoException(NOT_SUPPORTED, "Operations on Partitioned CarbonTables is not supported");
             }
 
-            this.table = finalTable;
+            this.table = table;
             Path outputPath =
                     new Path(parent.getLocationHandle().getJsonSerializableTargetPath());
             initialConfiguration = ConfigurationUtils.toJobConf(this.hdfsEnvironment
@@ -382,7 +359,7 @@ public class CarbondataMetadata
             }
 
             /* Create committer object */
-            setupCommitWriter(finalTable, outputPath, initialConfiguration, isOverwrite);
+            setupCommitWriter(table, outputPath, initialConfiguration, isOverwrite);
 
             return new CarbondataInsertTableHandle(parent.getSchemaName(),
                     parent.getTableName(),
@@ -411,18 +388,18 @@ public class CarbondataMetadata
     }
 
     @Override
-    public CarbondataUpdateTableHandle beginUpdateAsInsert(ConnectorSession session, ConnectorTableHandle tableHandle)
+    public CarbondataUpdateTableHandle beginUpdate(ConnectorSession session, ConnectorTableHandle tableHandle)
     {
         currentState = State.UPDATE;
         HiveInsertTableHandle parent = super.beginInsert(session, tableHandle);
         SchemaTableName tableName = parent.getSchemaTableName();
-        Optional<Table> finalTable =
+        Optional<Table> table =
                 this.metastore.getTable(new HiveIdentity(session), tableName.getSchemaName(), tableName.getTableName());
-        if (finalTable.isPresent() && finalTable.get().getPartitionColumns().size() > 0) {
+        if (table.isPresent() && table.get().getPartitionColumns().size() > 0) {
             throw new PrestoException(NOT_SUPPORTED, "Operations on Partitioned CarbonTables is not supported");
         }
 
-        this.table = finalTable;
+        this.table = table;
         this.user = session.getUser();
         hdfsEnvironment.doAs(user, () -> {
             initialConfiguration = ConfigurationUtils.toJobConf(this.hdfsEnvironment
@@ -430,8 +407,8 @@ public class CarbondataMetadata
                             new HdfsEnvironment.HdfsContext(session, parent.getSchemaName(),
                                     parent.getTableName()),
                             new Path(parent.getLocationHandle().getJsonSerializableWritePath())));
-            Properties schema = MetastoreUtil.getHiveSchema(finalTable.get());
-            schema.setProperty("tablePath", finalTable.get().getStorage().getLocation());
+            Properties schema = MetastoreUtil.getHiveSchema(table.get());
+            schema.setProperty("tablePath", table.get().getStorage().getLocation());
             carbonTable = getCarbonTable(parent.getSchemaName(),
                     parent.getTableName(),
                     schema,
@@ -470,13 +447,13 @@ public class CarbondataMetadata
         HiveInsertTableHandle parent = super.beginInsert(session, tableHandle);
         List<HiveColumnHandle> inputColumns = parent.getInputColumns().stream().filter(HiveColumnHandle::isRequired).collect(toList());
         SchemaTableName tableName = parent.getSchemaTableName();
-        Optional<Table> finalTable =
+        Optional<Table> table =
                 this.metastore.getTable(new HiveIdentity(session), tableName.getSchemaName(), tableName.getTableName());
-        if (finalTable.isPresent() && finalTable.get().getPartitionColumns().size() > 0) {
+        if (table.isPresent() && table.get().getPartitionColumns().size() > 0) {
             throw new PrestoException(NOT_SUPPORTED, "Operations on Partitioned CarbonTables is not supported");
         }
 
-        this.table = finalTable;
+        this.table = table;
         this.user = session.getUser();
         hdfsEnvironment.doAs(user, () -> {
             initialConfiguration = ConfigurationUtils.toJobConf(this.hdfsEnvironment
@@ -484,8 +461,8 @@ public class CarbondataMetadata
                             new HdfsEnvironment.HdfsContext(session, parent.getSchemaName(),
                                     parent.getTableName()),
                             new Path(parent.getLocationHandle().getJsonSerializableWritePath())));
-            Properties schema = MetastoreUtil.getHiveSchema(finalTable.get());
-            schema.setProperty("tablePath", finalTable.get().getStorage().getLocation());
+            Properties schema = MetastoreUtil.getHiveSchema(table.get());
+            schema.setProperty("tablePath", table.get().getStorage().getLocation());
             carbonTable = getCarbonTable(parent.getSchemaName(),
                     parent.getTableName(),
                     schema,
@@ -539,10 +516,10 @@ public class CarbondataMetadata
     }
 
     @Override
-    public Optional<ConnectorOutputMetadata> finishUpdateAsInsert(ConnectorSession session,
-                                                                  ConnectorUpdateTableHandle updateHandle,
-                                                                  Collection<Slice> fragments,
-                                                                  Collection<ComputedStatistics> computedStatistics)
+    public Optional<ConnectorOutputMetadata> finishUpdate(ConnectorSession session,
+                                                          ConnectorUpdateTableHandle updateHandle,
+                                                          Collection<Slice> fragments,
+                                                          Collection<ComputedStatistics> computedStatistics)
     {
         HiveUpdateTableHandle updateTableHandle = (HiveUpdateTableHandle) updateHandle;
         HiveInsertTableHandle insertTableHandle = new HiveInsertTableHandle(
@@ -643,7 +620,7 @@ public class CarbondataMetadata
 
         return hdfsEnvironment.doAs(session.getUser(), () -> {
             Properties hiveSchema = MetastoreUtil.getHiveSchema(this.table.get());
-            CarbonTable finalCarbonTable = getCarbonTable(carbondataVacuumTableHandle.getSchemaName(),
+            CarbonTable carbonTable = getCarbonTable(carbondataVacuumTableHandle.getSchemaName(),
                     carbondataVacuumTableHandle.getTableName(),
                     hiveSchema,
                     initialConfiguration);
@@ -705,7 +682,7 @@ public class CarbondataMetadata
                     SegmentFileStore.mergeSegmentFiles(readPath, segmentFileName, CarbonTablePath.getSegmentFilesLocation(carbonLoadModel.getTablePath()));
                     String source;
                     for (String currPartitionName : partitionNames) {
-                        source = finalCarbonTable.getTablePath() + "/" + currPartitionName;
+                        source = carbonTable.getTablePath() + "/" + currPartitionName;
                         moveFromTempFolder(source + "/" + carbonLoadModel.getSegmentId() + "_" + timeStamp + ".tmp", source);
                     }
                     segmentFilesToBeUpdatedLatest.add(new Segment(carbonLoadModel.getSegmentId(), segmentFileName));
@@ -719,7 +696,7 @@ public class CarbondataMetadata
                 for (CarbondataSegmentInfoUtil segmentInfo : newMergedSegmentInfoUtilList) {
                     String mergedLoadNumber = segmentInfo.getDestinationSegment();
                     try {
-                        String segmentFileName = SegmentFileStore.writeSegmentFile(finalCarbonTable, mergedLoadNumber, String.valueOf(carbonLoadModel.getFactTimeStamp()));
+                        String segmentFileName = SegmentFileStore.writeSegmentFile(carbonTable, mergedLoadNumber, String.valueOf(carbonLoadModel.getFactTimeStamp()));
                     }
                     catch (IOException e) {
                         throw new PrestoException(GENERIC_INTERNAL_ERROR, "Failed while merging segment files", e);
@@ -759,21 +736,13 @@ public class CarbondataMetadata
     }
 
     @Override
-    public ColumnHandle getDeleteRowIdColumnHandle(ConnectorSession session, ConnectorTableHandle tableHandle)
+    public ColumnHandle getUpdateRowIdColumnHandle(ConnectorSession session, ConnectorTableHandle tableHandle)
     {
         // Hive connector only supports metadata delete. It does not support generic row-by-row deletion.
         // Metadata delete is implemented in Hetu by generating a plan for row-by-row delete first,
         // and then optimize it into metadata delete. As a result, Hive connector must provide partial
         // plan-time support for row-by-row delete so that planning doesn't fail. This is why we need
         // rowid handle. Note that in Hive connector, rowid handle is not implemented beyond plan-time.
-        return new HiveColumnHandle(CarbonCommonConstants.CARBON_IMPLICIT_COLUMN_TUPLEID,
-                HIVE_STRING, HIVE_STRING.getTypeSignature(), -13, SYNTHESIZED,
-                Optional.empty());
-    }
-
-    @Override
-    public ColumnHandle getUpdateRowIdColumnHandle(ConnectorSession session, ConnectorTableHandle tableHandle, List<ColumnHandle> updatedColumns)
-    {
         return new HiveColumnHandle(CarbonCommonConstants.CARBON_IMPLICIT_COLUMN_TUPLEID,
                 HIVE_STRING, HIVE_STRING.getTypeSignature(), -13, SYNTHESIZED,
                 Optional.empty());
@@ -875,14 +844,6 @@ public class CarbondataMetadata
                 case DROP_TABLE: {
                     break;
                 }
-                case ADD_COLUMN:
-                case DROP_COLUMN:
-                case RENAME_COLUMN: {
-                    hdfsEnvironment.doAs(user, () -> {
-                        revertAlterTableChanges();
-                    });
-                    break;
-                }
                 default: {
                     return;
                 }
@@ -900,9 +861,9 @@ public class CarbondataMetadata
     private LocationHandle getCarbonDataTableCreationPath(ConnectorSession session, ConnectorTableMetadata tableMetadata, HiveWriteUtils.OpertionType opertionType) throws PrestoException
     {
         Path targetPath = null;
-        SchemaTableName finalSchemaTableName = tableMetadata.getTable();
-        String finalSchemaName = finalSchemaTableName.getSchemaName();
-        String tableName = finalSchemaTableName.getTableName();
+        SchemaTableName schemaTableName = tableMetadata.getTable();
+        String schemaName = schemaTableName.getSchemaName();
+        String tableName = schemaTableName.getTableName();
         Optional<String> location = getCarbondataLocation(tableMetadata.getProperties());
         LocationHandle locationHandle;
         FileSystem fileSystem;
@@ -914,32 +875,32 @@ public class CarbondataMetadata
                     throw new PrestoException(NOT_SUPPORTED, format("Setting %s property is not allowed", LOCATION_PROPERTY));
                 }
                 /* if path not having prefix with filesystem type, than we will take fileSystem type from core-site.xml using below methods */
-                fileSystem = hdfsEnvironment.getFileSystem(new HdfsEnvironment.HdfsContext(session, finalSchemaName), new Path(location.get()));
+                fileSystem = hdfsEnvironment.getFileSystem(new HdfsEnvironment.HdfsContext(session, schemaName), new Path(location.get()));
                 targetLocation = fileSystem.getFileStatus(new Path(location.get())).getPath().toString();
-                targetPath = getPath(new HdfsEnvironment.HdfsContext(session, finalSchemaName, tableName), targetLocation, false);
+                targetPath = getPath(new HdfsEnvironment.HdfsContext(session, schemaName, tableName), targetLocation, false);
             }
             else {
-                updateEmptyCarbondataTableStorePath(session, finalSchemaName);
+                updateEmptyCarbondataTableStorePath(session, schemaName);
                 targetLocation = carbondataTableStore;
-                targetLocation = targetLocation + File.separator + finalSchemaName + File.separator + tableName;
+                targetLocation = targetLocation + File.separator + schemaName + File.separator + tableName;
                 targetPath = new Path(targetLocation);
             }
         }
         catch (IllegalArgumentException | IOException e) {
             throw new PrestoException(NOT_SUPPORTED, format("Error %s store path %s ", e.getMessage(), targetLocation));
         }
-        locationHandle = locationService.forNewTable(metastore, session, finalSchemaName, tableName, Optional.empty(), Optional.of(targetPath), opertionType);
+        locationHandle = locationService.forNewTable(metastore, session, schemaName, tableName, Optional.empty(), Optional.of(targetPath), opertionType);
         return locationHandle;
     }
 
     @Override
     public void createTable(ConnectorSession session, ConnectorTableMetadata tableMetadata, boolean ignoreExisting)
     {
-        SchemaTableName localSchemaTableName = tableMetadata.getTable();
-        String localSchemaName = localSchemaTableName.getSchemaName();
-        String tableName = localSchemaTableName.getTableName();
+        SchemaTableName schemaTableName = tableMetadata.getTable();
+        String schemaName = schemaTableName.getSchemaName();
+        String tableName = schemaTableName.getTableName();
         this.user = session.getUser();
-        this.schemaName = localSchemaName;
+        this.schemaName = schemaName;
         currentState = State.CREATE_TABLE;
         List<String> partitionedBy = new ArrayList<String>();
         List<SortingColumn> sortBy = new ArrayList<SortingColumn>();
@@ -947,29 +908,29 @@ public class CarbondataMetadata
         Map<String, String> tableProperties = new HashMap<String, String>();
         getParametersForCreateTable(session, tableMetadata, partitionedBy, sortBy, columnHandles, tableProperties);
 
-        metastore.getDatabase(localSchemaName).orElseThrow(() -> new SchemaNotFoundException(localSchemaName));
+        metastore.getDatabase(schemaName).orElseThrow(() -> new SchemaNotFoundException(schemaName));
 
         BaseStorageFormat hiveStorageFormat = CarbondataTableProperties.getCarbondataStorageFormat(tableMetadata.getProperties());
         // it will get final path to create carbon table
         LocationHandle locationHandle = getCarbonDataTableCreationPath(session, tableMetadata, HiveWriteUtils.OpertionType.CREATE_TABLE);
         Path targetPath = locationService.getQueryWriteInfo(locationHandle).getTargetPath();
 
-        AbsoluteTableIdentifier finalAbsoluteTableIdentifier = AbsoluteTableIdentifier.from(targetPath.toString(),
-                new CarbonTableIdentifier(localSchemaName, tableName, UUID.randomUUID().toString()));
+        AbsoluteTableIdentifier absoluteTableIdentifier = AbsoluteTableIdentifier.from(targetPath.toString(),
+                new CarbonTableIdentifier(schemaName, tableName, UUID.randomUUID().toString()));
         hdfsEnvironment.doAs(session.getUser(), () -> {
             initialConfiguration = ConfigurationUtils.toJobConf(this.hdfsEnvironment.getConfiguration(
-                        new HdfsEnvironment.HdfsContext(session, localSchemaName, tableName),
+                        new HdfsEnvironment.HdfsContext(session, schemaName, tableName),
                         new Path(locationHandle.getJsonSerializableTargetPath())));
 
-            CarbondataMetadataUtils.createMetaDataFolderSchemaFile(hdfsEnvironment, session, columnHandles, finalAbsoluteTableIdentifier, partitionedBy,
+            CarbondataMetadataUtils.createMetaDataFolderSchemaFile(hdfsEnvironment, session, columnHandles, absoluteTableIdentifier, partitionedBy,
                     sortBy.stream().map(s -> s.getColumnName().toLowerCase(Locale.ENGLISH)).collect(toList()), targetPath.toString(), initialConfiguration);
 
             this.tableStorageLocation = Optional.of(targetPath.toString());
             try {
                 Map<String, String> serdeParameters = initSerDeProperties(tableName);
-                Table localTable = buildTableObject(
+                Table table = buildTableObject(
                         session.getQueryId(),
-                        localSchemaName,
+                        schemaName,
                         tableName,
                         session.getUser(),
                         columnHandles,
@@ -981,11 +942,11 @@ public class CarbondataMetadata
                         true, // carbon table is set as external table
                         prestoVersion,
                         serdeParameters);
-                PrincipalPrivileges principalPrivileges = MetastoreUtil.buildInitialPrivilegeSet(localTable.getOwner());
-                HiveBasicStatistics basicStatistics = localTable.getPartitionColumns().isEmpty() ? HiveBasicStatistics.createZeroStatistics() : HiveBasicStatistics.createEmptyStatistics();
+                PrincipalPrivileges principalPrivileges = MetastoreUtil.buildInitialPrivilegeSet(table.getOwner());
+                HiveBasicStatistics basicStatistics = table.getPartitionColumns().isEmpty() ? HiveBasicStatistics.createZeroStatistics() : HiveBasicStatistics.createEmptyStatistics();
                 metastore.createTable(
                         session,
-                        localTable,
+                        table,
                         principalPrivileges,
                         Optional.empty(),
                         ignoreExisting,
@@ -1051,15 +1012,6 @@ public class CarbondataMetadata
                     super.commit();
                     break;
                 }
-                case ADD_COLUMN:
-                case RENAME_COLUMN:
-                case DROP_COLUMN: {
-                    hdfsEnvironment.doAs(user, () -> {
-                        writeSchemaFile();
-                    });
-                    super.commit();
-                    break;
-                }
                 default: {
                     super.commit();
                 }
@@ -1092,8 +1044,8 @@ public class CarbondataMetadata
     public CarbondataTableHandle getTableHandle(ConnectorSession session, SchemaTableName tableName)
     {
         requireNonNull(tableName, "tableName is null");
-        Optional<Table> finalTable = metastore.getTable(new HiveIdentity(session), tableName.getSchemaName(), tableName.getTableName());
-        if (!finalTable.isPresent()) {
+        Optional<Table> table = metastore.getTable(new HiveIdentity(session), tableName.getSchemaName(), tableName.getTableName());
+        if (!table.isPresent()) {
             return null;
         }
 
@@ -1102,14 +1054,14 @@ public class CarbondataMetadata
             throw new PrestoException(HiveErrorCode.HIVE_INVALID_METADATA, "Unexpected table present in Hive metastore: " + tableName);
         }
 
-        MetastoreUtil.verifyOnline(tableName, Optional.empty(), MetastoreUtil.getProtectMode(finalTable.get()), finalTable.get().getParameters());
+        MetastoreUtil.verifyOnline(tableName, Optional.empty(), MetastoreUtil.getProtectMode(table.get()), table.get().getParameters());
 
         return new CarbondataTableHandle(
                 tableName.getSchemaName(),
                 tableName.getTableName(),
-                finalTable.get().getParameters(),
-                getPartitionKeyColumnHandles(finalTable.get()),
-                HiveBucketing.getHiveBucketHandle(finalTable.get()));
+                table.get().getParameters(),
+                getPartitionKeyColumnHandles(table.get()),
+                HiveBucketing.getHiveBucketHandle(table.get()));
     }
 
     private Optional<ConnectorOutputMetadata> finishUpdateAndDelete(ConnectorSession session,
@@ -1133,12 +1085,12 @@ public class CarbondataMetadata
 
         hdfsEnvironment.doAs(user, () -> {
             if (blockUpdateDetailsList.size() > 0) {
-                CarbonTable finalCarbonTable = getCarbonTable(tableHandle.getSchemaName(),
+                CarbonTable carbonTable = getCarbonTable(tableHandle.getSchemaName(),
                         tableHandle.getTableName(),
                         MetastoreUtil.getHiveSchema(table.get()),
                         initialConfiguration);
 
-                SegmentUpdateStatusManager statusManager = new SegmentUpdateStatusManager(finalCarbonTable);
+                SegmentUpdateStatusManager statusManager = new SegmentUpdateStatusManager(carbonTable);
                 SegmentUpdateDetails[] segementDetailsList = statusManager.getUpdateStatusDetails();
                 for (SegmentUpdateDetails segementDetails : segementDetailsList) {
                     segementDetails.getDeletedRowsInBlock();
@@ -1179,26 +1131,28 @@ public class CarbondataMetadata
                                             List<HiveColumnHandle> columnHandles,
                                             Map<String, String> tableProperties)
     {
-        SchemaTableName finalSchemaTableName = tableMetadata.getTable();
-        String finalSchemaName = finalSchemaTableName.getSchemaName();
-        String finalTableName = finalSchemaTableName.getTableName();
+        SchemaTableName schemaTableName = tableMetadata.getTable();
+        String schemaName = schemaTableName.getSchemaName();
+        String tableName = schemaTableName.getTableName();
 
         partitionedBy.addAll(CarbondataTableProperties.getPartitionedBy(tableMetadata.getProperties()));
         sortBy.addAll(CarbondataTableProperties.getSortedBy(tableMetadata.getProperties()));
         Optional<HiveBucketProperty> bucketProperty = Optional.empty();
         columnHandles.addAll(getColumnHandles(tableMetadata, ImmutableSet.copyOf(partitionedBy), typeTranslator));
-        tableProperties.putAll(getEmptyTableProperties(tableMetadata, bucketProperty, new HdfsEnvironment.HdfsContext(session, finalSchemaName, finalTableName)));
+        tableProperties.putAll(getEmptyTableProperties(tableMetadata, bucketProperty, new HdfsEnvironment.HdfsContext(session, schemaName, tableName)));
     }
 
     @Override
     public CarbondataOutputTableHandle beginCreateTable(ConnectorSession session, ConnectorTableMetadata tableMetadata, Optional<ConnectorNewTableLayout> layout)
     {
+        verifyJvmTimeZone();
+
         // get the root directory for the database
-        SchemaTableName finalSchemaTableName = tableMetadata.getTable();
-        String finalSchemaName = finalSchemaTableName.getSchemaName();
-        String finalTableName = finalSchemaTableName.getTableName();
+        SchemaTableName schemaTableName = tableMetadata.getTable();
+        String schemaName = schemaTableName.getSchemaName();
+        String tableName = schemaTableName.getTableName();
         this.user = session.getUser();
-        this.schemaName = finalSchemaName;
+        this.schemaName = schemaName;
         currentState = State.CREATE_TABLE_AS;
 
         List<String> partitionedBy = new ArrayList<String>();
@@ -1206,7 +1160,7 @@ public class CarbondataMetadata
         List<HiveColumnHandle> columnHandles = new ArrayList<HiveColumnHandle>();
         Map<String, String> tableProperties = new HashMap<String, String>();
         getParametersForCreateTable(session, tableMetadata, partitionedBy, sortBy, columnHandles, tableProperties);
-        metastore.getDatabase(finalSchemaName).orElseThrow(() -> new SchemaNotFoundException(finalSchemaName));
+        metastore.getDatabase(schemaName).orElseThrow(() -> new SchemaNotFoundException(schemaName));
 
         // to avoid type mismatch between HiveStorageFormat & Carbondata StorageFormat this hack no option
         HiveStorageFormat tableStorageFormat = HiveStorageFormat.valueOf("CARBON");
@@ -1222,29 +1176,29 @@ public class CarbondataMetadata
         // it will get final path to create carbon table
         LocationHandle locationHandle = getCarbonDataTableCreationPath(session, tableMetadata, HiveWriteUtils.OpertionType.CREATE_TABLE_AS);
         Path targetPath = locationService.getTableWriteInfo(locationHandle, false).getTargetPath();
-        AbsoluteTableIdentifier finalAbsoluteTableIdentifier = AbsoluteTableIdentifier.from(targetPath.toString(),
-                new CarbonTableIdentifier(finalSchemaName, finalTableName, UUID.randomUUID().toString()));
+        AbsoluteTableIdentifier absoluteTableIdentifier = AbsoluteTableIdentifier.from(targetPath.toString(),
+                new CarbonTableIdentifier(schemaName, tableName, UUID.randomUUID().toString()));
 
         hdfsEnvironment.doAs(session.getUser(), () -> {
             initialConfiguration = ConfigurationUtils.toJobConf(this.hdfsEnvironment.getConfiguration(
-                                new HdfsEnvironment.HdfsContext(session, finalSchemaName, finalTableName),
+                                new HdfsEnvironment.HdfsContext(session, schemaName, tableName),
                                 new Path(locationHandle.getJsonSerializableTargetPath())));
             // Create Carbondata metadata folder and Schema file
-            CarbondataMetadataUtils.createMetaDataFolderSchemaFile(hdfsEnvironment, session, columnHandles, finalAbsoluteTableIdentifier, partitionedBy,
+            CarbondataMetadataUtils.createMetaDataFolderSchemaFile(hdfsEnvironment, session, columnHandles, absoluteTableIdentifier, partitionedBy,
                     sortBy.stream().map(s -> s.getColumnName().toLowerCase(Locale.ENGLISH)).collect(toList()), targetPath.toString(), initialConfiguration);
 
             this.tableStorageLocation = Optional.of(targetPath.toString());
             Path outputPath = new Path(locationHandle.getJsonSerializableTargetPath());
-            Properties schema = readSchemaForCarbon(finalSchemaName, finalTableName, targetPath, columnHandles, partitionColumns);
+            Properties schema = readSchemaForCarbon(schemaName, tableName, targetPath, columnHandles, partitionColumns);
             // Create committer object
             setupCommitWriter(schema, outputPath, initialConfiguration, false);
         });
         try {
             CarbondataOutputTableHandle result = new CarbondataOutputTableHandle(
-                    finalSchemaName,
-                    finalTableName,
+                    schemaName,
+                    tableName,
                     columnHandles,
-                    metastore.generatePageSinkMetadata(new HiveIdentity(session), finalSchemaTableName),
+                    metastore.generatePageSinkMetadata(new HiveIdentity(session), schemaTableName),
                     locationHandle,
                     tableStorageFormat,
                     partitionStorageFormat,
@@ -1255,7 +1209,7 @@ public class CarbondataMetadata
                     EncodedLoadModel, jobContext.getConfiguration().get(LOAD_MODEL)));
 
             LocationService.WriteInfo writeInfo = locationService.getQueryWriteInfo(locationHandle);
-            metastore.declareIntentionToWrite(session, writeInfo.getWriteMode(), writeInfo.getWritePath(), finalSchemaTableName);
+            metastore.declareIntentionToWrite(session, writeInfo.getWriteMode(), writeInfo.getWritePath(), schemaTableName);
             return result;
         }
         catch (RuntimeException ex) {
@@ -1386,7 +1340,7 @@ public class CarbondataMetadata
         List<Segment> segmentFilesToBeUpdated = blockUpdateDetailsList.stream()
                 .map(SegmentUpdateDetails::getSegmentName)
                 .map(Segment::new).collect(Collectors.toList());
-        List<Segment> finalSegmentFilesToBeUpdatedLatest = new ArrayList<>();
+        List<Segment> segmentFilesToBeUpdatedLatest = new ArrayList<>();
         List<Segment> segmentFilesToBeDeleted = blockUpdateDetailsList.stream()
                 .filter(segmentUpdateDetails -> segmentUpdateDetails.getSegmentStatus() != null &&
                         segmentUpdateDetails.getSegmentStatus().equals(SegmentStatus.MARKED_FOR_DELETE))
@@ -1396,12 +1350,12 @@ public class CarbondataMetadata
         for (Segment segment : segmentFilesToBeUpdated) {
             String file =
                     SegmentFileStore.writeSegmentFile(carbonTable, segment.getSegmentNo(), timeStamp.toString());
-            finalSegmentFilesToBeUpdatedLatest.add(new Segment(segment.getSegmentNo(), file));
+            segmentFilesToBeUpdatedLatest.add(new Segment(segment.getSegmentNo(), file));
         }
         if (!(updateSegmentStatusSuccess &&
                 CarbonUpdateUtil.updateTableMetadataStatus(new HashSet<>(segmentFilesToBeUpdated),
                         carbonTable, timeStamp.toString(), true, segmentFilesToBeDeleted,
-                        finalSegmentFilesToBeUpdatedLatest, ""))) {
+                        segmentFilesToBeUpdatedLatest, ""))) {
             CarbonUpdateUtil.cleanStaleDeltaFiles(carbonTable, timeStamp.toString());
         }
     }
@@ -1463,10 +1417,11 @@ public class CarbondataMetadata
                 Properties hiveschema = MetastoreUtil.getHiveSchema(table);
                 Configuration configuration = jobContext.getConfiguration();
                 configuration.set(SET_OVERWRITE, "false");
-                CarbonLoadModel loadModel = HiveCarbonUtil.getCarbonLoadModel(hiveschema, configuration);
-                LoadMetadataDetails loadMetadataDetails = loadModel.getCurrentLoadMetadataDetail();
-                loadModel.setSegmentId(loadMetadataDetails.getLoadName());
-                CarbonLoaderUtil.recordNewLoadMetadata(loadMetadataDetails, loadModel, false, true);
+                CarbonLoadModel carbonLoadModel =
+                        HiveCarbonUtil.getCarbonLoadModel(hiveschema, configuration);
+                LoadMetadataDetails loadMetadataDetails = carbonLoadModel.getCurrentLoadMetadataDetail();
+                carbonLoadModel.setSegmentId(loadMetadataDetails.getLoadName());
+                CarbonLoaderUtil.recordNewLoadMetadata(loadMetadataDetails, carbonLoadModel, false, true);
             }
             catch (IOException e) {
                 LOG.error("Error occurred while committing the insert job.", e);
@@ -1553,14 +1508,14 @@ public class CarbondataMetadata
         try {
             hdfsEnvironment.doAs(session.getUser(), () -> {
                 metastore.dropTable(session, handle.getSchemaName(), handle.getTableName());
-                Configuration finalInitialConfiguration = ConfigurationUtils.toJobConf(this.hdfsEnvironment
+                Configuration initialConfiguration = ConfigurationUtils.toJobConf(this.hdfsEnvironment
                         .getConfiguration(new HdfsEnvironment.HdfsContext(session, handle.getSchemaName(),
                                 handle.getTableName()), new Path(this.tableStorageLocation.get())));
 
                 Properties schema = MetastoreUtil.getHiveSchema(target.get());
                 schema.setProperty("tablePath", this.tableStorageLocation.get());
                 this.carbonTable = getCarbonTable(handle.getSchemaName(), handle.getTableName(),
-                        schema, finalInitialConfiguration);
+                        schema, initialConfiguration);
                 takeLocks(State.DROP_TABLE);
                 AbsoluteTableIdentifier identifier = this.carbonTable.getAbsoluteTableIdentifier();
                 if (SegmentStatusManager.isLoadInProgressInTable(carbonTable)) {
@@ -1569,7 +1524,7 @@ public class CarbondataMetadata
                 try {
                     //Simultaneous case after acquiring locks we should check table exist.
                     //if table is not there clean the lock folders
-                    carbonTable = getCarbonTable(handle.getSchemaName(), handle.getTableName(), schema, finalInitialConfiguration);
+                    carbonTable = getCarbonTable(handle.getSchemaName(), handle.getTableName(), schema, initialConfiguration);
                 }//CarbonFileException
                 catch (RuntimeException e) {
                     try {
@@ -1618,350 +1573,6 @@ public class CarbondataMetadata
         serdeParameters.put(serdeIsVisible, "true");
         serdeParameters.put(serdeSerializationFormat, "1");
         return serdeParameters;
-    }
-
-    @Override
-    public void addColumn(ConnectorSession session, ConnectorTableHandle tableHandle, ColumnMetadata column)
-    {
-        currentState = State.ADD_COLUMN;
-        updateSchemaInfo(session, tableHandle, column, null, null);
-
-        super.addColumn(session, tableHandle, column);
-    }
-
-    @Override
-    public void renameColumn(ConnectorSession session, ConnectorTableHandle tableHandle, ColumnHandle source, String target)
-    {
-        currentState = State.RENAME_COLUMN;
-        updateSchemaInfo(session, tableHandle, null, source, target);
-
-        super.renameColumn(session, tableHandle, source, target);
-    }
-
-    @Override
-    public void dropColumn(ConnectorSession session, ConnectorTableHandle tableHandle, ColumnHandle column)
-    {
-        currentState = State.DROP_COLUMN;
-        updateSchemaInfo(session, tableHandle, null, column, null);
-
-        super.dropColumn(session, tableHandle, column);
-    }
-
-    private void updateSchemaInfo(ConnectorSession session, ConnectorTableHandle tableHandle, ColumnMetadata column, ColumnHandle source, String target)
-    {
-        HiveTableHandle handle = (HiveTableHandle) tableHandle;
-        table = metastore.getTable(new HiveIdentity(session), handle.getSchemaName(), handle.getTableName());
-        String tablePath = table.get().getStorage().getLocation();
-        hdfsEnvironment.doAs(user, () -> {
-            initialConfiguration = ConfigurationUtils.toJobConf(this.hdfsEnvironment
-                    .getConfiguration(
-                            new HdfsEnvironment.HdfsContext(session, handle.getSchemaName(),
-                                    handle.getTableName()), new Path(tablePath)));
-            Properties schema = MetastoreUtil.getHiveSchema(table.get());
-            schema.setProperty("tablePath", tablePath);
-            carbonTable = getCarbonTable(handle.getSchemaName(),
-                    handle.getTableName(),
-                    schema,
-                    initialConfiguration);
-        });
-        acquireLocksForAlter();
-        schemaTableName = handle.getSchemaTableName();
-        absoluteTableIdentifier = AbsoluteTableIdentifier.from(tablePath, handle.getTableName(), handle.getSchemaName());
-        tableInfo = carbonTable.getTableInfo();
-        SchemaEvolutionEntry schemaEvolutionEntry;
-        switch (currentState) {
-            case ADD_COLUMN: {
-                schemaEvolutionEntry = updateSchemaInfoAddColumn(column);
-                break;
-            }
-            case RENAME_COLUMN: {
-                schemaEvolutionEntry = updateSchemaInfoRenameColumn(source, target);
-                break;
-            }
-            case DROP_TABLE: {
-                schemaEvolutionEntry = updateSchemaInfoDropColumn(source);
-                break;
-            }
-            default: {
-                return;
-            }
-        }
-        if (schemaEvolutionEntry != null) {
-            tableInfo.getFactTable().getSchemaEvolution().getSchemaEvolutionEntryList()
-                    .add(schemaEvolutionEntry);
-        }
-    }
-
-    private SchemaEvolutionEntry updateSchemaInfoAddColumn(ColumnMetadata column)
-    {
-        HiveColumnHandle columnHandle = new HiveColumnHandle(column.getName(), HiveType.toHiveType(typeTranslator, column.getType()),
-                column.getType().getTypeSignature(), tableInfo.getFactTable().getListOfColumns().size(), HiveColumnHandle.ColumnType.REGULAR, Optional.empty());
-        TableSchema tableSchema = tableInfo.getFactTable();
-        List<ColumnSchema> tableColumns = tableSchema.getListOfColumns();
-        int currentSchemaOrdinal = tableColumns.stream().max(Comparator.comparing(ColumnSchema::getSchemaOrdinal))
-                .orElseThrow(NoSuchElementException::new).getSchemaOrdinal() + 1;
-        List<ColumnSchema> longStringColumns = new ArrayList<>();
-        List<ColumnSchema> allColumns = tableColumns.stream().filter(cols -> cols.isDimensionColumn()
-                && !cols.getDataType().isComplexType() && cols.getSchemaOrdinal() != -1 && (cols.getDataType() != DataTypes.VARCHAR)).collect(toList());
-
-        TableSchemaBuilder schemaBuilder = new TableSchemaBuilder();
-        List<ColumnSchema> columnSchemas = new ArrayList<ColumnSchema>();
-        ColumnSchema newColumn = schemaBuilder.addColumn(new StructField(columnHandle.getName(),
-                        CarbondataHetuFilterUtil.spi2CarbondataTypeMapper(columnHandle)), null,
-                false, false);
-        newColumn.setSchemaOrdinal(currentSchemaOrdinal);
-        columnSchemas.add(newColumn);
-
-        if (newColumn.getDataType() == DataTypes.VARCHAR) {
-            longStringColumns.add(newColumn);
-        }
-        else if (newColumn.isDimensionColumn()) {
-            // add the column which is not long string
-            allColumns.add(newColumn);
-        }
-        // put the old long string columns
-        allColumns.addAll(tableColumns.stream().filter(cols -> cols.isDimensionColumn() && (cols.getDataType() == DataTypes.VARCHAR)).collect(toList()));
-        // and the new long string column after old long string columns
-        allColumns.addAll(longStringColumns);
-        // put complex type columns at the end of dimension columns
-        allColumns.addAll(tableColumns.stream().filter(cols -> cols.isDimensionColumn() &&
-                (cols.isComplexColumn() || cols.getSchemaOrdinal() == -1)).collect(toList()));
-        // original measure columns
-        allColumns.addAll(tableColumns.stream().filter(cols -> !cols.isDimensionColumn()).collect(toList()));
-        // add new measure column
-        if (!newColumn.isDimensionColumn()) {
-            allColumns.add(newColumn);
-        }
-        allColumns.stream().filter(cols -> !cols.isInvisible()).collect(Collectors.groupingBy(ColumnSchema::getColumnName))
-                .forEach((columnName, schemaList) -> {
-                    if (schemaList.size() > 2) {
-                        throw new PrestoException(GENERIC_INTERNAL_ERROR, format("Duplicate columns found"));
-                    }
-                });
-        if (newColumn.isComplexColumn()) {
-            throw new PrestoException(GENERIC_INTERNAL_ERROR, format("Complex column cannot be added"));
-        }
-
-        List<ColumnSchema> finalAllColumns = allColumns;
-        allColumns.stream().forEach(columnSchema -> {
-            List<ColumnSchema> colWithSameId = finalAllColumns.stream().filter(x ->
-                    x.getColumnUniqueId().equals(columnSchema.getColumnUniqueId())).collect(toList());
-            if (colWithSameId.size() > 1) {
-                throw new PrestoException(GENERIC_INTERNAL_ERROR, format("Two columns can not have same columnId"));
-            }
-        });
-        if (tableInfo.getFactTable().getPartitionInfo() != null) {
-            List<ColumnSchema> par = tableInfo.getFactTable().getPartitionInfo().getColumnSchemaList();
-            allColumns = allColumns.stream().filter(cols -> !par.contains(cols)).collect(toList());
-            allColumns.addAll(par);
-        }
-        tableSchema.setListOfColumns(allColumns);
-        tableInfo.setLastUpdatedTime(timeStamp);
-        tableInfo.setFactTable(tableSchema);
-        SchemaEvolutionEntry schemaEvolutionEntry = new SchemaEvolutionEntry();
-        schemaEvolutionEntry.setTimeStamp(timeStamp);
-        schemaEvolutionEntry.setAdded(columnSchemas);
-
-        return schemaEvolutionEntry;
-    }
-
-    private SchemaEvolutionEntry updateSchemaInfoRenameColumn(ColumnHandle source, String target)
-    {
-        HiveColumnHandle oldColumnHandle = (HiveColumnHandle) source;
-        String oldColumnName = oldColumnHandle.getColumnName();
-        String newColumnName = target;
-        if (!carbonTable.canAllow(carbonTable, TableOperation.ALTER_COLUMN_RENAME, oldColumnHandle.getName())) {
-            throw new PrestoException(GENERIC_INTERNAL_ERROR, format("Alter table rename column is  not supported for index indexschema"));
-        }
-
-        TableSchema tableSchema = tableInfo.getFactTable();
-        List<ColumnSchema> tableColumns = tableSchema.getListOfColumns();
-
-        if (!tableColumns.stream().map(cols -> cols.getColumnName()).collect(toList()).contains(oldColumnHandle.getName())) {
-            throw new PrestoException(GENERIC_INTERNAL_ERROR, format("Column " + oldColumnHandle.getName() + "does not exist in " +
-                    carbonTable.getDatabaseName() + "." + carbonTable.getTableName()));
-        }
-
-        List<ColumnSchema> carbonColumns = carbonTable.getCreateOrderColumn().stream().filter(cols -> !cols.isInvisible())
-                .map(cols -> cols.getColumnSchema()).collect(toList());
-
-        ColumnSchema oldCarbonColumn = carbonColumns.stream().filter(cols -> cols.getColumnName().equalsIgnoreCase(oldColumnName)).findFirst().get();
-        validateColumnsForRenaming(oldCarbonColumn);
-
-        TableSchemaBuilder schemaBuilder = new TableSchemaBuilder();
-        ColumnSchema deletedColumn = schemaBuilder.addColumn(new StructField(oldColumnHandle.getName(),
-                CarbondataHetuFilterUtil.spi2CarbondataTypeMapper(oldColumnHandle)), null, false, false);
-
-        SchemaEvolutionEntry schemaEvolutionEntry = new SchemaEvolutionEntry();
-        tableColumns.forEach(cols -> {
-            if (cols.getColumnName().equalsIgnoreCase(oldColumnName)) {
-                cols.setColumnName(newColumnName);
-                schemaEvolutionEntry.setTimeStamp(timeStamp);
-                schemaEvolutionEntry.setAdded(Arrays.asList(cols));
-                schemaEvolutionEntry.setRemoved(Arrays.asList(deletedColumn));
-            }
-        });
-
-        Map<String, String> tableProperties = tableInfo.getFactTable().getTableProperties();
-        tableProperties.forEach((tablePropertyKey, tablePropertyValue) -> {
-            if (tablePropertyKey.equalsIgnoreCase(oldColumnName)) {
-                tableProperties.put(tablePropertyKey, newColumnName);
-            }
-        });
-
-        tableInfo.setLastUpdatedTime(System.currentTimeMillis());
-        tableInfo.setFactTable(tableSchema);
-        return schemaEvolutionEntry;
-    }
-
-    private SchemaEvolutionEntry updateSchemaInfoDropColumn(ColumnHandle column)
-    {
-        HiveColumnHandle columnHandle = (HiveColumnHandle) column;
-        TableSchema tableSchema = tableInfo.getFactTable();
-        List<ColumnSchema> tableColumns = tableSchema.getListOfColumns();
-        int currentSchemaOrdinal = tableColumns.stream().max(Comparator.comparing(ColumnSchema::getSchemaOrdinal))
-                .orElseThrow(NoSuchElementException::new).getSchemaOrdinal() + 1;
-
-        TableSchemaBuilder schemaBuilder = new TableSchemaBuilder();
-        List<ColumnSchema> columnSchemas = new ArrayList<ColumnSchema>();
-        ColumnSchema newColumn = schemaBuilder.addColumn(new StructField(columnHandle.getColumnName(),
-                        CarbondataHetuFilterUtil.spi2CarbondataTypeMapper(columnHandle)), null,
-                false, false);
-        newColumn.setSchemaOrdinal(currentSchemaOrdinal);
-        columnSchemas.add(newColumn);
-
-        PartitionInfo partitionInfo = tableInfo.getFactTable().getPartitionInfo();
-        if (partitionInfo != null) {
-            List<String> partitionColumnSchemaList = tableInfo.getFactTable().getPartitionInfo()
-                    .getColumnSchemaList().stream().map(cols -> cols.getColumnName()).collect(toList());
-            if (partitionColumnSchemaList.stream().anyMatch(partitionColumn -> partitionColumn.equals(newColumn.getColumnName()))) {
-                throw new PrestoException(GENERIC_INTERNAL_ERROR, "Partition columns cannot be dropped");
-            }
-            // when table has two columns, dropping unpartitioned column will be wrong
-            if (tableColumns.stream().filter(cols -> !cols.getColumnName().equals(newColumn.getColumnName()))
-                    .map(cols -> cols.getColumnName()).equals(partitionColumnSchemaList)) {
-                throw new PrestoException(GENERIC_INTERNAL_ERROR, "Cannot have table with all columns as partition columns");
-            }
-        }
-
-        if (!tableColumns.stream().filter(cols -> cols.getColumnName().equals(newColumn.getColumnName())).collect(toList()).isEmpty()) {
-            if (newColumn.isComplexColumn()) {
-                throw new PrestoException(GENERIC_INTERNAL_ERROR, "Complex column cannot be dropped");
-            }
-        }
-        else {
-            throw new PrestoException(GENERIC_INTERNAL_ERROR, "Cannot have table with all columns as partition columns");
-        }
-        tableInfo.setLastUpdatedTime(System.currentTimeMillis());
-        tableInfo.setFactTable(tableSchema);
-
-        SchemaEvolutionEntry schemaEvolutionEntry = new SchemaEvolutionEntry();
-        schemaEvolutionEntry.setTimeStamp(timeStamp);
-        schemaEvolutionEntry.setRemoved(columnSchemas);
-
-        return schemaEvolutionEntry;
-    }
-
-    private void revertAlterTableChanges()
-    {
-        String tableName = absoluteTableIdentifier.getTableName();
-        String databaseName = absoluteTableIdentifier.getDatabaseName();
-        TableInfo finalTableInfo = carbonTable.getTableInfo();
-        List<SchemaEvolutionEntry> evolutionEntryList = finalTableInfo.getFactTable().getSchemaEvolution().getSchemaEvolutionEntryList();
-        Long updatedTime = evolutionEntryList.get(evolutionEntryList.size() - 1).getTimeStamp();
-        LOG.info("Reverting changes for " + databaseName + "." + tableName);
-        List<ColumnSchema> addedSchemas = evolutionEntryList.get(evolutionEntryList.size() - 1).getAdded();
-        List<ColumnSchema> removedSchemas = evolutionEntryList.get(evolutionEntryList.size() - 1).getRemoved();
-        if (updatedTime == timeStamp) {
-            switch (currentState) {
-                case ADD_COLUMN: {
-                    carbonTable.getTableInfo().getFactTable().getListOfColumns().removeAll(addedSchemas);
-                    break;
-                }
-                case DROP_COLUMN: {
-                    finalTableInfo.getFactTable().getListOfColumns().forEach(cols -> removedSchemas.forEach(removedCols -> {
-                        if (cols.isInvisible() && removedCols.getColumnUniqueId().equals(cols.getColumnUniqueId())) {
-                            cols.setInvisible(false);
-                        }
-                    }));
-                    break;
-                }
-                default:
-                    break;
-            }
-            evolutionEntryList.remove(evolutionEntryList.size() - 1);
-            writeSchemaFile();
-        }
-    }
-
-    private void writeSchemaFile()
-    {
-        try {
-            String schemaFilePath = CarbonTablePath.getSchemaFilePath(table.get().getStorage().getLocation());
-            SchemaConverter schemaConverter = new ThriftWrapperSchemaConverterImpl();
-            ThriftWriter thriftWriter = new ThriftWriter(schemaFilePath, false);
-            thriftWriter.open(FileWriteOperation.OVERWRITE);
-            thriftWriter.write(schemaConverter.fromWrapperToExternalTableInfo(tableInfo, absoluteTableIdentifier.getTableName(),
-                    absoluteTableIdentifier.getDatabaseName()));
-            thriftWriter.close();
-            FileFactory.getCarbonFile(schemaFilePath).setLastModifiedTime(timeStamp);
-            carbondataTableReader.deleteTableFromCarbonCache(new SchemaTableName(absoluteTableIdentifier.getDatabaseName(), absoluteTableIdentifier.getTableName()));
-            CarbonMetadata.getInstance().removeTable(absoluteTableIdentifier.getTablePath(), absoluteTableIdentifier.getDatabaseName());
-            CarbonMetadata.getInstance().loadTableMetadata(tableInfo);
-            LOG.info("Schema file written");
-        }
-        catch (IOException e) {
-            //TODO handle cases while exception thrown
-            releaseLocks();
-            throw new PrestoException(GENERIC_INTERNAL_ERROR, format("Error while writing to schema file", e));
-        }
-    }
-
-    private void acquireLocksForAlter()
-    {
-        metadataLock = CarbonLockFactory.getCarbonLockObj(carbonTable
-                .getAbsoluteTableIdentifier(), LockUsage.METADATA_LOCK);
-        compactionLock = CarbonLockFactory.getCarbonLockObj(carbonTable
-                .getAbsoluteTableIdentifier(), LockUsage.COMPACTION_LOCK);
-        try {
-            boolean lockStatus = metadataLock.lockWithRetries();
-            if (lockStatus) {
-                LOG.info("Successfully able to get the table metadata file lock");
-            }
-            else {
-                throw new Exception("Table is already locked");
-            }
-
-            if (compactionLock.lockWithRetries()) {
-                LOG.info("Successfully able to get compaction lock");
-            }
-            else {
-                throw new RuntimeException("Unable to get compaction locks");
-            }
-        }
-        catch (Exception e) {
-            LOG.error("Exception in alter operation", e);
-            releaseLocks();
-            throw new PrestoException(GENERIC_INTERNAL_ERROR, "Error while taking locks", e);
-        }
-    }
-
-    private void validateColumnsForRenaming(ColumnSchema oldColumn)
-    {
-        if (carbonTable != null) {
-            // if the column rename is for complex column, block the operation
-            if (oldColumn.isComplexColumn()) {
-                throw new PrestoException(GENERIC_INTERNAL_ERROR, format("Rename column is not supported for complex datatype"));
-            }
-            // if column rename operation is on partition column, then fail the rename operation
-            if (null != carbonTable.getPartitionInfo()) {
-                List<ColumnSchema> partitionColumns = carbonTable.getPartitionInfo().getColumnSchemaList();
-                if (!partitionColumns.stream().filter(cols -> cols.getColumnName()
-                        .equalsIgnoreCase(oldColumn.getColumnName())).collect(toList()).isEmpty()) {
-                    throw new PrestoException(GENERIC_INTERNAL_ERROR, format("Cannot rename a partition column"));
-                }
-            }
-        }
     }
 
     private void writeSegmentFileAndSetLoadModel()
@@ -2026,38 +1637,38 @@ public class CarbondataMetadata
     @Override
     protected ConnectorTableMetadata doGetTableMetadata(ConnectorSession session, SchemaTableName tableName)
     {
-        Optional<Table> finalTable = metastore.getTable(new HiveIdentity(session), tableName.getSchemaName(), tableName.getTableName());
-        if (!finalTable.isPresent() || finalTable.get().getTableType().equals(TableType.VIRTUAL_VIEW.name())) {
+        Optional<Table> table = metastore.getTable(new HiveIdentity(session), tableName.getSchemaName(), tableName.getTableName());
+        if (!table.isPresent() || table.get().getTableType().equals(TableType.VIRTUAL_VIEW.name())) {
             throw new TableNotFoundException(tableName);
         }
 
-        Function<HiveColumnHandle, ColumnMetadata> metadataGetter = columnMetadataGetter(finalTable.get(), typeManager);
+        Function<HiveColumnHandle, ColumnMetadata> metadataGetter = columnMetadataGetter(table.get(), typeManager);
         ImmutableList.Builder<ColumnMetadata> columns = ImmutableList.builder();
-        for (HiveColumnHandle columnHandle : hiveColumnHandles(finalTable.get())) {
+        for (HiveColumnHandle columnHandle : hiveColumnHandles(table.get())) {
             columns.add(metadataGetter.apply(columnHandle));
         }
 
         // External location property
         ImmutableMap.Builder<String, Object> properties = ImmutableMap.builder();
-        properties.put(LOCATION_PROPERTY, finalTable.get().getStorage().getLocation());
+        properties.put(LOCATION_PROPERTY, table.get().getStorage().getLocation());
 
         // Storage format property
         properties.put(HiveTableProperties.STORAGE_FORMAT_PROPERTY, CarbondataStorageFormat.CARBON);
 
         // Partitioning property
-        List<String> partitionedBy = finalTable.get().getPartitionColumns().stream()
+        List<String> partitionedBy = table.get().getPartitionColumns().stream()
                 .map(Column::getName)
                 .collect(toList());
         if (!partitionedBy.isEmpty()) {
             properties.put(HiveTableProperties.PARTITIONED_BY_PROPERTY, partitionedBy);
         }
 
-        Optional<String> comment = Optional.ofNullable(finalTable.get().getParameters().get(TABLE_COMMENT));
+        Optional<String> comment = Optional.ofNullable(table.get().getParameters().get(TABLE_COMMENT));
 
         // add partitioned columns into immutableColumns
         ImmutableList.Builder<ColumnMetadata> immutableColumns = ImmutableList.builder();
 
-        for (HiveColumnHandle columnHandle : hiveColumnHandles(finalTable.get())) {
+        for (HiveColumnHandle columnHandle : hiveColumnHandles(table.get())) {
             if (columnHandle.getColumnType().equals(HiveColumnHandle.ColumnType.PARTITION_KEY)) {
                 immutableColumns.add(metadataGetter.apply(columnHandle));
             }

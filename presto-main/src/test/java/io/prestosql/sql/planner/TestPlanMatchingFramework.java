@@ -15,7 +15,6 @@ package io.prestosql.sql.planner;
 
 import com.google.common.collect.ImmutableList;
 import com.google.common.collect.ImmutableMap;
-import io.airlift.log.Logger;
 import io.prestosql.Session;
 import io.prestosql.spi.plan.TableScanNode;
 import io.prestosql.sql.planner.assertions.BasePlanTest;
@@ -47,8 +46,6 @@ import static org.testng.Assert.fail;
 public class TestPlanMatchingFramework
         extends BasePlanTest
 {
-    private static final Logger LOGGER = Logger.get(TestPlanMatchingFramework.class);
-
     @Test
     public void testOutput()
     {
@@ -216,7 +213,6 @@ public class TestPlanMatchingFramework
             fail("Plans should not have matched!");
         }
         catch (AssertionError e) {
-            LOGGER.error("assertFails error : %s", e.getMessage());
             //ignored
         }
     }

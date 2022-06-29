@@ -1,5 +1,5 @@
 /*
- * Copyright (C) 2018-2021. Huawei Technologies Co., Ltd. All rights reserved.
+ * Copyright (C) 2018-2020. Huawei Technologies Co., Ltd. All rights reserved.
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
  * You may obtain a copy of the License at
@@ -28,6 +28,11 @@ import java.nio.ByteBuffer;
 import java.nio.charset.CharacterCodingException;
 import java.nio.charset.Charset;
 import java.nio.charset.CharsetDecoder;
+import java.sql.Date;
+import java.sql.Time;
+import java.sql.Timestamp;
+import java.time.LocalDate;
+import java.time.format.DateTimeFormatter;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
@@ -43,6 +48,7 @@ import static io.prestosql.spi.type.TimeType.TIME;
 import static io.prestosql.spi.type.TimestampType.TIMESTAMP;
 import static io.prestosql.spi.type.TinyintType.TINYINT;
 import static java.nio.charset.StandardCharsets.UTF_8;
+import static java.util.concurrent.TimeUnit.DAYS;
 
 /**
  * StringRowSerializer
@@ -67,7 +73,6 @@ public class StringRowSerializer
      *
      * @param columnHandleList columnHandleList
      */
-    @Override
     public void setColumnHandleList(List<HBaseColumnHandle> columnHandleList)
     {
         this.columnHandles = columnHandleList;
@@ -109,7 +114,6 @@ public class StringRowSerializer
      * @param result Entry to deserialize
      * @param defaultValue defaultValue
      */
-    @Override
     public void deserialize(Result result, String defaultValue)
     {
         if (!columnValues.containsKey(rowIdName)) {
@@ -136,7 +140,7 @@ public class StringRowSerializer
                     }
                     catch (CharacterCodingException e) {
                         LOG.error("bytes decode to string error, cause by %s", e.getMessage());
-                        LOG.error("Error message: " + e.getStackTrace());
+                        e.printStackTrace();
                     }
                 }
                 columnValues.put(familyQualifierColumnMap.get(family).get(qualifer), value);
@@ -164,7 +168,7 @@ public class StringRowSerializer
             return ((Boolean) (value.equals(Boolean.TRUE))).toString().getBytes(UTF_8);
         }
         else if (type.equals(DATE)) {
-            return ((Long) value).toString().getBytes(UTF_8);
+            return new Date(DAYS.toMillis((Long) value)).toString().getBytes(UTF_8);
         }
         else if (type.equals(DOUBLE)) {
             return value.toString().getBytes(UTF_8);
@@ -179,13 +183,13 @@ public class StringRowSerializer
             return ((Long) value).toString().getBytes(UTF_8);
         }
         else if (type.equals(TIME)) {
-            return ((Long) value).toString().getBytes(UTF_8);
+            return new Time((Long) value).toString().getBytes(UTF_8);
         }
         else if (type.equals(TINYINT)) {
             return ((Long) value).toString().getBytes(UTF_8);
         }
         else if (type.equals(TIMESTAMP)) {
-            return ((Long) value).toString().getBytes(UTF_8);
+            return new Timestamp((Long) value).toString().getBytes(UTF_8);
         }
         else if (type instanceof VarcharType && value instanceof String) {
             return ((String) value).getBytes(UTF_8);
@@ -207,7 +211,6 @@ public class StringRowSerializer
      * @param <T> Type
      * @return read from HBase, set into output
      */
-    @Override
     public <T> T getBytesObject(Type type, String columnName)
     {
         String fieldValue = getFieldValue(columnName);
@@ -219,7 +222,8 @@ public class StringRowSerializer
             return (T) (Boolean) Boolean.parseBoolean(fieldValue);
         }
         else if (type.equals(DATE)) {
-            return (T) ((Long) (Long.parseLong(fieldValue)));
+            LocalDate end = LocalDate.parse(fieldValue, DateTimeFormatter.ofPattern("yyy-MM-dd"));
+            return (T) Long.valueOf(end.toEpochDay());
         }
         else if (type.equals(DOUBLE)) {
             return (T) (Double) Double.parseDouble(fieldValue);
@@ -231,10 +235,10 @@ public class StringRowSerializer
             return (T) ((Long) ((Short) Short.parseShort(fieldValue)).longValue());
         }
         else if (type.equals(TIME)) {
-            return (T) ((Long) (Long.parseLong(fieldValue)));
+            return (T) (Long) Time.valueOf(fieldValue).getTime();
         }
         else if (type.equals(TIMESTAMP)) {
-            return (T) ((Long) (Long.parseLong(fieldValue)));
+            return (T) (Long) Timestamp.valueOf(fieldValue).getTime();
         }
         else if (type.equals(TINYINT)) {
             return (T) ((Long) ((Byte) Byte.parseByte(fieldValue)).longValue());

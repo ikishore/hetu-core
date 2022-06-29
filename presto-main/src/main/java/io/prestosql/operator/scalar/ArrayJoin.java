@@ -16,8 +16,7 @@ package io.prestosql.operator.scalar;
 import com.google.common.collect.ImmutableList;
 import io.airlift.slice.Slice;
 import io.prestosql.metadata.BoundVariables;
-import io.prestosql.metadata.CastType;
-import io.prestosql.metadata.FunctionAndTypeManager;
+import io.prestosql.metadata.Metadata;
 import io.prestosql.metadata.SqlScalarFunction;
 import io.prestosql.spi.PageBuilder;
 import io.prestosql.spi.PrestoException;
@@ -25,10 +24,9 @@ import io.prestosql.spi.annotation.UsedByGeneratedCode;
 import io.prestosql.spi.block.Block;
 import io.prestosql.spi.block.BlockBuilder;
 import io.prestosql.spi.connector.ConnectorSession;
-import io.prestosql.spi.connector.QualifiedObjectName;
-import io.prestosql.spi.function.BuiltInScalarFunctionImplementation;
-import io.prestosql.spi.function.BuiltInScalarFunctionImplementation.ArgumentProperty;
 import io.prestosql.spi.function.FunctionKind;
+import io.prestosql.spi.function.ScalarFunctionImplementation;
+import io.prestosql.spi.function.ScalarFunctionImplementation.ArgumentProperty;
 import io.prestosql.spi.function.Signature;
 import io.prestosql.spi.type.StandardTypes;
 import io.prestosql.spi.type.Type;
@@ -45,10 +43,10 @@ import java.util.Optional;
 import static com.google.common.collect.ImmutableList.toImmutableList;
 import static io.prestosql.spi.StandardErrorCode.GENERIC_INTERNAL_ERROR;
 import static io.prestosql.spi.StandardErrorCode.INVALID_FUNCTION_ARGUMENT;
-import static io.prestosql.spi.connector.CatalogSchemaName.DEFAULT_NAMESPACE;
-import static io.prestosql.spi.function.BuiltInScalarFunctionImplementation.ArgumentProperty.valueTypeArgumentProperty;
-import static io.prestosql.spi.function.BuiltInScalarFunctionImplementation.NullConvention.RETURN_NULL_ON_NULL;
-import static io.prestosql.spi.function.BuiltInScalarFunctionImplementation.NullConvention.USE_BOXED_TYPE;
+import static io.prestosql.spi.function.OperatorType.CAST;
+import static io.prestosql.spi.function.ScalarFunctionImplementation.ArgumentProperty.valueTypeArgumentProperty;
+import static io.prestosql.spi.function.ScalarFunctionImplementation.NullConvention.RETURN_NULL_ON_NULL;
+import static io.prestosql.spi.function.ScalarFunctionImplementation.NullConvention.USE_BOXED_TYPE;
 import static io.prestosql.spi.function.Signature.typeVariable;
 import static io.prestosql.spi.type.TypeSignature.parseTypeSignature;
 import static io.prestosql.spi.type.VarcharType.VARCHAR;
@@ -94,8 +92,7 @@ public final class ArrayJoin
 
         public ArrayJoinWithNullReplacement()
         {
-            super(new Signature(
-                    QualifiedObjectName.valueOf(DEFAULT_NAMESPACE, FUNCTION_NAME),
+            super(new Signature(FUNCTION_NAME,
                     FunctionKind.SCALAR,
                     ImmutableList.of(typeVariable("T")),
                     ImmutableList.of(),
@@ -123,16 +120,15 @@ public final class ArrayJoin
         }
 
         @Override
-        public BuiltInScalarFunctionImplementation specialize(BoundVariables boundVariables, int arity, FunctionAndTypeManager functionAndTypeManager)
+        public ScalarFunctionImplementation specialize(BoundVariables boundVariables, int arity, Metadata metadata)
         {
-            return specializeArrayJoin(boundVariables.getTypeVariables(), functionAndTypeManager, ImmutableList.of(false, false, false), METHOD_HANDLE);
+            return specializeArrayJoin(boundVariables.getTypeVariables(), metadata, ImmutableList.of(false, false, false), METHOD_HANDLE);
         }
     }
 
     public ArrayJoin()
     {
-        super(new Signature(
-                QualifiedObjectName.valueOf(DEFAULT_NAMESPACE, FUNCTION_NAME),
+        super(new Signature(FUNCTION_NAME,
                 FunctionKind.SCALAR,
                 ImmutableList.of(typeVariable("T")),
                 ImmutableList.of(),
@@ -166,12 +162,12 @@ public final class ArrayJoin
     }
 
     @Override
-    public BuiltInScalarFunctionImplementation specialize(BoundVariables boundVariables, int arity, FunctionAndTypeManager functionAndTypeManager)
+    public ScalarFunctionImplementation specialize(BoundVariables boundVariables, int arity, Metadata metadata)
     {
-        return specializeArrayJoin(boundVariables.getTypeVariables(), functionAndTypeManager, ImmutableList.of(false, false), METHOD_HANDLE);
+        return specializeArrayJoin(boundVariables.getTypeVariables(), metadata, ImmutableList.of(false, false), METHOD_HANDLE);
     }
 
-    private static BuiltInScalarFunctionImplementation specializeArrayJoin(Map<String, Type> types, FunctionAndTypeManager functionAndTypeManager, List<Boolean> nullableArguments, MethodHandle methodHandle)
+    private static ScalarFunctionImplementation specializeArrayJoin(Map<String, Type> types, Metadata metadata, List<Boolean> nullableArguments, MethodHandle methodHandle)
     {
         Type type = types.get("T");
         List<ArgumentProperty> argumentProperties = nullableArguments.stream()
@@ -181,15 +177,16 @@ public final class ArrayJoin
                 .collect(toImmutableList());
 
         if (type instanceof UnknownType) {
-            return new BuiltInScalarFunctionImplementation(
+            return new ScalarFunctionImplementation(
                     false,
                     argumentProperties,
                     methodHandle.bindTo(null),
-                    Optional.of(STATE_FACTORY));
+                    Optional.of(STATE_FACTORY),
+                    true);
         }
         else {
             try {
-                BuiltInScalarFunctionImplementation castFunction = functionAndTypeManager.getBuiltInScalarFunctionImplementation(functionAndTypeManager.lookupCast(CastType.CAST, type.getTypeSignature(), VARCHAR_TYPE_SIGNATURE));
+                ScalarFunctionImplementation castFunction = metadata.getScalarFunctionImplementation(Signature.internalOperator(CAST, VARCHAR_TYPE_SIGNATURE, ImmutableList.of(type.getTypeSignature())));
 
                 MethodHandle getter;
                 Class<?> elementType = type.getJavaType();
@@ -225,11 +222,12 @@ public final class ArrayJoin
                 cast = MethodHandles.foldArguments(cast, getter.bindTo(type));
 
                 MethodHandle target = MethodHandles.insertArguments(methodHandle, 0, cast);
-                return new BuiltInScalarFunctionImplementation(
+                return new ScalarFunctionImplementation(
                         false,
                         argumentProperties,
                         target,
-                        Optional.of(STATE_FACTORY));
+                        Optional.of(STATE_FACTORY),
+                        true);
             }
             catch (PrestoException e) {
                 throw new PrestoException(INVALID_FUNCTION_ARGUMENT, String.format("Input type %s not supported", type), e);

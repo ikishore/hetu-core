@@ -37,17 +37,15 @@ import io.prestosql.heuristicindex.HeuristicIndexerManager;
 import io.prestosql.metadata.InMemoryNodeManager;
 import io.prestosql.metadata.InternalNode;
 import io.prestosql.metadata.InternalNodeManager;
+import io.prestosql.metadata.QualifiedObjectName;
 import io.prestosql.metastore.HetuMetaStoreManager;
 import io.prestosql.seedstore.SeedStoreManager;
-import io.prestosql.snapshot.QueryRecoveryManager;
-import io.prestosql.snapshot.QuerySnapshotManager;
 import io.prestosql.spi.QueryId;
 import io.prestosql.spi.connector.CatalogName;
 import io.prestosql.spi.connector.ConnectorPartitionHandle;
 import io.prestosql.spi.connector.ConnectorSplit;
 import io.prestosql.spi.connector.ConnectorSplitSource;
 import io.prestosql.spi.connector.FixedSplitSource;
-import io.prestosql.spi.connector.QualifiedObjectName;
 import io.prestosql.spi.operator.ReuseExchangeOperator;
 import io.prestosql.spi.plan.JoinNode;
 import io.prestosql.spi.plan.PlanNodeId;
@@ -64,7 +62,6 @@ import io.prestosql.sql.planner.plan.PlanFragmentId;
 import io.prestosql.sql.planner.plan.RemoteSourceNode;
 import io.prestosql.statestore.LocalStateStoreProvider;
 import io.prestosql.testing.TestingMetadata.TestingColumnHandle;
-import io.prestosql.testing.TestingRecoveryUtils;
 import io.prestosql.testing.TestingSplit;
 import io.prestosql.util.FinalizerService;
 import org.testng.annotations.AfterClass;
@@ -96,7 +93,6 @@ import static io.prestosql.sql.planner.SystemPartitioningHandle.SINGLE_DISTRIBUT
 import static io.prestosql.sql.planner.SystemPartitioningHandle.SOURCE_DISTRIBUTION;
 import static io.prestosql.sql.planner.plan.ExchangeNode.Type.GATHER;
 import static io.prestosql.testing.TestingHandles.TEST_TABLE_HANDLE;
-import static io.prestosql.testing.TestingRecoveryUtils.NOOP_RECOVERY_UTILS;
 import static io.prestosql.testing.TestingSession.testSessionBuilder;
 import static io.prestosql.testing.assertions.PrestoExceptionAssert.assertPrestoExceptionThrownBy;
 import static java.lang.Integer.min;
@@ -166,34 +162,34 @@ public class TestSourcePartitionedScheduler
         NodeTaskMap nodeTaskMap = new NodeTaskMap(finalizerService);
         SqlStageExecution stage = createSqlStageExecution(plan, nodeTaskMap);
 
-        try (StageScheduler scheduler = getSourcePartitionedScheduler(plan, stage, nodeManager, nodeTaskMap, 1)) {
-            for (int i = 0; i < 60; i++) {
-                ScheduleResult scheduleResult = scheduler.schedule();
+        StageScheduler scheduler = getSourcePartitionedScheduler(plan, stage, nodeManager, nodeTaskMap, 1);
 
-                // only finishes when last split is fetched
-                if (i == 59) {
-                    assertEffectivelyFinished(scheduleResult, scheduler);
-                }
-                else {
-                    assertFalse(scheduleResult.isFinished());
-                }
+        for (int i = 0; i < 60; i++) {
+            ScheduleResult scheduleResult = scheduler.schedule();
 
-                // never blocks
-                assertTrue(scheduleResult.getBlocked().isDone());
-
-                // first three splits create new tasks
-                assertEquals(scheduleResult.getNewTasks().size(), i < 3 ? 1 : 0);
-                assertEquals(stage.getAllTasks().size(), i < 3 ? i + 1 : 3);
-
-                assertPartitionedSplitCount(stage, min(i + 1, 60));
+            // only finishes when last split is fetched
+            if (i == 59) {
+                assertEffectivelyFinished(scheduleResult, scheduler);
+            }
+            else {
+                assertFalse(scheduleResult.isFinished());
             }
 
-            for (RemoteTask remoteTask : stage.getAllTasks()) {
-                assertEquals(remoteTask.getPartitionedSplitCount(), 20);
-            }
+            // never blocks
+            assertTrue(scheduleResult.getBlocked().isDone());
 
-            stage.abort();
+            // first three splits create new tasks
+            assertEquals(scheduleResult.getNewTasks().size(), i < 3 ? 1 : 0);
+            assertEquals(stage.getAllTasks().size(), i < 3 ? i + 1 : 3);
+
+            assertPartitionedSplitCount(stage, min(i + 1, 60));
         }
+
+        for (RemoteTask remoteTask : stage.getAllTasks()) {
+            assertEquals(remoteTask.getPartitionedSplitCount(), 20);
+        }
+
+        stage.abort();
     }
 
     @Test
@@ -323,8 +319,8 @@ public class TestSourcePartitionedScheduler
     {
         assertPrestoExceptionThrownBy(() -> {
             NodeTaskMap nodeTaskMap = new NodeTaskMap(finalizerService);
-            InMemoryNodeManager memoryNodeManager = new InMemoryNodeManager();
-            NodeScheduler nodeScheduler = new NodeScheduler(new LegacyNetworkTopology(), memoryNodeManager, new NodeSchedulerConfig().setIncludeCoordinator(false), nodeTaskMap);
+            InMemoryNodeManager nodeManager = new InMemoryNodeManager();
+            NodeScheduler nodeScheduler = new NodeScheduler(new LegacyNetworkTopology(), nodeManager, new NodeSchedulerConfig().setIncludeCoordinator(false), nodeTaskMap);
 
             StageExecutionPlan plan = createPlan(createFixedSplitSource(20, TestingSplit::createRemoteSplit));
             SqlStageExecution stage = createSqlStageExecution(plan, nodeTaskMap);
@@ -333,7 +329,7 @@ public class TestSourcePartitionedScheduler
                     stage,
                     Iterables.getOnlyElement(plan.getSplitSources().keySet()),
                     Iterables.getOnlyElement(plan.getSplitSources().values()),
-                    new DynamicSplitPlacementPolicy(nodeScheduler.createNodeSelector(CONNECTOR_ID, false, null), stage::getAllTasks),
+                    new DynamicSplitPlacementPolicy(nodeScheduler.createNodeSelector(CONNECTOR_ID), stage::getAllTasks),
                     2, session, new HeuristicIndexerManager(new FileSystemClientManager(), new HetuMetaStoreManager()));
             scheduler.schedule();
         }).hasErrorCode(NO_NODES_AVAILABLE);
@@ -343,8 +339,8 @@ public class TestSourcePartitionedScheduler
     public void testBalancedSplitAssignment()
     {
         // use private node manager so we can add a node later
-        InMemoryNodeManager memoryNodeManager = new InMemoryNodeManager();
-        memoryNodeManager.addNode(CONNECTOR_ID,
+        InMemoryNodeManager nodeManager = new InMemoryNodeManager();
+        nodeManager.addNode(CONNECTOR_ID,
                 new InternalNode("other1", URI.create("http://127.0.0.1:11"), NodeVersion.UNKNOWN, false),
                 new InternalNode("other2", URI.create("http://127.0.0.1:12"), NodeVersion.UNKNOWN, false),
                 new InternalNode("other3", URI.create("http://127.0.0.1:13"), NodeVersion.UNKNOWN, false));
@@ -353,7 +349,7 @@ public class TestSourcePartitionedScheduler
         // Schedule 15 splits - there are 3 nodes, each node should get 5 splits
         StageExecutionPlan firstPlan = createPlan(createFixedSplitSource(15, TestingSplit::createRemoteSplit));
         SqlStageExecution firstStage = createSqlStageExecution(firstPlan, nodeTaskMap);
-        StageScheduler firstScheduler = getSourcePartitionedScheduler(firstPlan, firstStage, memoryNodeManager, nodeTaskMap, 200);
+        StageScheduler firstScheduler = getSourcePartitionedScheduler(firstPlan, firstStage, nodeManager, nodeTaskMap, 200);
 
         ScheduleResult scheduleResult = firstScheduler.schedule();
         assertEffectivelyFinished(scheduleResult, firstScheduler);
@@ -366,12 +362,12 @@ public class TestSourcePartitionedScheduler
 
         // Add new node
         InternalNode additionalNode = new InternalNode("other4", URI.create("http://127.0.0.1:14"), NodeVersion.UNKNOWN, false);
-        memoryNodeManager.addNode(CONNECTOR_ID, additionalNode);
+        nodeManager.addNode(CONNECTOR_ID, additionalNode);
 
         // Schedule 5 splits in another query. Since the new node does not have any splits, all 5 splits are assigned to the new node
         StageExecutionPlan secondPlan = createPlan(createFixedSplitSource(5, TestingSplit::createRemoteSplit));
         SqlStageExecution secondStage = createSqlStageExecution(secondPlan, nodeTaskMap);
-        StageScheduler secondScheduler = getSourcePartitionedScheduler(secondPlan, secondStage, memoryNodeManager, nodeTaskMap, 200);
+        StageScheduler secondScheduler = getSourcePartitionedScheduler(secondPlan, secondStage, nodeManager, nodeTaskMap, 200);
 
         scheduleResult = secondScheduler.schedule();
         assertEffectivelyFinished(scheduleResult, secondScheduler);
@@ -457,7 +453,7 @@ public class TestSourcePartitionedScheduler
 
         PlanNodeId sourceNode = Iterables.getOnlyElement(plan.getSplitSources().keySet());
         SplitSource splitSource = Iterables.getOnlyElement(plan.getSplitSources().values());
-        SplitPlacementPolicy placementPolicy = new DynamicSplitPlacementPolicy(nodeScheduler.createNodeSelector(splitSource.getCatalogName(), false, null), stage::getAllTasks);
+        SplitPlacementPolicy placementPolicy = new DynamicSplitPlacementPolicy(nodeScheduler.createNodeSelector(splitSource.getCatalogName()), stage::getAllTasks);
         return newSourcePartitionedSchedulerAsStageScheduler(stage, sourceNode, splitSource,
                 placementPolicy, splitBatchSize, session, new HeuristicIndexerManager(new FileSystemClientManager(), new HetuMetaStoreManager()));
     }
@@ -509,7 +505,7 @@ public class TestSourcePartitionedScheduler
                 ImmutableMap.of(tableScanNodeId, new TableInfo(new QualifiedObjectName("test", "test", "test"), TupleDomain.all())));
     }
 
-    public static ConnectorSplitSource createFixedSplitSource(int splitCount, Supplier<ConnectorSplit> splitFactory)
+    private static ConnectorSplitSource createFixedSplitSource(int splitCount, Supplier<ConnectorSplit> splitFactory)
     {
         ImmutableList.Builder<ConnectorSplit> splits = ImmutableList.builder();
 
@@ -533,9 +529,7 @@ public class TestSourcePartitionedScheduler
                 queryExecutor,
                 new NoOpFailureDetector(),
                 new SplitSchedulerStats(),
-                new DynamicFilterService(new LocalStateStoreProvider(seedStoreManager)),
-                new QuerySnapshotManager(stageId.getQueryId(), NOOP_RECOVERY_UTILS, TEST_SESSION),
-                new QueryRecoveryManager(TestingRecoveryUtils.NOOP_RECOVERY_UTILS, TEST_SESSION, stageId.getQueryId()));
+                new DynamicFilterService(new LocalStateStoreProvider(seedStoreManager)));
 
         stage.setOutputBuffers(createInitialEmptyOutputBuffers(PARTITIONED)
                 .withBuffer(OUT, 0)

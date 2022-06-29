@@ -182,8 +182,6 @@ public class ElasticsearchMetadata
                     return BOOLEAN;
                 case "binary":
                     return VARBINARY;
-                default:
-                    break;
             }
         }
         else if (type instanceof DateTimeType) {

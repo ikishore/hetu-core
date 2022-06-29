@@ -19,7 +19,6 @@ import io.prestosql.Session;
 import io.prestosql.execution.scheduler.BucketNodeMap;
 import io.prestosql.execution.scheduler.FixedBucketNodeMap;
 import io.prestosql.execution.scheduler.NodeScheduler;
-import io.prestosql.execution.scheduler.NodeSelector;
 import io.prestosql.execution.scheduler.group.DynamicBucketNodeMap;
 import io.prestosql.metadata.InternalNode;
 import io.prestosql.metadata.Split;
@@ -32,6 +31,7 @@ import io.prestosql.spi.connector.ConnectorNodePartitioningProvider;
 import io.prestosql.spi.connector.ConnectorPartitionHandle;
 import io.prestosql.spi.connector.ConnectorSplit;
 import io.prestosql.spi.type.Type;
+import io.prestosql.split.EmptySplit;
 
 import javax.inject.Inject;
 
@@ -48,9 +48,6 @@ import java.util.stream.Stream;
 
 import static com.google.common.base.Preconditions.checkArgument;
 import static com.google.common.collect.ImmutableList.toImmutableList;
-import static io.prestosql.snapshot.RecoveryConfig.calculateTaskCount;
-import static io.prestosql.spi.StandardErrorCode.NO_NODES_AVAILABLE;
-import static io.prestosql.util.Failures.checkCondition;
 import static java.util.Objects.requireNonNull;
 
 public class NodePartitioningManager
@@ -121,13 +118,13 @@ public class NodePartitioningManager
                 partitioningHandle.getConnectorHandle());
     }
 
-    public NodePartitionMap getNodePartitioningMap(Session session, PartitioningHandle partitioningHandle, boolean isRecoveryEnabled, Integer nodeCount)
+    public NodePartitionMap getNodePartitioningMap(Session session, PartitioningHandle partitioningHandle)
     {
         requireNonNull(session, "session is null");
         requireNonNull(partitioningHandle, "partitioningHandle is null");
 
         if (partitioningHandle.getConnectorHandle() instanceof SystemPartitioningHandle) {
-            return ((SystemPartitioningHandle) partitioningHandle.getConnectorHandle()).getNodePartitionMap(session, nodeScheduler, isRecoveryEnabled, nodeCount);
+            return ((SystemPartitioningHandle) partitioningHandle.getConnectorHandle()).getNodePartitionMap(session, nodeScheduler);
         }
 
         CatalogName catalogName = partitioningHandle.getConnectorId()
@@ -144,22 +141,8 @@ public class NodePartitioningManager
             bucketToNode = getFixedMapping(connectorBucketNodeMap);
         }
         else {
-            NodeSelector nodeSelector = nodeScheduler.createNodeSelector(catalogName, false, null);
-            List<InternalNode> nodes;
-            if (isRecoveryEnabled) {
-                Integer count = nodeCount;
-                if (count == null) {
-                    // Initial schedule: reserve some nodes
-                    count = calculateTaskCount(nodeSelector.selectableNodeCount());
-                }
-                nodes = nodeSelector.selectRandomNodes(count);
-                checkCondition(nodes.size() == count, NO_NODES_AVAILABLE, "Snapshot: not enough worker nodes to resume expected number of tasks: " + count);
-            }
-            else {
-                nodes = nodeSelector.allNodes();
-            }
             bucketToNode = createArbitraryBucketToNode(
-                    nodes,
+                    nodeScheduler.createNodeSelector(catalogName).allNodes(),
                     connectorBucketNodeMap.getBucketCount());
         }
 
@@ -185,33 +168,20 @@ public class NodePartitioningManager
 
     public BucketNodeMap getBucketNodeMap(Session session, PartitioningHandle partitioningHandle, boolean preferDynamic)
     {
-        return getBucketNodeMap(session, partitioningHandle, preferDynamic, null);
-    }
-
-    // Snapshot: When nodeCount > 0, it indicates how many nodes must be allocated
-    public BucketNodeMap getBucketNodeMap(Session session, PartitioningHandle partitioningHandle, boolean preferDynamic, List<InternalNode> inputNodes)
-    {
-        List<InternalNode> nodes = inputNodes;
         ConnectorBucketNodeMap connectorBucketNodeMap = getConnectorBucketNodeMap(session, partitioningHandle);
 
-        // Snapshot: this is never true for all implementations, so no change
         if (connectorBucketNodeMap.hasFixedMapping()) {
             return new FixedBucketNodeMap(getSplitToBucket(session, partitioningHandle), getFixedMapping(connectorBucketNodeMap));
         }
 
-        // Snapshot: this doesn't have pointers to nodes or number of nodes initially, so no change
         if (preferDynamic) {
             return new DynamicBucketNodeMap(getSplitToBucket(session, partitioningHandle), connectorBucketNodeMap.getBucketCount());
         }
 
-        // Snapshot: only need to make sure this use the supplied node list if any
-        if (nodes == null) {
-            nodes = nodeScheduler.createNodeSelector(partitioningHandle.getConnectorId().get(), false, null).allNodes();
-        }
         return new FixedBucketNodeMap(
                 getSplitToBucket(session, partitioningHandle),
                 createArbitraryBucketToNode(
-                        new ArrayList<>(nodes),
+                        new ArrayList<>(nodeScheduler.createNodeSelector(partitioningHandle.getConnectorId().get()).allNodes()),
                         connectorBucketNodeMap.getBucketCount()));
     }
 
@@ -251,7 +221,7 @@ public class NodePartitioningManager
 
         return split -> {
             int bucket;
-            if (split.getConnectorSplit().isSplitEmpty()) {
+            if (split.getConnectorSplit() instanceof EmptySplit) {
                 bucket = split.getLifespan().isTaskWide() ? 0 : split.getLifespan().getId();
             }
             else {

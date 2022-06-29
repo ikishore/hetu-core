@@ -33,6 +33,8 @@ public interface PagesHashStrategy
      */
     void appendTo(int blockIndex, int position, PageBuilder pageBuilder, int outputChannelOffset);
 
+    long getAsInt(int blockIndex, int position, int offset);
+
     /**
      * Calculates the hash code the hashed columns in this PagesHashStrategy at the specified position.
      */

@@ -21,8 +21,6 @@ import io.airlift.discovery.store.Version;
 import io.airlift.units.Duration;
 import org.testng.annotations.Test;
 
-import java.nio.charset.StandardCharsets;
-
 import static org.testng.Assert.assertEquals;
 import static org.testng.Assert.assertFalse;
 import static org.testng.Assert.assertTrue;
@@ -37,10 +35,9 @@ public class TestHetuInMemoryStore
                 .setStoreCacheTtl(Duration.valueOf("5s"));
 
         HetuInMemoryStore inMemoryStore = new HetuInMemoryStore(new ConflictResolver(), discoveryConfig);
-        Entry entry = new Entry("key".getBytes(StandardCharsets.UTF_8), "value".getBytes(StandardCharsets.UTF_8),
-                new Version(1L), 0L, null);
+        Entry entry = new Entry("key".getBytes(), "value".getBytes(), new Version(1L), 0L, null);
         inMemoryStore.put(entry);
-        Entry check = inMemoryStore.get("key".getBytes(StandardCharsets.UTF_8));
+        Entry check = inMemoryStore.get("key".getBytes());
         assertFalse(check.equals(entry));
         assertEquals((long) check.getMaxAgeInMs(), 10000L);
     }
@@ -53,10 +50,9 @@ public class TestHetuInMemoryStore
                 .setStoreCacheTtl(Duration.valueOf("5s"));
 
         HetuInMemoryStore inMemoryStore = new HetuInMemoryStore(new ConflictResolver(), discoveryConfig);
-        Entry entry = new Entry("key".getBytes(StandardCharsets.UTF_8), "value".getBytes(StandardCharsets.UTF_8),
-                new Version(1L), 0L, 5000L);
+        Entry entry = new Entry("key".getBytes(), "value".getBytes(), new Version(1L), 0L, 5000L);
         inMemoryStore.put(entry);
-        Entry check = inMemoryStore.get("key".getBytes(StandardCharsets.UTF_8));
+        Entry check = inMemoryStore.get("key".getBytes());
         assertTrue(check.equals(entry));
         assertEquals((long) check.getMaxAgeInMs(), 5000L);
     }

@@ -1,5 +1,5 @@
 /*
- * Copyright (C) 2018-2021. Huawei Technologies Co., Ltd. All rights reserved.
+ * Copyright (C) 2018-2020. Huawei Technologies Co., Ltd. All rights reserved.
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
  * You may obtain a copy of the License at
@@ -23,6 +23,7 @@ import java.util.Collections;
 import java.util.HashSet;
 import java.util.List;
 import java.util.Objects;
+import java.util.Optional;
 import java.util.Set;
 import java.util.StringJoiner;
 
@@ -30,12 +31,13 @@ import static java.util.Objects.requireNonNull;
 
 public class CubeStatement
 {
-    private final String from;
     private final Set<String> groupBy;
     private final Set<String> selection;
+    private final String from;
     private final List<AggregationSignature> aggregations;
+    private final String where;
 
-    private CubeStatement(
+    public CubeStatement(
             Set<String> selection,
             String from,
             Set<String> groupBy,
@@ -43,6 +45,21 @@ public class CubeStatement
     {
         this.selection = requireNonNull(selection, "selection is null");
         this.from = requireNonNull(from, "from is null");
+        this.where = null;
+        this.groupBy = requireNonNull(groupBy, "groupBy is null");
+        this.aggregations = requireNonNull(aggregations, "aggregations is null");
+    }
+
+    public CubeStatement(
+            Set<String> selection,
+            String from,
+            String where,
+            Set<String> groupBy,
+            List<AggregationSignature> aggregations)
+    {
+        this.selection = requireNonNull(selection, "selection is null");
+        this.from = requireNonNull(from, "from is null");
+        this.where = where;
         this.groupBy = requireNonNull(groupBy, "groupBy is null");
         this.aggregations = requireNonNull(aggregations, "aggregations is null");
     }
@@ -72,6 +89,11 @@ public class CubeStatement
         return groupBy;
     }
 
+    public Optional<String> getWhere()
+    {
+        return Optional.ofNullable(where);
+    }
+
     @Override
     public boolean equals(Object o)
     {
@@ -84,6 +106,7 @@ public class CubeStatement
         CubeStatement that = (CubeStatement) o;
         return Objects.equals(selection, that.selection) &&
                 Objects.equals(from, that.from) &&
+                Objects.equals(where, that.where) &&
                 Objects.equals(groupBy, that.groupBy) &&
                 Objects.equals(aggregations, that.aggregations);
     }
@@ -91,7 +114,7 @@ public class CubeStatement
     @Override
     public int hashCode()
     {
-        return Objects.hash(selection, from, groupBy, aggregations);
+        return Objects.hash(selection, from, where, groupBy, aggregations);
     }
 
     @Override
@@ -104,14 +127,21 @@ public class CubeStatement
         StringJoiner groupingColumns = new StringJoiner(", ");
         groupBy.forEach(groupingColumns::add);
 
+        StringBuilder whereBuilder = new StringBuilder();
+        if (where != null) {
+            whereBuilder.append(where.toString());
+        }
+
         return "SELECT " + columns +
                 " FROM " + from +
+                whereBuilder.toString() +
                 (groupBy.isEmpty() ? "" : " GROUP BY " + groupingColumns);
     }
 
     public static class Builder
     {
         private String from;
+        private String where;
         private final Set<String> groupBy = new HashSet<>();
         private final Set<String> selection = new HashSet<>();
         private final List<AggregationSignature> aggregations = new ArrayList<>();
@@ -140,15 +170,21 @@ public class CubeStatement
             return this;
         }
 
-        public Builder groupByAddString(String column)
+        public Builder where(String where)
         {
-            this.groupBy.add(column);
+            this.where = where;
             return this;
         }
 
-        public Builder groupByAddStringList(String... columns)
+        public Builder groupBy(String constraint)
         {
-            this.groupBy.addAll(Arrays.asList(columns));
+            this.groupBy.add(constraint);
+            return this;
+        }
+
+        public Builder groupBy(String... constraints)
+        {
+            this.groupBy.addAll(Arrays.asList(constraints));
             return this;
         }
 
@@ -157,7 +193,7 @@ public class CubeStatement
             if (this.aggregations.isEmpty() && this.selection.isEmpty()) {
                 throw new UnsupportedOperationException("Cannot construct a cube statement without selection and aggregation");
             }
-            return new CubeStatement(Collections.unmodifiableSet(selection), from, Collections.unmodifiableSet(groupBy), Collections.unmodifiableList(aggregations));
+            return new CubeStatement(Collections.unmodifiableSet(selection), from, where, Collections.unmodifiableSet(groupBy), Collections.unmodifiableList(aggregations));
         }
     }
 }

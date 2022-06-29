@@ -16,8 +16,9 @@ package io.prestosql.sql.planner.assertions;
 import io.airlift.slice.Slice;
 import io.prestosql.Session;
 import io.prestosql.metadata.Metadata;
-import io.prestosql.spi.function.FunctionMetadata;
+import io.prestosql.operator.scalar.TryFunction;
 import io.prestosql.spi.function.OperatorType;
+import io.prestosql.spi.function.Signature;
 import io.prestosql.spi.plan.Symbol;
 import io.prestosql.spi.relation.CallExpression;
 import io.prestosql.spi.relation.ConstantExpression;
@@ -27,7 +28,6 @@ import io.prestosql.spi.relation.SpecialForm;
 import io.prestosql.spi.relation.VariableReferenceExpression;
 import io.prestosql.spi.type.RowType;
 import io.prestosql.sql.planner.LiteralInterpreter;
-import io.prestosql.sql.relational.FunctionResolution;
 import io.prestosql.sql.tree.ArithmeticBinaryExpression;
 import io.prestosql.sql.tree.AstVisitor;
 import io.prestosql.sql.tree.BetweenPredicate;
@@ -97,7 +97,6 @@ final class RowExpressionVerifier
     private final Metadata metadata;
     private final Session session;
     private final List<Symbol> symbols;
-    private final FunctionResolution functionResolution;
 
     RowExpressionVerifier(SymbolAliases symbolAliases, Metadata metadata, Session session, List<Symbol> symbols)
     {
@@ -105,7 +104,6 @@ final class RowExpressionVerifier
         this.metadata = requireNonNull(metadata, "metadata is null");
         this.session = requireNonNull(session, "session is null");
         this.symbols = symbols;
-        this.functionResolution = new FunctionResolution(metadata.getFunctionAndTypeManager());
     }
 
     @Override
@@ -117,7 +115,7 @@ final class RowExpressionVerifier
     @Override
     protected Boolean visitTryExpression(TryExpression expected, RowExpression actual)
     {
-        if (!(actual instanceof CallExpression) || !functionResolution.isTryFunction(((CallExpression) actual).getFunctionHandle())) {
+        if (!(actual instanceof CallExpression) || !((CallExpression) actual).getSignature().getName().equals(TryFunction.NAME)) {
             return false;
         }
 
@@ -140,7 +138,9 @@ final class RowExpressionVerifier
         if (actual instanceof VariableReferenceExpression && expected.getExpression() instanceof SymbolReference && expected.getType().equals(actual.getType().toString())) {
             return visitSymbolReference((SymbolReference) expected.getExpression(), actual);
         }
-        if (!(actual instanceof CallExpression) || !functionResolution.isCastFunction(((CallExpression) actual).getFunctionHandle())) {
+        if (!(actual instanceof CallExpression) ||
+                !((CallExpression) actual).getSignature().getName().contains("$operator$") ||
+                !((CallExpression) actual).getSignature().unmangleOperator(((CallExpression) actual).getSignature().getName()).equals(OperatorType.CAST)) {
             return false;
         }
 
@@ -165,7 +165,7 @@ final class RowExpressionVerifier
     @Override
     protected Boolean visitIsNotNullPredicate(IsNotNullPredicate expected, RowExpression actual)
     {
-        if (!(actual instanceof CallExpression) || !functionResolution.isNotFunction(((CallExpression) actual).getFunctionHandle())) {
+        if (!(actual instanceof CallExpression) || !((CallExpression) actual).getSignature().getName().equals("not")) {
             return false;
         }
 
@@ -210,11 +210,11 @@ final class RowExpressionVerifier
     protected Boolean visitComparisonExpression(ComparisonExpression expected, RowExpression actual)
     {
         if (actual instanceof CallExpression) {
-            FunctionMetadata functionMetadata = metadata.getFunctionAndTypeManager().getFunctionMetadata(((CallExpression) actual).getFunctionHandle());
-            if (!functionMetadata.getOperatorType().isPresent() || !functionMetadata.getOperatorType().get().isComparisonOperator()) {
+            Signature signature = ((CallExpression) actual).getSignature();
+            if (!signature.getName().contains("$operator$") || !signature.unmangleOperator(signature.getName()).isComparisonOperator()) {
                 return false;
             }
-            OperatorType actualOperatorType = functionMetadata.getOperatorType().get();
+            OperatorType actualOperatorType = signature.unmangleOperator(signature.getName());
             OperatorType expectedOperatorType = getOperatorType(expected.getOperator());
             if (expectedOperatorType.equals(actualOperatorType)) {
                 if (actualOperatorType == EQUAL) {
@@ -263,11 +263,11 @@ final class RowExpressionVerifier
     protected Boolean visitArithmeticBinary(ArithmeticBinaryExpression expected, RowExpression actual)
     {
         if (actual instanceof CallExpression) {
-            FunctionMetadata functionMetadata = metadata.getFunctionAndTypeManager().getFunctionMetadata(((CallExpression) actual).getFunctionHandle());
-            if (!functionMetadata.getOperatorType().isPresent() || !functionMetadata.getOperatorType().get().isArithmeticOperator()) {
+            Signature signature = ((CallExpression) actual).getSignature();
+            if (!signature.getName().contains("$operator$") || !signature.unmangleOperator(signature.getName()).isArithmeticOperator()) {
                 return false;
             }
-            OperatorType actualOperatorType = functionMetadata.getOperatorType().get();
+            OperatorType actualOperatorType = signature.unmangleOperator(signature.getName());
             OperatorType expectedOperatorType = getOperatorType(expected.getOperator());
             if (expectedOperatorType.equals(actualOperatorType)) {
                 return process(expected.getLeft(), ((CallExpression) actual).getArguments().get(0)) && process(expected.getRight(), ((CallExpression) actual).getArguments().get(1));
@@ -380,7 +380,8 @@ final class RowExpressionVerifier
 
     private Boolean compareLiteral(Node expected, RowExpression actual)
     {
-        if (actual instanceof CallExpression && functionResolution.isCastFunction(((CallExpression) actual).getFunctionHandle())) {
+        if (actual instanceof CallExpression && ((CallExpression) actual).getSignature().getName().contains("$operator$") &&
+                ((CallExpression) actual).getSignature().unmangleOperator(((CallExpression) actual).getSignature().getName()).equals(OperatorType.CAST)) {
             if (((CallExpression) actual).getArguments().get(0) instanceof ConstantExpression) {
                 return getValueFromLiteral(expected).equals(String.valueOf(LiteralInterpreter.evaluate((ConstantExpression) (((CallExpression) actual).getArguments().get(0)))));
             }
@@ -395,7 +396,8 @@ final class RowExpressionVerifier
     @Override
     protected Boolean visitStringLiteral(StringLiteral expected, RowExpression actual)
     {
-        if (actual instanceof CallExpression && functionResolution.isCastFunction(((CallExpression) actual).getFunctionHandle())) {
+        if (actual instanceof CallExpression && ((CallExpression) actual).getSignature().getName().contains("$operator$") &&
+                ((CallExpression) actual).getSignature().unmangleOperator(((CallExpression) actual).getSignature().getName()).equals(OperatorType.CAST)) {
             Object value = rowExpressionInterpreter(actual, metadata, session.toConnectorSession()).evaluate();
             if (value instanceof Slice) {
                 return expected.getValue().equals(((Slice) value).toStringUtf8());
@@ -425,7 +427,8 @@ final class RowExpressionVerifier
     @Override
     protected Boolean visitBetweenPredicate(BetweenPredicate expected, RowExpression actual)
     {
-        if (actual instanceof CallExpression && functionResolution.isBetweenFunction(((CallExpression) actual).getFunctionHandle())) {
+        if (actual instanceof CallExpression && ((CallExpression) actual).getSignature().getName().contains("$operator$") &&
+                ((CallExpression) actual).getSignature().unmangleOperator(((CallExpression) actual).getSignature().getName()).equals(OperatorType.BETWEEN)) {
             return process(expected.getValue(), ((CallExpression) actual).getArguments().get(0)) &&
                     process(expected.getMin(), ((CallExpression) actual).getArguments().get(1)) &&
                     process(expected.getMax(), ((CallExpression) actual).getArguments().get(2));
@@ -437,7 +440,7 @@ final class RowExpressionVerifier
     @Override
     protected Boolean visitNotExpression(NotExpression expected, RowExpression actual)
     {
-        if (!(actual instanceof CallExpression) || !functionResolution.isNotFunction(((CallExpression) actual).getFunctionHandle())) {
+        if (!(actual instanceof CallExpression) || !((CallExpression) actual).getSignature().getName().equals("not")) {
             return false;
         }
         return process(expected.getValue(), ((CallExpression) actual).getArguments().get(0));
@@ -523,7 +526,7 @@ final class RowExpressionVerifier
         }
         CallExpression actualFunction = (CallExpression) actual;
 
-        if (!expected.getName().getSuffix().equalsIgnoreCase(metadata.getFunctionAndTypeManager().getFunctionMetadata(actualFunction.getFunctionHandle()).getName().getObjectName())) {
+        if (!actualFunction.getSignature().getName().contains(expected.getName().getSuffix())) {
             return false;
         }
 

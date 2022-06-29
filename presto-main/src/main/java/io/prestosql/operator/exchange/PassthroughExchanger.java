@@ -26,18 +26,16 @@ public class PassthroughExchanger
     private final LocalExchangeSource localExchangeSource;
     private final LocalExchangeMemoryManager bufferMemoryManager;
     private final LongConsumer memoryTracker;
-    private final boolean isForMerge;
 
-    public PassthroughExchanger(LocalExchangeSource localExchangeSource, long bufferMaxMemory, LongConsumer memoryTracker, boolean isForMerge)
+    public PassthroughExchanger(LocalExchangeSource localExchangeSource, long bufferMaxMemory, LongConsumer memoryTracker)
     {
         this.localExchangeSource = requireNonNull(localExchangeSource, "localExchangeSource is null");
         this.bufferMemoryManager = new LocalExchangeMemoryManager(bufferMaxMemory);
         this.memoryTracker = requireNonNull(memoryTracker, "memoryTracker is null");
-        this.isForMerge = isForMerge;
     }
 
     @Override
-    public void accept(Page page, String origin)
+    public void accept(Page page)
     {
         long retainedSizeInBytes = page.getRetainedSizeInBytes();
         bufferMemoryManager.updateMemoryUsage(retainedSizeInBytes);
@@ -48,7 +46,7 @@ public class PassthroughExchanger
             memoryTracker.accept(-retainedSizeInBytes);
         });
 
-        localExchangeSource.addPage(pageReference, origin);
+        localExchangeSource.addPage(pageReference);
     }
 
     @Override
@@ -60,16 +58,6 @@ public class PassthroughExchanger
     @Override
     public void finish()
     {
-        // If PassthroughExchanger serves LocalMergeSourceOperator, it needs to call finish on its localExchangeSource
-        // otherwise the entire pipeline will be blocked, but if it's used for LocalExchangeSourceOperator,
-        // DO NOT call finish() on the localExchangeSource in this case, because other sinks may still need to send markers to it
-        if (isForMerge) {
-            localExchangeSource.finish();
-        }
-    }
-
-    public LocalExchangeSource getLocalExchangeSource()
-    {
-        return localExchangeSource;
+        localExchangeSource.finish();
     }
 }

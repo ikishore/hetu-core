@@ -21,8 +21,6 @@ import com.google.common.collect.ImmutableMap;
 import com.google.common.collect.ImmutableSet;
 import io.airlift.log.Logger;
 import io.airlift.units.Duration;
-import io.prestosql.plugin.splitmanager.SplitStatLog;
-import io.prestosql.plugin.splitmanager.TableSplitConfig;
 import io.prestosql.spi.PrestoException;
 import io.prestosql.spi.connector.ColumnHandle;
 import io.prestosql.spi.connector.ColumnMetadata;
@@ -32,14 +30,12 @@ import io.prestosql.spi.connector.ConnectorTableMetadata;
 import io.prestosql.spi.connector.FixedSplitSource;
 import io.prestosql.spi.connector.SchemaTableName;
 import io.prestosql.spi.connector.TableNotFoundException;
-import io.prestosql.spi.function.ExternalFunctionHub;
 import io.prestosql.spi.predicate.TupleDomain;
 import io.prestosql.spi.statistics.TableStatistics;
 import io.prestosql.spi.type.CharType;
 import io.prestosql.spi.type.DecimalType;
 import io.prestosql.spi.type.Type;
 import io.prestosql.spi.type.VarcharType;
-import io.prestosql.sql.builder.functioncall.JdbcExternalFunctionHub;
 
 import javax.annotation.PreDestroy;
 
@@ -97,7 +93,6 @@ import static io.prestosql.spi.type.Varchars.isVarcharType;
 import static java.lang.String.format;
 import static java.lang.String.join;
 import static java.sql.DatabaseMetaData.columnNoNulls;
-import static java.util.Collections.emptyList;
 import static java.util.Collections.nCopies;
 import static java.util.Locale.ENGLISH;
 import static java.util.Objects.requireNonNull;
@@ -127,7 +122,6 @@ public class BaseJdbcClient
     protected final Cache<RemoteTableNameCacheKey, Map<String, String>> remoteTableNames;
     // Hetu: JDBC fetch size configuration
     protected final int fetchSize;
-    private final ExternalFunctionHub externalFunctionHub;
 
     public BaseJdbcClient(BaseJdbcConfig config, String identifierQuote, ConnectionFactory connectionFactory)
     {
@@ -136,19 +130,7 @@ public class BaseJdbcClient
                 connectionFactory,
                 requireNonNull(config, "config is null").isCaseInsensitiveNameMatching(),
                 config.getCaseInsensitiveNameMatchingCacheTtl(),
-                config.getFetchSize(), // Hetu: Read JDBC fetch size configuration
-                new JdbcExternalFunctionHub());
-    }
-
-    public BaseJdbcClient(BaseJdbcConfig config, String identifierQuote, ConnectionFactory connectionFactory, ExternalFunctionHub externalFunctionHub)
-    {
-        this(
-                identifierQuote,
-                connectionFactory,
-                requireNonNull(config, "config is null").isCaseInsensitiveNameMatching(),
-                config.getCaseInsensitiveNameMatchingCacheTtl(),
-                config.getFetchSize(), // Hetu: Read JDBC fetch size configuration
-                externalFunctionHub);
+                config.getFetchSize()); // Hetu: Read JDBC fetch size configuration
     }
 
     public BaseJdbcClient(
@@ -157,7 +139,7 @@ public class BaseJdbcClient
             boolean caseInsensitiveNameMatching,
             Duration caseInsensitiveNameMatchingCacheTtl)
     {
-        this(identifierQuote, connectionFactory, caseInsensitiveNameMatching, caseInsensitiveNameMatchingCacheTtl, -1, new JdbcExternalFunctionHub());
+        this(identifierQuote, connectionFactory, caseInsensitiveNameMatching, caseInsensitiveNameMatchingCacheTtl, -1);
     }
 
     /**
@@ -174,8 +156,7 @@ public class BaseJdbcClient
             ConnectionFactory connectionFactory,
             boolean caseInsensitiveNameMatching,
             Duration caseInsensitiveNameMatchingCacheTtl,
-            int fetchSize,
-            ExternalFunctionHub externalFunctionHub)
+            int fetchSize)
     {
         this.identifierQuote = requireNonNull(identifierQuote, "identifierQuote is null");
         this.connectionFactory = requireNonNull(connectionFactory, "connectionFactory is null");
@@ -187,7 +168,6 @@ public class BaseJdbcClient
         this.remoteSchemaNames = remoteNamesCacheBuilder.build();
         this.remoteTableNames = remoteNamesCacheBuilder.build();
         this.fetchSize = fetchSize;
-        this.externalFunctionHub = requireNonNull(externalFunctionHub, "externalFunctionHub is null");
     }
 
     @PreDestroy
@@ -319,18 +299,13 @@ public class BaseJdbcClient
     @Override
     public Optional<ColumnMapping> toPrestoType(ConnectorSession session, Connection connection, JdbcTypeHandle typeHandle)
     {
-        return jdbcTypeToPrestoType(typeHandle);
+        return jdbcTypeToPrestoType(session, typeHandle);
     }
 
     @Override
     public ConnectorSplitSource getSplits(JdbcIdentity identity, JdbcTableHandle tableHandle)
     {
-        return new FixedSplitSource(ImmutableList.of(new JdbcSplit(tableHandle.getCatalogName(),
-                tableHandle.getSchemaName(),
-                tableHandle.getTableName(),
-                "", "", "",
-                System.nanoTime(), 1,
-                Optional.empty())));
+        return new FixedSplitSource(ImmutableList.of(new JdbcSplit(Optional.empty())));
     }
 
     @Override
@@ -412,7 +387,7 @@ public class BaseJdbcClient
         }
     }
 
-    protected JdbcOutputTableHandle createTable(ConnectorSession session, ConnectorTableMetadata tableMetadata, String inputTableName)
+    protected JdbcOutputTableHandle createTable(ConnectorSession session, ConnectorTableMetadata tableMetadata, String tableName)
             throws SQLException
     {
         SchemaTableName schemaTableName = tableMetadata.getTable();
@@ -422,7 +397,6 @@ public class BaseJdbcClient
             throw new PrestoException(NOT_FOUND, "Schema not found: " + schemaTableName.getSchemaName());
         }
 
-        String tableName = inputTableName;
         try (Connection connection = connectionFactory.openConnection(identity)) {
             boolean uppercase = connection.getMetaData().storesUpperCaseIdentifiers();
             String remoteSchema = toRemoteSchemaName(identity, connection, schemaTableName.getSchemaName());
@@ -562,15 +536,14 @@ public class BaseJdbcClient
     public void renameColumn(JdbcIdentity identity, JdbcTableHandle handle, JdbcColumnHandle jdbcColumn, String newColumnName)
     {
         try (Connection connection = connectionFactory.openConnection(identity)) {
-            String colName = newColumnName;
             if (connection.getMetaData().storesUpperCaseIdentifiers()) {
-                colName = colName.toUpperCase(ENGLISH);
+                newColumnName = newColumnName.toUpperCase(ENGLISH);
             }
             String sql = format(
                     "ALTER TABLE %s RENAME COLUMN %s TO %s",
                     quoted(handle.getCatalogName(), handle.getSchemaName(), handle.getTableName()),
-                    quoted(jdbcColumn.getColumnName()),
-                    colName);
+                    jdbcColumn.getColumnName(),
+                    newColumnName);
             execute(connection, sql);
         }
         catch (SQLException e) {
@@ -642,12 +615,6 @@ public class BaseJdbcClient
             preparedStatement.setFetchSize(fetchSize);
         }
         return preparedStatement;
-    }
-
-    @Override
-    public Optional<ExternalFunctionHub> getExternalFunctionHub()
-    {
-        return Optional.of(this.externalFunctionHub);
     }
 
     protected ResultSet getTables(Connection connection, Optional<String> schemaName, Optional<String> tableName)
@@ -773,28 +740,6 @@ public class BaseJdbcClient
         return TableStatistics.empty();
     }
 
-    @Override
-    public void createSchema(ConnectorSession session, String schemaName)
-    {
-        execute(session, "CREATE SCHEMA " + quoted(schemaName));
-    }
-
-    @Override
-    public void dropSchema(ConnectorSession session, String schemaName)
-    {
-        execute(session, "DROP SCHEMA " + quoted(schemaName));
-    }
-
-    protected void execute(ConnectorSession session, String query)
-    {
-        try (Connection connection = connectionFactory.openConnection(JdbcIdentity.from(session))) {
-            execute(connection, query);
-        }
-        catch (SQLException e) {
-            throw new PrestoException(JDBC_ERROR, e);
-        }
-    }
-
     protected void execute(Connection connection, String query)
             throws SQLException
     {
@@ -866,8 +811,8 @@ public class BaseJdbcClient
 
     protected String quoted(String name)
     {
-        String nameReplace = name.replace(identifierQuote, identifierQuote + identifierQuote);
-        return identifierQuote + nameReplace + identifierQuote;
+        name = name.replace(identifierQuote, identifierQuote + identifierQuote);
+        return identifierQuote + name + identifierQuote;
     }
 
     protected String quoted(String catalog, String schema, String table)
@@ -897,10 +842,10 @@ public class BaseJdbcClient
         requireNonNull(escape, "escape is null");
         checkArgument(!escape.equals("_"), "Escape string must not be '_'");
         checkArgument(!escape.equals("%"), "Escape string must not be '%'");
-        String nameReplace = name.replace(escape, escape + escape);
-        nameReplace = nameReplace.replace("_", escape + "_");
-        nameReplace = nameReplace.replace("%", escape + "%");
-        return nameReplace;
+        name = name.replace(escape, escape + escape);
+        name = name.replace("_", escape + "_");
+        name = name.replace("%", escape + "%");
+        return name;
     }
 
     protected static ResultSet getColumns(JdbcTableHandle tableHandle, DatabaseMetaData metadata)
@@ -912,78 +857,5 @@ public class BaseJdbcClient
                 escapeNamePattern(Optional.ofNullable(tableHandle.getSchemaName()), escape).orElse(null),
                 escapeNamePattern(Optional.ofNullable(tableHandle.getTableName()), escape).orElse(null),
                 null);
-    }
-
-    @Override
-    public List<SplitStatLog> getSplitStatic(JdbcIdentity identity, List<JdbcSplit> jdbcSplitList)
-    {
-        if (jdbcSplitList.isEmpty()) {
-            return emptyList();
-        }
-
-        List<SplitStatLog> splitStatLogList = new ArrayList<>(jdbcSplitList.size());
-        try (Connection connection = this.getConnection(identity, (JdbcSplit) null);
-                Statement statement = connection.createStatement()) {
-            long timeStamp = System.nanoTime();
-            for (JdbcSplit split : jdbcSplitList) {
-                String sql = format(
-                        "select count(*) from %s where %s",
-                        quoted(jdbcSplitList.get(0).getCatalogName(), jdbcSplitList.get(0).getSchemaName(), jdbcSplitList.get(0).getTableName()),
-                        split.getAdditionalPredicate().get());
-                ResultSet result = statement.executeQuery(sql);
-                //only one row
-                if (result.next()) {
-                    SplitStatLog splitStatLog = new SplitStatLog();
-                    splitStatLog.setCatalogName(split.getCatalogName());
-                    splitStatLog.setSchemaName(split.getSchemaName());
-                    splitStatLog.setTableName(split.getTableName());
-                    splitStatLog.setSplitField(split.getSplitField());
-                    splitStatLog.setBeginIndex(Long.parseLong(split.getRangeStart()));
-                    splitStatLog.setEndIndex(Long.parseLong(split.getRangEnd()));
-                    splitStatLog.setRows(result.getLong(1));
-                    splitStatLog.setRecordFlag(SplitStatLog.LogState.STATE_NEW);
-                    splitStatLog.setTimeStamp(timeStamp);
-                    splitStatLog.setSplitCount(split.getSplitCount());
-                    result.close();
-                    splitStatLogList.add(splitStatLog);
-                }
-            }
-        }
-        catch (SQLException e) {
-            log.error("" + e.getMessage());
-        }
-        return splitStatLogList;
-    }
-
-    @Override
-    public Long[] getSplitFieldMinAndMaxValue(TableSplitConfig conf, Connection connection, JdbcTableHandle tableHandle)
-    {
-        Long[] value = new Long[2];
-        if (conf.getFieldMaxValue() != null && conf.getFieldMinValue() != null && conf.getFieldMaxValue() >= conf.getFieldMinValue()) {
-            value[0] = conf.getFieldMaxValue();
-            value[1] = conf.getFieldMinValue();
-            return value;
-        }
-        String sql = format(
-                "SELECT MAX(%s),MIN(%s) FROM %s",
-                conf.getSplitField(), conf.getSplitField(),
-                quoted(conf.getCatalogName(), conf.getSchemaName(), conf.getTableName()));
-
-        try (Statement stat = connection.createStatement(); ResultSet rs = stat.executeQuery(sql)) {
-            while (rs.next()) {
-                value[0] = rs.getLong(1);
-                value[1] = rs.getLong(2);
-
-                //if table no data, getLong still return 0, check this condition for null
-                if (rs.wasNull()) {
-                    return null;
-                }
-            }
-        }
-        catch (SQLException e) {
-            log.error("SQL : " + sql + ",getSplitFieldMinAndMaxValue error : " + e.getMessage());
-            return null;
-        }
-        return value;
     }
 }

@@ -572,11 +572,6 @@ public abstract class AstVisitor<R, C>
         return visitNode(node, context);
     }
 
-    protected R visitFunctionProperty(FunctionProperty node, C context)
-    {
-        return visitNode(node, context);
-    }
-
     protected R visitDropTable(DropTable node, C context)
     {
         return visitStatement(node, context);
@@ -645,31 +640,6 @@ public abstract class AstVisitor<R, C>
     protected R visitDropView(DropView node, C context)
     {
         return visitStatement(node, context);
-    }
-
-    protected R visitCreateFunction(CreateFunction node, C context)
-    {
-        return visitStatement(node, context);
-    }
-
-    protected R visitShowExternalFunction(ShowExternalFunction node, C context)
-    {
-        return visitStatement(node, context);
-    }
-
-    protected R visitRoutineBody(RoutineBody node, C context)
-    {
-        return visitNode(node, context);
-    }
-
-    protected R visitReturn(Return node, C context)
-    {
-        return visitNode(node, context);
-    }
-
-    protected R visitExternalBodyReference(ExternalBodyReference node, C context)
-    {
-        return visitNode(node, context);
     }
 
     protected R visitInsert(Insert node, C context)
@@ -888,21 +858,6 @@ public abstract class AstVisitor<R, C>
     }
 
     protected R visitInsertCube(InsertCube node, C context)
-    {
-        return visitStatement(node, context);
-    }
-
-    protected R visitRefreshMetadataCache(RefreshMetadataCache node, C context)
-    {
-        return visitStatement(node, context);
-    }
-
-    protected R visitShowViews(ShowViews node, C context)
-    {
-        return visitStatement(node, context);
-    }
-
-    protected R visitReloadCube(ReloadCube node, C context)
     {
         return visitStatement(node, context);
     }

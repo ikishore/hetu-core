@@ -1,5 +1,5 @@
 /*
- * Copyright (C) 2018-2021. Huawei Technologies Co., Ltd. All rights reserved.
+ * Copyright (C) 2018-2020. Huawei Technologies Co., Ltd. All rights reserved.
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
  * You may obtain a copy of the License at
@@ -33,7 +33,6 @@ import io.prestosql.spi.heuristicindex.IndexRecord;
 import io.prestosql.spi.predicate.TupleDomain;
 import io.prestosql.spi.service.PropertyService;
 import org.apache.hadoop.fs.Path;
-import org.eclipse.jetty.util.URIUtil;
 
 import java.io.IOException;
 import java.net.URI;
@@ -94,7 +93,6 @@ public class IndexCache
             if (PropertyService.getBooleanProperty(HetuConstant.FILTER_CACHE_SOFT_REFERENCE)) {
                 cacheBuilder.softValues();
             }
-            // Refresh cache according to index records in the background. Evict index from cache if it's dropped.
             executor.scheduleAtFixedRate(() -> {
                 try {
                     if (cache.size() > 0) {
@@ -149,7 +147,7 @@ public class IndexCache
         long lastModifiedTime = hiveSplit.getLastModifiedTime();
         Path path = new Path(hiveSplit.getPath());
 
-        URI pathUri = URI.create(URIUtil.encodePath(path.toString()));
+        URI pathUri = URI.create(path.toString().replaceAll(" ", "%20"));
         String tableFqn = catalog + "." + table;
 
         // for each split, load indexes for each predicate (if the predicate contains an indexed column)

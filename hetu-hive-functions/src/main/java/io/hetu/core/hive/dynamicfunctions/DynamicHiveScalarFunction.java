@@ -1,5 +1,5 @@
 /*
- * Copyright (C) 2018-2021. Huawei Technologies Co., Ltd. All rights reserved.
+ * Copyright (C) 2018-2020. Huawei Technologies Co., Ltd. All rights reserved.
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
  * You may obtain a copy of the License at
@@ -18,10 +18,9 @@ import io.hetu.core.hive.dynamicfunctions.utils.HetuTypeUtil;
 import io.prestosql.spi.PrestoException;
 import io.prestosql.spi.annotation.UsedByGeneratedCode;
 import io.prestosql.spi.classloader.ThreadContextClassLoader;
-import io.prestosql.spi.connector.QualifiedObjectName;
-import io.prestosql.spi.function.BuiltInScalarFunctionImplementation;
 import io.prestosql.spi.function.DynamicSqlScalarFunction;
 import io.prestosql.spi.function.FunctionKind;
+import io.prestosql.spi.function.ScalarFunctionImplementation;
 import io.prestosql.spi.function.Signature;
 import io.prestosql.spi.type.Type;
 import io.prestosql.spi.util.Reflection;
@@ -46,10 +45,9 @@ import static io.hetu.core.hive.dynamicfunctions.utils.HiveObjectTranslator.tran
 import static io.prestosql.spi.StandardErrorCode.GENERIC_INTERNAL_ERROR;
 import static io.prestosql.spi.StandardErrorCode.NOT_FOUND;
 import static io.prestosql.spi.StandardErrorCode.NOT_SUPPORTED;
-import static io.prestosql.spi.connector.CatalogSchemaName.DEFAULT_NAMESPACE;
-import static io.prestosql.spi.function.BuiltInScalarFunctionImplementation.ArgumentProperty.valueTypeArgumentProperty;
-import static io.prestosql.spi.function.BuiltInScalarFunctionImplementation.NullConvention.RETURN_NULL_ON_NULL;
-import static io.prestosql.spi.function.BuiltInScalarFunctionImplementation.NullConvention.USE_BOXED_TYPE;
+import static io.prestosql.spi.function.ScalarFunctionImplementation.ArgumentProperty.valueTypeArgumentProperty;
+import static io.prestosql.spi.function.ScalarFunctionImplementation.NullConvention.RETURN_NULL_ON_NULL;
+import static io.prestosql.spi.function.ScalarFunctionImplementation.NullConvention.USE_BOXED_TYPE;
 import static java.lang.String.format;
 
 public class DynamicHiveScalarFunction
@@ -88,7 +86,7 @@ public class DynamicHiveScalarFunction
                                      long maxFuncRunningTimeInSec, int functionRunningThreadPoolSize)
     {
         super(new Signature(
-                QualifiedObjectName.valueOf(DEFAULT_NAMESPACE, funcMetadata.getFunctionName()),
+                funcMetadata.getFunctionName(),
                 FunctionKind.SCALAR,
                 getTypeSignature(funcMetadata.getGenericReturnType(EVALUATE_METHOD_NAME)),
                 getTypeSignatures(funcMetadata.getGenericParameterTypes(EVALUATE_METHOD_NAME))));
@@ -116,7 +114,7 @@ public class DynamicHiveScalarFunction
                                      long maxFuncRunningTimeInSec, int functionRunningThreadPoolSize)
     {
         super(new Signature(
-                QualifiedObjectName.valueOf(DEFAULT_NAMESPACE, funcMetadata.getFunctionName()),
+                funcMetadata.getFunctionName(),
                 FunctionKind.SCALAR,
                 getTypeSignature(genericReturnType),
                 getTypeSignatures(genericParameterTypes)));
@@ -132,17 +130,18 @@ public class DynamicHiveScalarFunction
     }
 
     @Override
-    public BuiltInScalarFunctionImplementation specialize()
+    public ScalarFunctionImplementation specialize()
     {
         this.evalParamHetuTypes = getTypeSignatures(evalParamJavaTypes).stream().map(HetuTypeUtil::getType)
                 .toArray(Type[]::new);
         this.evalReturnHetuType = HetuTypeUtil.getType(getTypeSignature(evalReturnJavaTypes));
-        return new BuiltInScalarFunctionImplementation(true, getNullableArgumentProperties(), getMethodHandle());
+        return new ScalarFunctionImplementation(true, getNullableArgumentProperties(), getMethodHandle(),
+                isDeterministic());
     }
 
-    private List<BuiltInScalarFunctionImplementation.ArgumentProperty> getNullableArgumentProperties()
+    private List<ScalarFunctionImplementation.ArgumentProperty> getNullableArgumentProperties()
     {
-        List<BuiltInScalarFunctionImplementation.ArgumentProperty> nullableArgProps = new ArrayList<>(evalParamHetuTypes.length);
+        List<ScalarFunctionImplementation.ArgumentProperty> nullableArgProps = new ArrayList<>(evalParamHetuTypes.length);
         for (Type type : evalParamHetuTypes) {
             nullableArgProps.add(type.getJavaType().isPrimitive()
                     ? valueTypeArgumentProperty(USE_BOXED_TYPE)
@@ -278,12 +277,6 @@ public class DynamicHiveScalarFunction
     public boolean isHidden()
     {
         return false;
-    }
-
-    @Override
-    public boolean isCalledOnNullInput()
-    {
-        return true;
     }
 
     @Override

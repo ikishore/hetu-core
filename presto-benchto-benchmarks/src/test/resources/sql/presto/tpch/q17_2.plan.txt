@@ -1,16 +1,16 @@
-final hashaggregation over ()
+final aggregation over ()
     local exchange (GATHER, SINGLE, [])
         remote exchange (GATHER, SINGLE, [])
-            partial hashaggregation over ()
+            partial aggregation over ()
                 join (INNER, REPLICATED):
                     scan lineitem
                     local exchange (GATHER, SINGLE, [])
                         remote exchange (REPLICATE, BROADCAST, [])
                             join (INNER, PARTITIONED):
-                                final hashaggregation over (partkey_4)
+                                final aggregation over (partkey_4)
                                     local exchange (GATHER, SINGLE, [])
                                         remote exchange (REPARTITION, HASH, ["partkey_4"])
-                                            partial hashaggregation over (partkey_4)
+                                            partial aggregation over (partkey_4)
                                                 scan lineitem
                                 local exchange (GATHER, SINGLE, [])
                                     remote exchange (REPARTITION, HASH, ["partkey_0"])

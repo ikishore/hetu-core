@@ -21,7 +21,6 @@ import io.prestosql.spi.PrestoException;
 
 import java.io.IOException;
 import java.io.InputStream;
-import java.time.ZoneId;
 import java.util.List;
 
 import static com.google.common.base.Preconditions.checkArgument;
@@ -78,11 +77,11 @@ public class ExceptionWrappingMetadataReader
     }
 
     @Override
-    public StripeFooter readStripeFooter(ColumnMetadata<OrcType> types, InputStream inputStream, ZoneId legacyFileTimeZone)
+    public StripeFooter readStripeFooter(ColumnMetadata<OrcType> types, InputStream inputStream)
             throws IOException
     {
         try {
-            return delegate.readStripeFooter(types, inputStream, legacyFileTimeZone);
+            return delegate.readStripeFooter(types, inputStream);
         }
         catch (IOException | RuntimeException e) {
             throw propagate(e, "Invalid stripe footer");

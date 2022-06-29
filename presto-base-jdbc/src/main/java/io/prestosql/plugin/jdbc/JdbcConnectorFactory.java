@@ -17,15 +17,11 @@ import com.google.inject.Injector;
 import com.google.inject.Module;
 import io.airlift.bootstrap.Bootstrap;
 import io.prestosql.plugin.base.jmx.MBeanServerModule;
-import io.prestosql.spi.NodeManager;
 import io.prestosql.spi.classloader.ThreadContextClassLoader;
 import io.prestosql.spi.connector.Connector;
 import io.prestosql.spi.connector.ConnectorContext;
 import io.prestosql.spi.connector.ConnectorFactory;
 import io.prestosql.spi.connector.ConnectorHandleResolver;
-import io.prestosql.spi.function.FunctionMetadataManager;
-import io.prestosql.spi.function.StandardFunctionResolution;
-import io.prestosql.spi.relation.DeterminismEvaluator;
 import io.prestosql.spi.relation.RowExpressionService;
 import io.prestosql.spi.type.TypeManager;
 import org.weakref.jmx.guice.MBeanModule;
@@ -71,14 +67,8 @@ public class JdbcConnectorFactory
 
         try (ThreadContextClassLoader ignored = new ThreadContextClassLoader(classLoader)) {
             Bootstrap app = new Bootstrap(
-                    binder -> {
-                        binder.bind(FunctionMetadataManager.class).toInstance(context.getFunctionMetadataManager());
-                        binder.bind(StandardFunctionResolution.class).toInstance(context.getStandardFunctionResolution());
-                        binder.bind(TypeManager.class).toInstance(context.getTypeManager());
-                        binder.bind(RowExpressionService.class).toInstance(context.getRowExpressionService());
-                        binder.bind(DeterminismEvaluator.class).toInstance(context.getRowExpressionService().getDeterminismEvaluator());
-                        binder.bind(NodeManager.class).toInstance(context.getNodeManager());
-                    },
+                    binder -> binder.bind(TypeManager.class).toInstance(context.getTypeManager()),
+                    binder -> binder.bind(RowExpressionService.class).toInstance(context.getRowExpressionService()),
                     new JdbcModule(catalogName),
                     new MBeanServerModule(),
                     new MBeanModule(),

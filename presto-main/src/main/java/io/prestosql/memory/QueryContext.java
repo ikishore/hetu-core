@@ -17,14 +17,12 @@ import com.google.common.annotations.VisibleForTesting;
 import com.google.common.util.concurrent.ListenableFuture;
 import io.airlift.stats.GcMonitor;
 import io.airlift.units.DataSize;
-import io.hetu.core.transport.execution.buffer.PagesSerdeFactory;
 import io.prestosql.Session;
+import io.prestosql.execution.TaskId;
 import io.prestosql.execution.TaskStateMachine;
 import io.prestosql.memory.context.MemoryReservationHandler;
 import io.prestosql.memory.context.MemoryTrackingContext;
 import io.prestosql.operator.TaskContext;
-import io.prestosql.snapshot.RecoveryUtils;
-import io.prestosql.snapshot.TaskSnapshotManager;
 import io.prestosql.spi.QueryId;
 import io.prestosql.spi.plan.PlanNodeId;
 import io.prestosql.spiller.SpillSpaceTracker;
@@ -38,7 +36,6 @@ import java.util.Map;
 import java.util.Map.Entry;
 import java.util.Optional;
 import java.util.OptionalInt;
-import java.util.UUID;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.Executor;
 import java.util.concurrent.ScheduledExecutorService;
@@ -72,8 +69,7 @@ public class QueryContext
     private final ScheduledExecutorService yieldExecutor;
     private final long maxSpill;
     private final SpillSpaceTracker spillSpaceTracker;
-    // Snapshot: Use taskInstanceId as key, instead of taskId, to avoid interference between rescheduled and old tasks.
-    private final Map<String, TaskContext> taskContexts = new ConcurrentHashMap<>();
+    private final Map<TaskId, TaskContext> taskContexts = new ConcurrentHashMap<>();
 
     // TODO: This field should be final. However, due to the way QueryContext is constructed the memory limit is not known in advance
     @GuardedBy("this")
@@ -82,7 +78,6 @@ public class QueryContext
     private long maxTotalMemory;
 
     private final MemoryTrackingContext queryMemoryContext;
-    private final RecoveryUtils recoveryUtils;
 
     @GuardedBy("this")
     private MemoryPool memoryPool;
@@ -99,8 +94,7 @@ public class QueryContext
             Executor notificationExecutor,
             ScheduledExecutorService yieldExecutor,
             DataSize maxSpill,
-            SpillSpaceTracker spillSpaceTracker,
-            RecoveryUtils recoveryUtils)
+            SpillSpaceTracker spillSpaceTracker)
     {
         this.queryId = requireNonNull(queryId, "queryId is null");
         this.maxUserMemory = requireNonNull(maxUserMemory, "maxUserMemory is null").toBytes();
@@ -115,7 +109,6 @@ public class QueryContext
                 newRootAggregatedMemoryContext(new QueryMemoryReservationHandler(this::updateUserMemory, this::tryUpdateUserMemory), GUARANTEED_MEMORY),
                 newRootAggregatedMemoryContext(new QueryMemoryReservationHandler(this::updateRevocableMemory, this::tryReserveMemoryNotSupported), 0L),
                 newRootAggregatedMemoryContext(new QueryMemoryReservationHandler(this::updateSystemMemory, this::tryReserveMemoryNotSupported), 0L));
-        this.recoveryUtils = requireNonNull(recoveryUtils, "recoveryUtils is null");
     }
 
     // TODO: This method should be removed, and the correct limit set in the constructor. However, due to the way QueryContext is constructed the memory limit is not known in advance
@@ -255,17 +248,8 @@ public class QueryContext
         return memoryPool;
     }
 
-    @VisibleForTesting
-    public TaskContext addTaskContext(TaskStateMachine taskStateMachine, Session session, boolean perOperatorCpuTimerEnabled, boolean cpuTimerEnabled, OptionalInt totalPartitions, Optional<PlanNodeId> parent, PagesSerdeFactory serdeFactory)
+    public TaskContext addTaskContext(TaskStateMachine taskStateMachine, Session session, boolean perOperatorCpuTimerEnabled, boolean cpuTimerEnabled, OptionalInt totalPartitions, Optional<PlanNodeId> parent)
     {
-        // Use a random instance id for tests
-        return addTaskContext("0-" + UUID.randomUUID().toString(), taskStateMachine, session, perOperatorCpuTimerEnabled, cpuTimerEnabled, totalPartitions, parent, serdeFactory);
-    }
-
-    public TaskContext addTaskContext(String taskInstanceId, TaskStateMachine taskStateMachine, Session session, boolean perOperatorCpuTimerEnabled, boolean cpuTimerEnabled, OptionalInt totalPartitions, Optional<PlanNodeId> parent, PagesSerdeFactory serdeFactory)
-    {
-        // Task instance id has format "<resume count>-<random UUID>"
-        long resumeCount = Long.valueOf(taskInstanceId.substring(0, taskInstanceId.indexOf('-')));
         TaskContext taskContext = TaskContext.createTaskContext(
                 this,
                 taskStateMachine,
@@ -277,17 +261,9 @@ public class QueryContext
                 perOperatorCpuTimerEnabled,
                 cpuTimerEnabled,
                 totalPartitions,
-                parent.orElse(null),
-                serdeFactory,
-                new TaskSnapshotManager(taskStateMachine.getTaskId(), resumeCount, recoveryUtils),
-                recoveryUtils.getRecoveryManager(queryId));
-        taskContexts.put(taskInstanceId, taskContext);
+                parent.orElse(null));
+        taskContexts.put(taskStateMachine.getTaskId(), taskContext);
         return taskContext;
-    }
-
-    public void removeTaskContext(String taskInstanceId)
-    {
-        taskContexts.remove(taskInstanceId);
     }
 
     public <C, R> R accept(QueryContextVisitor<C, R> visitor, C context)
@@ -303,9 +279,9 @@ public class QueryContext
                 .collect(toList());
     }
 
-    public TaskContext getTaskContext(String taskInstanceId)
+    public TaskContext getTaskContextByTaskId(TaskId taskId)
     {
-        TaskContext taskContext = taskContexts.get(taskInstanceId);
+        TaskContext taskContext = taskContexts.get(taskId);
         verify(taskContext != null, "task does not exist");
         return taskContext;
     }

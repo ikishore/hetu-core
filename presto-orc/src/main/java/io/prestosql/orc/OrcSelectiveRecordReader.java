@@ -65,6 +65,7 @@ public class OrcSelectiveRecordReader
     private final List<Integer> excludePositions;
     private final List<Integer> columnReaderOrder;
     private final Map<Integer, TupleDomainFilter> filters;
+    private int[] positions;
     List<Integer> outputColumns;
     Map<Integer, Type> includedColumns;
 
@@ -235,8 +236,9 @@ public class OrcSelectiveRecordReader
         }
 
         matchingRowsInBatchArray = null;
-        int[] positionsToRead = initializePositions(batchSize);
-        int positionCount = positionsToRead.length;
+        int positionCount = initializePositions(batchSize);
+
+        int[] positionsToRead = this.positions;
 
         /* first evaluate columns with filter AND conditions */
         SelectiveColumnReader[] columnReaders = getColumnReaders();
@@ -348,7 +350,7 @@ public class OrcSelectiveRecordReader
         return page;
     }
 
-    private int[] initializePositions(int batchSize)
+    private int initializePositions(int batchSize)
     {
         // currentPosition to currentBatchSize
         StripeInformation stripe = stripes.get(currentStripe);
@@ -361,36 +363,11 @@ public class OrcSelectiveRecordReader
 
             while (matchingRows.hasNext()) {
                 Integer row = matchingRows.peek();
-                if (row < currentPositionInStripe) {
-                    // this can happen if a row group containing matching rows was filtered out
-                    // for example, if matchingRows is for column1 but query is for column1 and column2.
-                    // since row groups have minmax values, a row group could have been filtered out because of
-                    // column2 predicate. this means that the current matchingRow could be 10 (within the first
-                    // row group), but the first row group might've been filtered out due to column2 predicate,
-                    // so currentPositionInStripe is already in second row group
-                    //
-                    // stripe 1
-                    //    -> row group 1 (rows 1 to 10000) [filtered out due to column2 predicate]
-                    //       1
-                    //       2
-                    //       ...
-                    //       10     <- matchingRows cursor is here, but this row group has been filtered out
-                    //       ...
-                    //       10000
-                    //    -> row group 2 (rows 10001 to 20000)
-                    //       10001
-                    //       10002   <- currentPositionInStripe is here
-                    //       ...
-                    //       20000
-                    matchingRows.next();
-                }
-                else if (row < currentPositionInStripe + batchSize) {
-                    // matchingRows cursor is within current batch
+                if (row >= currentPositionInStripe && row < currentPositionInStripe + batchSize) {
                     matchingRowsInBlock.add(toIntExact(Long.valueOf(row) - currentPositionInStripe));
                     matchingRows.next();
                 }
-                else {
-                    // matchingRows cursor is ahead of current batch, next batch will use it
+                else if (row >= currentPositionInStripe + currentBatchSize) {
                     break;
                 }
             }
@@ -398,18 +375,22 @@ public class OrcSelectiveRecordReader
             matchingRowsInBatchArray = new int[matchingRowsInBlock.size()];
             IntStream.range(0, matchingRowsInBlock.size()).forEach(
                     i -> matchingRowsInBatchArray[i] = matchingRowsInBlock.get(i));
+            log.debug("Find matching rows from stripe. Matching row count for the block = %d", matchingRowsInBatchArray.length);
         }
 
-        if (matchingRowsInBatchArray != null) {
-            return matchingRowsInBatchArray;
-        }
-        else {
-            int[] positions = new int[batchSize];
+        if (positions == null || positions.length < batchSize) {
+            if (matchingRowsInBatchArray != null) {
+                positions = matchingRowsInBatchArray;
+                return matchingRowsInBatchArray.length;
+            }
+
+            positions = new int[batchSize];
             for (int i = 0; i < batchSize; i++) {
                 positions[i] = i;
             }
-            return positions;
         }
+
+        return batchSize;
     }
 
     @Override

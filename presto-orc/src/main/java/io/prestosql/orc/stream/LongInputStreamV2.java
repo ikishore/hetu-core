@@ -308,10 +308,9 @@ public class LongInputStreamV2
     /**
      * Read n bytes in big endian order and convert to long.
      */
-    private static long bytesToLongBE(InputStream input, int nBytes)
+    private static long bytesToLongBE(InputStream input, int n)
             throws IOException
     {
-        int n = nBytes;
         long out = 0;
         long val;
         while (n > 0) {
@@ -336,10 +335,9 @@ public class LongInputStreamV2
     }
 
     @Override
-    public void next(long[] values, int inputItems)
+    public void next(long[] values, int items)
             throws IOException
     {
-        int items = inputItems;
         int offset = 0;
         while (items > 0) {
             if (used == numLiterals) {
@@ -357,10 +355,9 @@ public class LongInputStreamV2
     }
 
     @Override
-    public void next(int[] values, int inputItems)
+    public void next(int[] values, int items)
             throws IOException
     {
-        int items = inputItems;
         int offset = 0;
         while (items > 0) {
             if (used == numLiterals) {
@@ -385,10 +382,9 @@ public class LongInputStreamV2
     }
 
     @Override
-    public void next(short[] values, int inputItems)
+    public void next(short[] values, int items)
             throws IOException
     {
-        int items = inputItems;
         int offset = 0;
         while (items > 0) {
             if (used == numLiterals) {
@@ -438,10 +434,9 @@ public class LongInputStreamV2
     }
 
     @Override
-    public void skip(long inputItems)
+    public void skip(long items)
             throws IOException
     {
-        long items = inputItems;
         while (items > 0) {
             if (used == numLiterals) {
                 numLiterals = 0;

@@ -51,12 +51,6 @@ public class CachingOrcDataSource
     }
 
     @Override
-    public long getLastModifiedTime()
-    {
-        return dataSource.getLastModifiedTime();
-    }
-
-    @Override
     public long getReadBytes()
     {
         return dataSource.getReadBytes();

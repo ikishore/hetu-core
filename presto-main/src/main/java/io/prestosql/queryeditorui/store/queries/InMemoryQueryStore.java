@@ -25,7 +25,6 @@ import java.io.File;
 import java.io.FileInputStream;
 import java.io.FileOutputStream;
 import java.io.IOException;
-import java.nio.charset.StandardCharsets;
 import java.util.ArrayList;
 import java.util.Iterator;
 import java.util.List;
@@ -62,7 +61,7 @@ public class InMemoryQueryStore
             byte[] buffer = new byte[4096];
             int n;
             while ((n = fin.read(buffer)) > 0) {
-                jsonString.append(new String(buffer, 0, n, StandardCharsets.UTF_8));
+                jsonString.append(new String(buffer, 0, n));
             }
             featuredQueries.addAll(SAVED_QUERIES_CODEC.fromJson(jsonString.toString()));
             featuredQueries.stream().forEach(q -> q.setFeatured(true));
@@ -100,7 +99,7 @@ public class InMemoryQueryStore
         queryList.add(query);
         try (FileOutputStream fout = new FileOutputStream(targetPath)) {
             String json = SAVED_QUERIES_CODEC.toJson(queryList);
-            fout.write(json.getBytes(StandardCharsets.UTF_8));
+            fout.write(json.getBytes());
         }
         catch (IOException e) {
             LOG.error("Error while saving queries", e);

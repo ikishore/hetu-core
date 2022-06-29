@@ -83,7 +83,7 @@ public class BenchmarkDriverOptions
     public HostAndPort socksProxy;
 
     @Option(name = "--client-request-timeout", title = "client request timeout", description = "Client request timeout (default: 2m)")
-    public Duration clientRequestTimeout = new Duration(2, MINUTES);
+    public Duration clientRequestTimeout = new Duration(20, MINUTES);
 
     public ClientSession getClientSession()
     {
@@ -110,12 +110,12 @@ public class BenchmarkDriverOptions
 
     private static URI parseServer(String server)
     {
-        String localServer = server.toLowerCase(ENGLISH);
-        if (localServer.startsWith("http://") || localServer.startsWith("https://")) {
-            return URI.create(localServer);
+        server = server.toLowerCase(ENGLISH);
+        if (server.startsWith("http://") || server.startsWith("https://")) {
+            return URI.create(server);
         }
 
-        HostAndPort host = HostAndPort.fromString(localServer);
+        HostAndPort host = HostAndPort.fromString(server);
         try {
             return new URI("http", null, host.getHost(), host.getPortOrDefault(80), null, null, null);
         }

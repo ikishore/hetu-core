@@ -13,15 +13,14 @@
  */
 package io.prestosql.testing;
 
+import io.hetu.core.transport.execution.buffer.PagesSerdeFactory;
 import io.prestosql.operator.DriverContext;
 import io.prestosql.operator.Operator;
 import io.prestosql.operator.OperatorContext;
 import io.prestosql.operator.OperatorFactory;
 import io.prestosql.operator.OutputFactory;
-import io.prestosql.operator.TaskContext;
 import io.prestosql.spi.Page;
 import io.prestosql.spi.plan.PlanNodeId;
-import io.prestosql.spi.snapshot.RestorableConfig;
 import io.prestosql.spi.type.Type;
 
 import java.util.List;
@@ -29,7 +28,6 @@ import java.util.function.Function;
 
 import static java.util.Objects.requireNonNull;
 
-@RestorableConfig(unsupported = true)
 public class NullOutputOperator
         implements Operator
 {
@@ -37,12 +35,7 @@ public class NullOutputOperator
             implements OutputFactory
     {
         @Override
-        public OperatorFactory createOutputOperator(
-                int operatorId,
-                PlanNodeId planNodeId,
-                List<Type> types,
-                Function<Page, Page> pagePreprocessor,
-                TaskContext taskContext)
+        public OperatorFactory createOutputOperator(int operatorId, PlanNodeId planNodeId, List<Type> types, Function<Page, Page> pagePreprocessor, PagesSerdeFactory serdeFactory)
         {
             return new NullOutputOperatorFactory(operatorId, planNodeId);
         }
@@ -63,8 +56,8 @@ public class NullOutputOperator
         @Override
         public Operator createOperator(DriverContext driverContext)
         {
-            OperatorContext oprContext = driverContext.addOperatorContext(operatorId, planNodeId, NullOutputOperator.class.getSimpleName());
-            return new NullOutputOperator(oprContext);
+            OperatorContext operatorContext = driverContext.addOperatorContext(operatorId, planNodeId, NullOutputOperator.class.getSimpleName());
+            return new NullOutputOperator(operatorContext);
         }
 
         @Override
@@ -119,12 +112,6 @@ public class NullOutputOperator
 
     @Override
     public Page getOutput()
-    {
-        return null;
-    }
-
-    @Override
-    public Page pollMarker()
     {
         return null;
     }

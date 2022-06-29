@@ -156,15 +156,15 @@ public class ElasticsearchClient
     {
         // discover other nodes in the cluster and add them to the client
         try {
-            Set<Node> nodeSet = fetchNodes();
+            Set<Node> nodes = fetchNodes();
 
-            HttpHost[] hosts = nodeSet.stream()
+            HttpHost[] hosts = nodes.stream()
                     .map(Node::getAddress)
                     .map(address -> HttpHost.create(format("%s://%s", tlsEnabled ? "https" : "http", address)))
                     .toArray(HttpHost[]::new);
 
             client.getLowLevelClient().setHosts(hosts);
-            this.nodes.set(nodeSet);
+            this.nodes.set(nodes);
         }
         catch (Throwable e) {
             // Catch all exceptions here since throwing an exception from executor#scheduleWithFixedDelay method
@@ -297,7 +297,6 @@ public class ElasticsearchClient
             }
         }
         catch (IOException | GeneralSecurityException ignored) {
-            // could be ignored
         }
 
         try (InputStream in = new FileInputStream(trustStorePath)) {
@@ -360,7 +359,7 @@ public class ElasticsearchClient
         SearchShardsResponse shardsResponse = doRequest(format("%s/_search_shards", index), SEARCH_SHARDS_RESPONSE_CODEC::fromJson);
 
         ImmutableList.Builder<Shard> shards = ImmutableList.builder();
-        List<Node> nodeList = ImmutableList.copyOf(nodeById.values());
+        List<Node> nodes = ImmutableList.copyOf(nodeById.values());
 
         for (List<SearchShardsResponse.Shard> shardGroup : shardsResponse.getShardGroups()) {
             Stream<SearchShardsResponse.Shard> preferred = shardGroup.stream()
@@ -375,7 +374,7 @@ public class ElasticsearchClient
             if (!candidate.isPresent()) {
                 // pick an arbitrary shard with and assign to an arbitrary node
                 chosen = preferred.findFirst().get();
-                node = nodeList.get(chosen.getShard() % nodeList.size());
+                node = nodes.get(chosen.getShard() % nodes.size());
             }
             else {
                 chosen = candidate.get();

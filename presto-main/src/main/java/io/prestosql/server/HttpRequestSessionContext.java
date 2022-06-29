@@ -19,7 +19,6 @@ import com.google.common.collect.ImmutableSet;
 import io.airlift.units.DataSize;
 import io.airlift.units.Duration;
 import io.prestosql.Session.ResourceEstimateBuilder;
-import io.prestosql.spi.security.GroupProvider;
 import io.prestosql.spi.security.Identity;
 import io.prestosql.spi.security.SelectedRole;
 import io.prestosql.spi.session.ResourceEstimates;
@@ -102,7 +101,7 @@ public final class HttpRequestSessionContext
     private final boolean clientTransactionSupport;
     private final String clientInfo;
 
-    public HttpRequestSessionContext(HttpServletRequest servletRequest, GroupProvider groupProvider)
+    public HttpRequestSessionContext(HttpServletRequest servletRequest)
             throws WebApplicationException
     {
         catalog = trimEmptyToNull(servletRequest.getHeader(PRESTO_CATALOG));
@@ -114,7 +113,6 @@ public final class HttpRequestSessionContext
         if (authenticatedUser != null) {
             authenticatedIdentity = Optional.of(new Identity(
                     authenticatedUser,
-                    groupProvider.getGroups(authenticatedUser),
                     Optional.ofNullable(servletRequest.getUserPrincipal()),
                     parseRoleHeaders(servletRequest),
                     parseExtraCredentials(servletRequest)));
@@ -130,7 +128,6 @@ public final class HttpRequestSessionContext
         assertRequest(user != null, "User must be set");
         identity = new Identity(
                 user,
-                groupProvider.getGroups(user),
                 Optional.ofNullable(servletRequest.getUserPrincipal()),
                 parseRoleHeaders(servletRequest),
                 parseExtraCredentials(servletRequest));
@@ -147,8 +144,8 @@ public final class HttpRequestSessionContext
         resourceEstimates = parseResourceEstimate(servletRequest);
 
         // parse session properties
-        ImmutableMap.Builder<String, String> systemPropertiesBuilder = ImmutableMap.builder();
-        Map<String, Map<String, String>> sessionProperties = new HashMap<>();
+        ImmutableMap.Builder<String, String> systemProperties = ImmutableMap.builder();
+        Map<String, Map<String, String>> catalogSessionProperties = new HashMap<>();
         for (Entry<String, String> entry : parseSessionHeaders(servletRequest).entrySet()) {
             String fullPropertyName = entry.getKey();
             String propertyValue = entry.getValue();
@@ -159,7 +156,7 @@ public final class HttpRequestSessionContext
                 assertRequest(!propertyName.isEmpty(), "Invalid %s header", PRESTO_SESSION);
 
                 // catalog session properties can not be validated until the transaction has stated, so we delay system property validation also
-                systemPropertiesBuilder.put(propertyName, propertyValue);
+                systemProperties.put(propertyName, propertyValue);
             }
             else if (nameParts.size() == 2) {
                 String catalogName = nameParts.get(0);
@@ -169,14 +166,14 @@ public final class HttpRequestSessionContext
                 assertRequest(!propertyName.isEmpty(), "Invalid %s header", PRESTO_SESSION);
 
                 // catalog session properties can not be validated until the transaction has stated
-                sessionProperties.computeIfAbsent(catalogName, id -> new HashMap<>()).put(propertyName, propertyValue);
+                catalogSessionProperties.computeIfAbsent(catalogName, id -> new HashMap<>()).put(propertyName, propertyValue);
             }
             else {
                 throw badRequest(format("Invalid %s header", PRESTO_SESSION));
             }
         }
-        this.systemProperties = systemPropertiesBuilder.build();
-        this.catalogSessionProperties = sessionProperties.entrySet().stream()
+        this.systemProperties = systemProperties.build();
+        this.catalogSessionProperties = catalogSessionProperties.entrySet().stream()
                 .collect(toImmutableMap(Entry::getKey, entry -> ImmutableMap.copyOf(entry.getValue())));
 
         preparedStatements = parsePreparedStatementsHeaders(servletRequest);
@@ -405,7 +402,7 @@ public final class HttpRequestSessionContext
 
     private static Map<String, String> parsePreparedStatementsHeaders(HttpServletRequest servletRequest)
     {
-        ImmutableMap.Builder<String, String> preparedStatementsBuilder = ImmutableMap.builder();
+        ImmutableMap.Builder<String, String> preparedStatements = ImmutableMap.builder();
         parseProperty(servletRequest, PRESTO_PREPARED_STATEMENT).forEach((key, sqlString) -> {
             String statementName;
             try {
@@ -424,21 +421,20 @@ public final class HttpRequestSessionContext
                 throw badRequest(format("Invalid %s header: %s", PRESTO_PREPARED_STATEMENT, e.getMessage()));
             }
 
-            preparedStatementsBuilder.put(statementName, sqlString);
+            preparedStatements.put(statementName, sqlString);
         });
 
-        return preparedStatementsBuilder.build();
+        return preparedStatements.build();
     }
 
     private static Optional<TransactionId> parseTransactionId(String transactionId)
     {
-        String id = transactionId;
-        id = trimEmptyToNull(id);
-        if (id == null || id.equalsIgnoreCase("none")) {
+        transactionId = trimEmptyToNull(transactionId);
+        if (transactionId == null || transactionId.equalsIgnoreCase("none")) {
             return Optional.empty();
         }
         try {
-            return Optional.of(TransactionId.valueOf(id));
+            return Optional.of(TransactionId.valueOf(transactionId));
         }
         catch (Exception e) {
             throw badRequest(e.getMessage());

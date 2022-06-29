@@ -26,7 +26,6 @@ import io.prestosql.spi.function.OperatorType;
 import io.prestosql.spi.function.ScalarFunction;
 import io.prestosql.spi.function.ScalarOperator;
 import io.prestosql.spi.function.SqlType;
-import io.prestosql.spi.type.LikePatternType;
 import io.prestosql.spi.type.StandardTypes;
 
 import java.util.Optional;
@@ -50,12 +49,12 @@ public final class LikeFunctions
             0,
             Option.NONE,
             new Syntax.MetaCharTable(
-                    '\\',
-                    INEFFECTIVE_META_CHAR,
-                    INEFFECTIVE_META_CHAR,
-                    INEFFECTIVE_META_CHAR,
-                    INEFFECTIVE_META_CHAR,
-                    INEFFECTIVE_META_CHAR));
+                    '\\',                           /* esc */
+                    INEFFECTIVE_META_CHAR,          /* anychar '.' */
+                    INEFFECTIVE_META_CHAR,          /* anytime '*' */
+                    INEFFECTIVE_META_CHAR,          /* zero or one time '?' */
+                    INEFFECTIVE_META_CHAR,          /* one or more time '+' */
+                    INEFFECTIVE_META_CHAR));        /* anychar anytime */
 
     private LikeFunctions() {}
 
@@ -221,9 +220,6 @@ public final class LikeFunctions
                             case '.':
                             case '*':
                                 regex.append('\\');
-                                break;
-                            default:
-                                break;
                         }
 
                         regex.append(currentChar);

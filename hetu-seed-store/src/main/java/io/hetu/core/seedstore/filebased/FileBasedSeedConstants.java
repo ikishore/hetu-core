@@ -1,5 +1,5 @@
 /*
- * Copyright (C) 2018-2021. Huawei Technologies Co., Ltd. All rights reserved.
+ * Copyright (C) 2018-2020. Huawei Technologies Co., Ltd. All rights reserved.
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
  * You may obtain a copy of the License at
@@ -22,11 +22,8 @@ package io.hetu.core.seedstore.filebased;
  */
 public class FileBasedSeedConstants
 {
-    // Hazelcast seed file name
+    // seed file name
     static final String SEED_FILE_NAME = "seeds.txt";
-
-    // ON-YARN seed file name
-    static final String ON_YARN_SEED_FILE_NAME = "seeds-resources.json";
 
     // dir config properties name
     static final String SEED_STORE_FILESYSTEM_DIR = "seed-store.filesystem.seed-dir";

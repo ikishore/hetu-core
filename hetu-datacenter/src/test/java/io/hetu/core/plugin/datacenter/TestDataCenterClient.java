@@ -212,31 +212,31 @@ public class TestDataCenterClient
     @Test(expectedExceptions = RuntimeException.class)
     public void testPasswordWithoutSSL()
     {
-        DataCenterConfig dataCenterConfig = new DataCenterConfig().setConnectionUrl(this.baseUri)
+        DataCenterConfig config = new DataCenterConfig().setConnectionUrl(this.baseUri)
                 .setConnectionUser("root")
                 .setConnectionPassword("root")
                 .setSsl(false);
-        DataCenterStatementClientFactory.newHttpClient(dataCenterConfig);
+        DataCenterStatementClientFactory.newHttpClient(config);
     }
 
     @Test(expectedExceptions = RuntimeException.class)
     public void testKerberosWithoutSSL()
     {
-        DataCenterConfig dataCenterConfig = new DataCenterConfig().setConnectionUrl(this.baseUri)
+        DataCenterConfig config = new DataCenterConfig().setConnectionUrl(this.baseUri)
                 .setConnectionUser("root")
                 .setKerberosRemoteServiceName("kerberos")
                 .setSsl(false);
-        DataCenterStatementClientFactory.newHttpClient(dataCenterConfig);
+        DataCenterStatementClientFactory.newHttpClient(config);
     }
 
     @Test(expectedExceptions = RuntimeException.class)
     public void testAccessTokenWithoutSSL()
     {
-        DataCenterConfig dataCenterConfig = new DataCenterConfig().setConnectionUrl(this.baseUri)
+        DataCenterConfig config = new DataCenterConfig().setConnectionUrl(this.baseUri)
                 .setConnectionUser("root")
                 .setAccessToken("token")
                 .setSsl(false);
-        DataCenterStatementClientFactory.newHttpClient(dataCenterConfig);
+        DataCenterStatementClientFactory.newHttpClient(config);
     }
 
     @Test(expectedExceptions = RuntimeException.class)

@@ -36,6 +36,8 @@ import io.prestosql.metadata.Split;
 import io.prestosql.metastore.HetuMetaStoreManager;
 import io.prestosql.operator.LookupJoinOperators;
 import io.prestosql.operator.PagesIndex;
+import io.prestosql.operator.SharedJoinOperators;
+import io.prestosql.operator.SharedPagesIndex;
 import io.prestosql.operator.index.IndexJoinLookupStats;
 import io.prestosql.seedstore.SeedStoreManager;
 import io.prestosql.spi.connector.CatalogName;
@@ -142,8 +144,7 @@ public final class TaskTestUtils
         PageFunctionCompiler pageFunctionCompiler = new PageFunctionCompiler(metadata, 0);
         NodeInfo nodeInfo = new NodeInfo("test");
 
-        FileSystemClientManager fileSystemClientManager = new FileSystemClientManager();
-        SeedStoreManager seedStoreManager = new SeedStoreManager(fileSystemClientManager);
+        SeedStoreManager seedStoreManager = new SeedStoreManager(new FileSystemClientManager());
         StateStoreProvider stateStoreProvider = new LocalStateStoreProvider(seedStoreManager);
         HeuristicIndexerManager heuristicIndexerManager = new HeuristicIndexerManager(new FileSystemClientManager(), new HetuMetaStoreManager());
 
@@ -171,20 +172,23 @@ public final class TaskTestUtils
                     throw new UnsupportedOperationException();
                 },
                 new PagesIndex.TestingFactory(false),
+                new SharedPagesIndex.TestingFactory(false), //BQO
                 new JoinCompiler(metadata),
                 new LookupJoinOperators(),
+                new SharedJoinOperators(), //BQO
                 new OrderingCompiler(),
                 nodeInfo,
                 stateStoreProvider,
                 new StateStoreListenerManager(stateStoreProvider),
                 new DynamicFilterCacheManager(),
                 heuristicIndexerManager,
-                cubeManager);
+                cubeManager
+                );
     }
 
     public static TaskInfo updateTask(SqlTask sqlTask, List<TaskSource> taskSources, OutputBuffers outputBuffers)
     {
-        return sqlTask.updateTask(TEST_SESSION, Optional.of(PLAN_FRAGMENT), taskSources, outputBuffers, OptionalInt.empty(), Optional.empty(), null);
+        return sqlTask.updateTask(TEST_SESSION, Optional.of(PLAN_FRAGMENT), taskSources, outputBuffers, OptionalInt.empty(), Optional.empty(), null, null);
     }
 
     public static SplitMonitor createTestSplitMonitor()

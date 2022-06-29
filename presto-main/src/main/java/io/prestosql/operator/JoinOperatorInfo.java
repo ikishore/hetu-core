@@ -35,13 +35,13 @@ public class JoinOperatorInfo
 
     public static JoinOperatorInfo createJoinOperatorInfo(JoinType joinType, long[] logHistogramCounters, Optional<Long> lookupSourcePositions)
     {
-        long[] logHistogramBucketsProbes = new long[HISTOGRAM_BUCKETS];
-        long[] logHistogramBucketsOutput = new long[HISTOGRAM_BUCKETS];
+        long[] logHistogramProbes = new long[HISTOGRAM_BUCKETS];
+        long[] logHistogramOutput = new long[HISTOGRAM_BUCKETS];
         for (int i = 0; i < HISTOGRAM_BUCKETS; i++) {
-            logHistogramBucketsProbes[i] = logHistogramCounters[2 * i];
-            logHistogramBucketsOutput[i] = logHistogramCounters[2 * i + 1];
+            logHistogramProbes[i] = logHistogramCounters[2 * i];
+            logHistogramOutput[i] = logHistogramCounters[2 * i + 1];
         }
-        return new JoinOperatorInfo(joinType, logHistogramBucketsProbes, logHistogramBucketsOutput, lookupSourcePositions);
+        return new JoinOperatorInfo(joinType, logHistogramProbes, logHistogramOutput, lookupSourcePositions);
     }
 
     @JsonCreator
@@ -101,11 +101,11 @@ public class JoinOperatorInfo
     public JoinOperatorInfo mergeWith(JoinOperatorInfo other)
     {
         checkState(this.joinType.equals(other.joinType), "different join types");
-        long[] logHistogramBucketsProbes = new long[HISTOGRAM_BUCKETS];
-        long[] logHistogramBucketsOutput = new long[HISTOGRAM_BUCKETS];
+        long[] logHistogramProbes = new long[HISTOGRAM_BUCKETS];
+        long[] logHistogramOutput = new long[HISTOGRAM_BUCKETS];
         for (int i = 0; i < HISTOGRAM_BUCKETS; i++) {
-            logHistogramBucketsProbes[i] = this.logHistogramProbes[i] + other.logHistogramProbes[i];
-            logHistogramBucketsOutput[i] = this.logHistogramOutput[i] + other.logHistogramOutput[i];
+            logHistogramProbes[i] = this.logHistogramProbes[i] + other.logHistogramProbes[i];
+            logHistogramOutput[i] = this.logHistogramOutput[i] + other.logHistogramOutput[i];
         }
 
         Optional<Long> mergedSourcePositions = Optional.empty();
@@ -113,7 +113,7 @@ public class JoinOperatorInfo
             mergedSourcePositions = Optional.of(this.lookupSourcePositions.orElse(0L) + other.lookupSourcePositions.orElse(0L));
         }
 
-        return new JoinOperatorInfo(this.joinType, logHistogramBucketsProbes, logHistogramBucketsOutput, mergedSourcePositions);
+        return new JoinOperatorInfo(this.joinType, logHistogramProbes, logHistogramOutput, mergedSourcePositions);
     }
 
     @Override

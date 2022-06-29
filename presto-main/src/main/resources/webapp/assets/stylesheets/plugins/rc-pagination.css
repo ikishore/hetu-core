@@ -150,12 +150,10 @@
 .rc-pagination-prev button:after {
     content: '‹';
     display: block;
-    margin-top: -2px;
 }
 .rc-pagination-next button:after {
     content: '›';
     display: block;
-    margin-top: -2px;
 }
 .rc-pagination-disabled,
 .rc-pagination-disabled:hover,
@@ -185,6 +183,7 @@
 }
 .rc-pagination-options-size-changer.rc-select {
     display: inline-block;
+    width: auto;
     margin-right: 8px;
 }
 .rc-pagination-options-quick-jumper {

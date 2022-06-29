@@ -78,12 +78,12 @@ public class InternalTable
         {
             requireNonNull(columnNames, "columnNames is null");
 
-            ImmutableMap.Builder<String, Integer> columnIndexesBuilder = ImmutableMap.builder();
+            ImmutableMap.Builder<String, Integer> columnIndexes = ImmutableMap.builder();
             int columnIndex = 0;
             for (String columnName : columnNames) {
-                columnIndexesBuilder.put(columnName, columnIndex++);
+                columnIndexes.put(columnName, columnIndex++);
             }
-            this.columnIndexes = columnIndexesBuilder.build();
+            this.columnIndexes = columnIndexes.build();
 
             this.types = ImmutableList.copyOf(requireNonNull(types, "types is null"));
             checkArgument(columnNames.size() == types.size(),

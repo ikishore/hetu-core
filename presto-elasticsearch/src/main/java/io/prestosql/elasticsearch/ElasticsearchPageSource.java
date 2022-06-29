@@ -38,6 +38,7 @@ import io.prestosql.spi.block.Block;
 import io.prestosql.spi.block.BlockBuilder;
 import io.prestosql.spi.block.PageBuilderStatus;
 import io.prestosql.spi.connector.ConnectorPageSource;
+import io.prestosql.spi.connector.ConnectorSession;
 import io.prestosql.spi.type.ArrayType;
 import io.prestosql.spi.type.RowType;
 import io.prestosql.spi.type.Type;
@@ -88,6 +89,7 @@ public class ElasticsearchPageSource
 
     public ElasticsearchPageSource(
             ElasticsearchClient client,
+            ConnectorSession session,
             ElasticsearchTableHandle table,
             ElasticsearchSplit split,
             List<ElasticsearchColumnHandle> columns)
@@ -97,7 +99,7 @@ public class ElasticsearchPageSource
 
         this.columns = ImmutableList.copyOf(columns);
 
-        decoders = createDecoders(columns);
+        decoders = createDecoders(session, columns);
 
         // When the _source field is requested, we need to bypass column pruning when fetching the document
         boolean needAllFields = columns.stream()
@@ -250,7 +252,7 @@ public class ElasticsearchPageSource
         }
     }
 
-    private List<Decoder> createDecoders(List<ElasticsearchColumnHandle> columns)
+    private List<Decoder> createDecoders(ConnectorSession session, List<ElasticsearchColumnHandle> columns)
     {
         return columns.stream()
                 .map(column -> {
@@ -266,12 +268,12 @@ public class ElasticsearchPageSource
                         return new SourceColumnDecoder();
                     }
 
-                    return createDecoder(column.getName(), column.getType());
+                    return createDecoder(session, column.getName(), column.getType());
                 })
                 .collect(toImmutableList());
     }
 
-    private Decoder createDecoder(String path, Type type)
+    private Decoder createDecoder(ConnectorSession session, String path, Type type)
     {
         if (type.equals(VARCHAR)) {
             return new VarcharDecoder(path);
@@ -280,7 +282,7 @@ public class ElasticsearchPageSource
             return new VarbinaryDecoder(path);
         }
         else if (type.equals(TIMESTAMP)) {
-            return new TimestampDecoder(path);
+            return new TimestampDecoder(session, path);
         }
         else if (type.equals(BOOLEAN)) {
             return new BooleanDecoder(path);
@@ -309,8 +311,8 @@ public class ElasticsearchPageSource
         else if (type instanceof RowType) {
             RowType rowType = (RowType) type;
 
-            List<Decoder> decoderList = rowType.getFields().stream()
-                    .map(field -> createDecoder(appendPath(path, field.getName().get()), field.getType()))
+            List<Decoder> decoders = rowType.getFields().stream()
+                    .map(field -> createDecoder(session, appendPath(path, field.getName().get()), field.getType()))
                     .collect(toImmutableList());
 
             List<String> fieldNames = rowType.getFields().stream()
@@ -318,11 +320,11 @@ public class ElasticsearchPageSource
                     .map(Optional::get)
                     .collect(toImmutableList());
 
-            return new RowDecoder(path, fieldNames, decoderList);
+            return new RowDecoder(path, fieldNames, decoders);
         }
         if (type instanceof ArrayType) {
             Type elementType = ((ArrayType) type).getElementType();
-            return new ArrayDecoder(createDecoder(path, elementType));
+            return new ArrayDecoder(path, createDecoder(session, path, elementType));
         }
 
         throw new UnsupportedOperationException("Type not supported: " + type);

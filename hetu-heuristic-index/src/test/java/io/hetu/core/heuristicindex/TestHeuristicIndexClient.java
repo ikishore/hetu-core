@@ -1,5 +1,5 @@
 /*
- * Copyright (C) 2018-2021. Huawei Technologies Co., Ltd. All rights reserved.
+ * Copyright (C) 2018-2020. Huawei Technologies Co., Ltd. All rights reserved.
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
  * You may obtain a copy of the License at
@@ -43,10 +43,11 @@ public class TestHeuristicIndexClient
         String tableName = "catalog.schema.UT_test";
 
         try (TempFolder folder = new TempFolder()) {
+            // root/catalog.schema.UT_test/testColumn/bloom/testIndex.index
             folder.create();
             File tableFolder = new File(folder.getRoot().getPath(), tableName);
             assertTrue(tableFolder.mkdir());
-            File columnFolder = new File(tableFolder, "test_column");
+            File columnFolder = new File(tableFolder, "testColumn");
             assertTrue(columnFolder.mkdirs());
             File indexTypeFolder = new File(columnFolder, "BLOOM");
             assertTrue(indexTypeFolder.mkdirs());
@@ -59,8 +60,7 @@ public class TestHeuristicIndexClient
             client.addIndexRecord(new CreateIndexMetadata("idx1",
                     tableName,
                     "BLOOM",
-                    0L,
-                    Collections.singletonList(new Pair<>("test_column", VARCHAR)),
+                    Collections.singletonList(new Pair<>("testColumn", VARCHAR)),
                     Collections.emptyList(),
                     new Properties(),
                     "user",

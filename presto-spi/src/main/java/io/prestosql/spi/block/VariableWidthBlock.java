@@ -13,14 +13,9 @@
  */
 package io.prestosql.spi.block;
 
-import com.esotericsoftware.kryo.Kryo;
-import com.esotericsoftware.kryo.KryoSerializable;
-import com.esotericsoftware.kryo.io.Input;
-import com.esotericsoftware.kryo.io.Output;
 import io.airlift.slice.Slice;
 import io.airlift.slice.SliceOutput;
 import io.airlift.slice.Slices;
-import io.prestosql.spi.PrestoException;
 import io.prestosql.spi.util.BloomFilter;
 import org.openjdk.jol.info.ClassLayout;
 
@@ -33,7 +28,6 @@ import java.util.function.BiConsumer;
 import java.util.function.Function;
 
 import static io.airlift.slice.SizeOf.sizeOf;
-import static io.prestosql.spi.StandardErrorCode.GENERIC_INTERNAL_ERROR;
 import static io.prestosql.spi.block.BlockUtil.checkArrayRange;
 import static io.prestosql.spi.block.BlockUtil.checkValidRegion;
 import static io.prestosql.spi.block.BlockUtil.compactArray;
@@ -42,25 +36,18 @@ import static io.prestosql.spi.block.BlockUtil.compactSlice;
 
 public class VariableWidthBlock
         extends AbstractVariableWidthBlock<byte[]>
-        implements KryoSerializable
 {
     private static final int INSTANCE_SIZE = ClassLayout.parseClass(VariableWidthBlock.class).instanceSize();
 
-    protected int arrayOffset;
-    private int positionCount;
-    private Slice slice;
-    protected int[] offsets;
+    private final int arrayOffset;
+    private final int positionCount;
+    private final Slice slice;
+    private final int[] offsets;
     @Nullable
-    protected boolean[] valueIsNull;
+    private final boolean[] valueIsNull;
 
-    private long retainedSizeInBytes;
-    private long sizeInBytes;
-    private boolean isInitialized;
-
-    public VariableWidthBlock()
-    {
-        arrayOffset = 0;
-    }
+    private final long retainedSizeInBytes;
+    private final long sizeInBytes;
 
     public VariableWidthBlock(int positionCount, Slice slice, int[] offsets, Optional<boolean[]> valueIsNull)
     {
@@ -95,13 +82,6 @@ public class VariableWidthBlock
 
         sizeInBytes = offsets[arrayOffset + positionCount] - offsets[arrayOffset] + ((Integer.BYTES + Byte.BYTES) * (long) positionCount);
         retainedSizeInBytes = INSTANCE_SIZE + slice.getRetainedSize() + sizeOf(valueIsNull) + sizeOf(offsets);
-
-        this.isInitialized = true;
-    }
-
-    public int[] getOffsets()
-    {
-        return offsets;
     }
 
     @Override
@@ -136,18 +116,6 @@ public class VariableWidthBlock
     }
 
     @Override
-    public int getBlockOffset()
-    {
-        return arrayOffset;
-    }
-
-    @Override
-    public boolean[] getValueNulls()
-    {
-        return valueIsNull;
-    }
-
-    @Override
     public long getSizeInBytes()
     {
         return sizeInBytes;
@@ -162,15 +130,15 @@ public class VariableWidthBlock
     @Override
     public long getPositionsSizeInBytes(boolean[] positions)
     {
-        long finalSizeInBytes = 0;
+        long sizeInBytes = 0;
         int usedPositionCount = 0;
         for (int i = 0; i < positions.length; ++i) {
             if (positions[i]) {
                 usedPositionCount++;
-                finalSizeInBytes += offsets[arrayOffset + i + 1] - offsets[arrayOffset + i];
+                sizeInBytes += offsets[arrayOffset + i + 1] - offsets[arrayOffset + i];
             }
         }
-        return finalSizeInBytes + (Integer.BYTES + Byte.BYTES) * (long) usedPositionCount;
+        return sizeInBytes + (Integer.BYTES + Byte.BYTES) * (long) usedPositionCount;
     }
 
     @Override
@@ -220,7 +188,7 @@ public class VariableWidthBlock
     }
 
     @Override
-    public Slice getRawSlice(int position)
+    protected Slice getRawSlice(int position)
     {
         return slice;
     }
@@ -237,11 +205,11 @@ public class VariableWidthBlock
     public Block copyRegion(int positionOffset, int length)
     {
         checkValidRegion(getPositionCount(), positionOffset, length);
-        int finalPositionOffset = positionOffset + arrayOffset;
+        positionOffset += arrayOffset;
 
-        int[] newOffsets = compactOffsets(offsets, finalPositionOffset, length);
-        Slice newSlice = compactSlice(slice, offsets[finalPositionOffset], newOffsets[length]);
-        boolean[] newValueIsNull = valueIsNull == null ? null : compactArray(valueIsNull, finalPositionOffset, length);
+        int[] newOffsets = compactOffsets(offsets, positionOffset, length);
+        Slice newSlice = compactSlice(slice, offsets[positionOffset], newOffsets[length]);
+        boolean[] newValueIsNull = valueIsNull == null ? null : compactArray(valueIsNull, positionOffset, length);
 
         if (newOffsets == offsets && newSlice == slice && newValueIsNull == valueIsNull) {
             return this;
@@ -263,14 +231,8 @@ public class VariableWidthBlock
     public boolean[] filter(BloomFilter filter, boolean[] validPositions)
     {
         for (int i = 0; i < positionCount; i++) {
-            int pos = i + arrayOffset;
-            if (valueIsNull != null && valueIsNull[pos]) {
-                validPositions[i] = validPositions[i] && filter.test((byte[]) null);
-            }
-            else {
-                byte[] bytes = slice.slice(offsets[pos], offsets[pos + 1] - offsets[pos]).getBytes();
-                validPositions[i] = validPositions[i] && filter.test(bytes);
-            }
+            byte[] value = slice.slice(offsets[i + arrayOffset], offsets[i + arrayOffset + 1] - offsets[i + arrayOffset]).getBytes();
+            validPositions[i] = validPositions[i] && filter.test(value);
         }
         return validPositions;
     }
@@ -328,44 +290,5 @@ public class VariableWidthBlock
     public int hashCode()
     {
         return Objects.hash(arrayOffset, positionCount, slice, Arrays.hashCode(offsets), Arrays.hashCode(valueIsNull), retainedSizeInBytes, sizeInBytes);
-    }
-
-    @Override
-    public void write(Kryo kryo, Output output)
-    {
-        /* # of positions
-        *  [Length Per Position]
-        *  [nulls as bits]
-        *  [buffer]
-        */
-        output.write(getPositionCount());
-        output.writeInts(offsets, arrayOffset, positionCount + 1);
-        output.writeBoolean(mayHaveNull());
-        if (mayHaveNull()) {
-            output.writeBooleans(valueIsNull, 0, positionCount);
-        }
-        output.write(offsets[arrayOffset + positionCount] - offsets[arrayOffset]);
-        output.write(slice.byteArray(), offsets[arrayOffset],
-                offsets[arrayOffset + positionCount] - offsets[arrayOffset]);
-    }
-
-    @Override
-    public void read(Kryo kryo, Input input)
-    {
-        if (isInitialized) {
-            throw new PrestoException(GENERIC_INTERNAL_ERROR, "Already initialized block");
-        }
-
-        positionCount = input.read();
-        offsets = input.readInts(positionCount + 1);
-        if (input.readBoolean()) {
-            valueIsNull = input.readBooleans(positionCount);
-        }
-        int blockSize = input.read();
-        slice = Slices.wrappedBuffer(input.readBytes(blockSize));
-
-        isInitialized = true;
-        sizeInBytes = offsets[arrayOffset + positionCount] - offsets[arrayOffset] + ((Integer.BYTES + Byte.BYTES) * (long) positionCount);
-        retainedSizeInBytes = INSTANCE_SIZE + slice.getRetainedSize() + sizeOf(valueIsNull) + sizeOf(offsets);
     }
 }

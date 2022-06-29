@@ -29,25 +29,17 @@ public class RemoteSplit
         implements ConnectorSplit
 {
     private final URI location;
-    private final String instanceId;
 
     @JsonCreator
-    public RemoteSplit(@JsonProperty("location") URI location, @JsonProperty("instanceId") String instanceId)
+    public RemoteSplit(@JsonProperty("location") URI location)
     {
         this.location = requireNonNull(location, "location is null");
-        this.instanceId = requireNonNull(instanceId, "instanceId is null");
     }
 
     @JsonProperty
     public URI getLocation()
     {
         return location;
-    }
-
-    @JsonProperty
-    public String getInstanceId()
-    {
-        return instanceId;
     }
 
     @Override

@@ -188,7 +188,7 @@ public class QueryExplainer
 
         // plan statement
         LogicalPlanner logicalPlanner = new LogicalPlanner(session, planOptimizers, idAllocator, metadata, new TypeAnalyzer(sqlParser, metadata), statsCalculator, costCalculator, warningCollector);
-        return logicalPlanner.plan(analysis, false);
+        return logicalPlanner.plan(analysis);
     }
 
     private SubPlan getDistributedPlan(Session session, Statement statement, List<Expression> parameters, WarningCollector warningCollector)

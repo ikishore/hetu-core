@@ -29,7 +29,6 @@ import java.util.Map;
 import java.util.Objects;
 import java.util.Optional;
 import java.util.Properties;
-import java.util.stream.Collectors;
 
 import static com.google.common.base.Preconditions.checkArgument;
 import static com.google.common.base.Strings.isNullOrEmpty;
@@ -54,9 +53,6 @@ import static org.apache.hadoop.hive.serde.serdeConstants.SERIALIZATION_LIB;
 
 public class MetastoreUtil
 {
-    public static final String META_PARTITION_COLUMNS = "partition_metadata";
-    public static final String COLUMN_COMMENTS = "columns.comments";
-
     private MetastoreUtil()
     {
     }
@@ -136,14 +132,10 @@ public class MetastoreUtil
             first = false;
         }
         String columnNames = columnNameBuilder.toString();
-        String partitionColumnNames = dataColumns.stream()
-                .map(Column::getName)
-                .collect(Collectors.joining(","));
         String columnTypes = columnTypeBuilder.toString();
         schema.setProperty(META_TABLE_COLUMNS, columnNames);
-        schema.setProperty(META_PARTITION_COLUMNS, partitionColumnNames);
         schema.setProperty(META_TABLE_COLUMN_TYPES, columnTypes);
-        schema.setProperty(COLUMN_COMMENTS, columnCommentBuilder.toString());
+        schema.setProperty("columns.comments", columnCommentBuilder.toString());
 
         schema.setProperty(SERIALIZATION_DDL, toThriftDdl(tableName, dataColumns));
 

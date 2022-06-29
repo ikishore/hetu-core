@@ -31,12 +31,8 @@ import javax.annotation.PostConstruct;
 import javax.annotation.PreDestroy;
 import javax.inject.Inject;
 
-import java.util.ArrayList;
 import java.util.Collection;
-import java.util.Comparator;
-import java.util.HashMap;
 import java.util.List;
-import java.util.Map;
 import java.util.concurrent.ScheduledExecutorService;
 import java.util.concurrent.ScheduledFuture;
 import java.util.concurrent.atomic.AtomicBoolean;
@@ -57,8 +53,6 @@ public class MemoryRevokingScheduler
     private final ScheduledExecutorService taskManagementExecutor;
     private final double memoryRevokingThreshold;
     private final double memoryRevokingTarget;
-    private final boolean prioritizeLargerSpiltsMemoryRevoke;
-    private final long revocableMemorySelectionThreshold;
 
     private final MemoryPoolListener memoryPoolListener = MemoryPoolListener.onMemoryReserved(this::onMemoryReserved);
 
@@ -79,9 +73,7 @@ public class MemoryRevokingScheduler
                 requireNonNull(sqlTaskManager, "sqlTaskManager cannot be null")::getAllTasks,
                 requireNonNull(taskManagementExecutor, "taskManagementExecutor cannot be null").getExecutor(),
                 config.getMemoryRevokingThreshold(),
-                config.getMemoryRevokingTarget(),
-                config.isPrioritizeLargerSpiltsMemoryRevoke(),
-                config.getRevocableMemorySelectionThreshold());
+                config.getMemoryRevokingTarget());
     }
 
     @VisibleForTesting
@@ -90,9 +82,7 @@ public class MemoryRevokingScheduler
             Supplier<? extends Collection<SqlTask>> currentTasksSupplier,
             ScheduledExecutorService taskManagementExecutor,
             double memoryRevokingThreshold,
-            double memoryRevokingTarget,
-            boolean prioritizeLargerSpiltsMemoryRevoke,
-            long revocableMemorySelectionThreshold)
+            double memoryRevokingTarget)
     {
         this.memoryPools = ImmutableList.copyOf(requireNonNull(memoryPools, "memoryPools is null"));
         this.currentTasksSupplier = requireNonNull(currentTasksSupplier, "currentTasksSupplier is null");
@@ -103,8 +93,6 @@ public class MemoryRevokingScheduler
                 memoryRevokingTarget <= memoryRevokingThreshold,
                 "memoryRevokingTarget should be less than or equal memoryRevokingThreshold, but got %s and %s respectively",
                 memoryRevokingTarget, memoryRevokingThreshold);
-        this.prioritizeLargerSpiltsMemoryRevoke = requireNonNull(prioritizeLargerSpiltsMemoryRevoke, "flagMemoryRevokingSchedulerEnabled is null");
-        this.revocableMemorySelectionThreshold = revocableMemorySelectionThreshold;
     }
 
     private static double checkFraction(double value, String valueName)
@@ -256,106 +244,34 @@ public class MemoryRevokingScheduler
     private void requestRevoking(MemoryPool memoryPool, Collection<SqlTask> sqlTasks, long remainingBytesToRevoke)
     {
         AtomicLong remainingBytesToRevokeAtomic = new AtomicLong(remainingBytesToRevoke);
-        Map<Long, List<SqlTask>> revocableMemoryMapping = new HashMap<>();
-
-        // This approach disregards create time
-        if (prioritizeLargerSpiltsMemoryRevoke) {
-            sqlTasks.stream()
-                    .filter(task -> task.getTaskStatus().getState() == TaskState.RUNNING)
-                    .filter(task -> task.getQueryContext().getMemoryPool() == memoryPool)
-                    .forEach(task -> task.getQueryContext().accept(new VoidTraversingQueryContextVisitor<AtomicLong>()
+        sqlTasks.stream()
+                .filter(task -> task.getTaskStatus().getState() == TaskState.RUNNING)
+                .filter(task -> task.getQueryContext().getMemoryPool() == memoryPool)
+                .sorted(ORDER_BY_CREATE_TIME)
+                .forEach(task -> task.getQueryContext().accept(new VoidTraversingQueryContextVisitor<AtomicLong>()
+                {
+                    @Override
+                    public Void visitQueryContext(QueryContext queryContext, AtomicLong remainingBytesToRevoke)
                     {
-                        @Override
-                        public Void visitQueryContext(QueryContext queryContext, AtomicLong remainingBytesToRevoke)
-                        {
-                            if (remainingBytesToRevoke.get() < 0) {
-                                // exit immediately if no work needs to be done
-                                return null;
-                            }
-                            return super.visitQueryContext(queryContext, remainingBytesToRevoke);
-                        }
-
-                        @Override
-                        public Void visitOperatorContext(OperatorContext operatorContext, AtomicLong remainingBytesToRevoke)
-                        {
-                            if (remainingBytesToRevoke.get() <= 0) {
-                                return null;
-                            }
-                            long revocableBytes = operatorContext.getRevocableMemory();
-                            if (revocableBytes > 0) {
-                                if (revocableBytes >= revocableMemorySelectionThreshold) {
-                                    remainingBytesToRevoke.addAndGet(-revocableBytes);
-                                }
-                                revocableMemoryMapping.computeIfAbsent(revocableBytes, list -> new ArrayList()).add(task);
-                            }
+                        if (remainingBytesToRevoke.get() < 0) {
+                            // exit immediately if no work needs to be done
                             return null;
                         }
-                    }, remainingBytesToRevokeAtomic));
+                        return super.visitQueryContext(queryContext, remainingBytesToRevoke);
+                    }
 
-            if (revocableMemoryMapping.size() > 0) {
-                revocableMemoryMapping
-                        .entrySet()
-                        .stream()
-                        .sorted(Map.Entry.comparingByKey(Comparator.reverseOrder()))
-                        .flatMap(list -> list.getValue().stream())
-                        .filter(task -> task.getTaskStatus().getState() == TaskState.RUNNING)
-                        .forEach(task -> task.getQueryContext().accept(new VoidTraversingQueryContextVisitor<AtomicLong>()
-                        {
-                            @Override
-                            public Void visitQueryContext(QueryContext queryContext, AtomicLong remainingBytesToRevoke)
-                            {
-                                if (remainingBytesToRevoke.get() < 0) {
-                                    // exit immediately if no work needs to be done
-                                    return null;
-                                }
-                                return super.visitQueryContext(queryContext, remainingBytesToRevoke);
-                            }
-
-                            @Override
-                            public Void visitOperatorContext(OperatorContext operatorContext, AtomicLong remainingBytesToRevoke)
-                            {
-                                if (remainingBytesToRevoke.get() > 0) {
-                                    long revokedBytes = operatorContext.requestMemoryRevoking();
-                                    if (revokedBytes > 0) {
-                                        remainingBytesToRevoke.addAndGet(-revokedBytes);
-                                        log.debug("memoryPool=%s: requested revoking %s; remaining %s", memoryPool.getId(), revokedBytes, remainingBytesToRevoke.get());
-                                    }
-                                }
-                                return null;
-                            }
-                        }, remainingBytesToRevokeAtomic));
-            }
-        }
-        else {
-            sqlTasks.stream()
-                    .filter(task -> task.getTaskStatus().getState() == TaskState.RUNNING)
-                    .filter(task -> task.getQueryContext().getMemoryPool() == memoryPool)
-                    .sorted(ORDER_BY_CREATE_TIME)
-                    .forEach(task -> task.getQueryContext().accept(new VoidTraversingQueryContextVisitor<AtomicLong>()
+                    @Override
+                    public Void visitOperatorContext(OperatorContext operatorContext, AtomicLong remainingBytesToRevoke)
                     {
-                        @Override
-                        public Void visitQueryContext(QueryContext queryContext, AtomicLong remainingBytesToRevoke)
-                        {
-                            if (remainingBytesToRevoke.get() < 0) {
-                                // exit immediately if no work needs to be done
-                                return null;
+                        if (remainingBytesToRevoke.get() > 0) {
+                            long revokedBytes = operatorContext.requestMemoryRevoking();
+                            if (revokedBytes > 0) {
+                                remainingBytesToRevoke.addAndGet(-revokedBytes);
+                                log.debug("memoryPool=%s: requested revoking %s; remaining %s", memoryPool.getId(), revokedBytes, remainingBytesToRevoke.get());
                             }
-                            return super.visitQueryContext(queryContext, remainingBytesToRevoke);
                         }
-
-                        @Override
-                        public Void visitOperatorContext(OperatorContext operatorContext, AtomicLong remainingBytesToRevoke)
-                        {
-                            if (remainingBytesToRevoke.get() > 0) {
-                                long revokedBytes = operatorContext.requestMemoryRevoking();
-                                if (revokedBytes > 0) {
-                                    remainingBytesToRevoke.addAndGet(-revokedBytes);
-                                    log.debug("memoryPool=%s: requested revoking %s; remaining %s", memoryPool.getId(), revokedBytes, remainingBytesToRevoke.get());
-                                }
-                            }
-                            return null;
-                        }
-                    }, remainingBytesToRevokeAtomic));
-        }
+                        return null;
+                    }
+                }, remainingBytesToRevokeAtomic));
     }
 }

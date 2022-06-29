@@ -16,12 +16,13 @@ package io.prestosql.operator.index;
 import com.google.common.collect.ImmutableList;
 import com.google.common.collect.ImmutableSet;
 import io.airlift.slice.Slice;
-import io.prestosql.metadata.FunctionAndTypeManager;
+import io.prestosql.metadata.Metadata;
 import io.prestosql.spi.connector.RecordCursor;
 import io.prestosql.spi.connector.RecordSet;
 import io.prestosql.spi.function.OperatorType;
+import io.prestosql.spi.function.Signature;
+import io.prestosql.spi.type.BooleanType;
 import io.prestosql.spi.type.Type;
-import io.prestosql.sql.analyzer.TypeSignatureProvider;
 
 import java.lang.invoke.MethodHandle;
 import java.util.Iterator;
@@ -42,9 +43,9 @@ public class FieldSetFilteringRecordSet
     private final RecordSet delegate;
     private final List<Set<Field>> fieldSets;
 
-    public FieldSetFilteringRecordSet(FunctionAndTypeManager functionAndTypeManager, RecordSet delegate, List<Set<Integer>> fieldSets)
+    public FieldSetFilteringRecordSet(Metadata metadata, RecordSet delegate, List<Set<Integer>> fieldSets)
     {
-        requireNonNull(functionAndTypeManager, "functionManager is null");
+        requireNonNull(metadata, "metadata is null");
         this.delegate = requireNonNull(delegate, "delegate is null");
 
         ImmutableList.Builder<Set<Field>> fieldSetsBuilder = ImmutableList.builder();
@@ -54,8 +55,7 @@ public class FieldSetFilteringRecordSet
             for (int field : fieldSet) {
                 fieldSetBuilder.add(new Field(
                         field,
-                        functionAndTypeManager.getBuiltInScalarFunctionImplementation(
-                                functionAndTypeManager.resolveOperatorFunctionHandle(OperatorType.EQUAL, TypeSignatureProvider.fromTypes(columnTypes.get(field), columnTypes.get(field)))).getMethodHandle()));
+                        metadata.getScalarFunctionImplementation(Signature.internalOperator(OperatorType.EQUAL, BooleanType.BOOLEAN, ImmutableList.of(columnTypes.get(field), columnTypes.get(field)))).getMethodHandle()));
             }
             fieldSetsBuilder.add(fieldSetBuilder.build());
         }

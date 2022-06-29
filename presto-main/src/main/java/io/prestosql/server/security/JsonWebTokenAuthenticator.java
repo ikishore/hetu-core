@@ -14,7 +14,6 @@
 package io.prestosql.server.security;
 
 import com.google.common.base.CharMatcher;
-import io.airlift.log.Logger;
 import io.airlift.security.pem.PemReader;
 import io.jsonwebtoken.Claims;
 import io.jsonwebtoken.Jws;
@@ -53,7 +52,6 @@ import static java.util.Objects.requireNonNull;
 public class JsonWebTokenAuthenticator
         implements Authenticator
 {
-    private static final Logger LOGGER = Logger.get(JsonWebTokenAuthenticator.class);
     private static final String DEFAULT_KEY = "default-key";
     private static final CharMatcher INVALID_KID_CHARS = inRange('a', 'z').or(inRange('A', 'Z')).or(inRange('0', '9')).or(CharMatcher.anyOf("_-")).negate();
     private static final String KEY_ID_VARIABLE = "${KID}";
@@ -75,7 +73,7 @@ public class JsonWebTokenAuthenticator
             keyLoader = new StaticKeyLoader(config.getKeyFile());
         }
 
-        JwtParser tmpJwtParser = Jwts.parser()
+        JwtParser jwtParser = Jwts.parser()
                 .setSigningKeyResolver(new SigningKeyResolver()
                 {
                     // interface uses raw types and this can not be fixed here
@@ -95,12 +93,12 @@ public class JsonWebTokenAuthenticator
                 });
 
         if (config.getRequiredIssuer() != null) {
-            tmpJwtParser.requireIssuer(config.getRequiredIssuer());
+            jwtParser.requireIssuer(config.getRequiredIssuer());
         }
         if (config.getRequiredAudience() != null) {
-            tmpJwtParser.requireAudience(config.getRequiredAudience());
+            jwtParser.requireAudience(config.getRequiredAudience());
         }
-        this.jwtParser = tmpJwtParser;
+        this.jwtParser = jwtParser;
     }
 
     @Override
@@ -206,7 +204,6 @@ public class JsonWebTokenAuthenticator
             return new LoadedKey(PemReader.loadPublicKey(file));
         }
         catch (Exception ignored) {
-            LOGGER.error("Load key error : %s", ignored.getMessage());
         }
 
         // try to load the key as a base64 encoded HMAC key
@@ -216,7 +213,6 @@ public class JsonWebTokenAuthenticator
             return new LoadedKey(rawKey);
         }
         catch (IOException ignored) {
-            LOGGER.error("Load key error : %s", ignored.getMessage());
         }
 
         throw new SignatureException("Unknown signing key id");

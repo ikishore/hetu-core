@@ -45,7 +45,6 @@ public class Intersect
         this.relations = ImmutableList.copyOf(relations);
     }
 
-    @Override
     public List<Relation> getRelations()
     {
         return relations;

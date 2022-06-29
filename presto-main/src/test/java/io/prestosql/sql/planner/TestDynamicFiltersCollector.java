@@ -1,5 +1,5 @@
 /*
- * Copyright (C) 2018-2021. Huawei Technologies Co., Ltd. All rights reserved.
+ * Copyright (C) 2018-2020. Huawei Technologies Co., Ltd. All rights reserved.
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
  * You may obtain a copy of the License at
@@ -99,7 +99,7 @@ public class TestDynamicFiltersCollector
         TableScanNode tableScan = mock(TableScanNode.class);
         when(tableScan.getAssignments()).thenReturn(ImmutableMap.of(new Symbol(columnName), columnHandle));
         List<DynamicFilters.Descriptor> dynamicFilterDescriptors = ImmutableList.of(new DynamicFilters.Descriptor(filterId, new VariableReferenceExpression(columnName, BIGINT)));
-        collector.initContext(ImmutableList.of(dynamicFilterDescriptors), SymbolUtils.toLayOut(tableScan.getOutputSymbols()));
+        collector.initContext(dynamicFilterDescriptors, SymbolUtils.toLayOut(tableScan.getOutputSymbols()));
 
         assertTrue(collector.getDynamicFilters(tableScan).isEmpty(), "there should be no dynamic filter available");
 
@@ -109,10 +109,10 @@ public class TestDynamicFiltersCollector
         TimeUnit.MILLISECONDS.sleep(100);
 
         // get available dynamic filter and verify it
-        List<Map<ColumnHandle, DynamicFilter>> dynamicFilters = collector.getDynamicFilters(tableScan);
+        Map<ColumnHandle, DynamicFilter> dynamicFilters = collector.getDynamicFilters(tableScan);
         assertEquals(dynamicFilters.size(), 1, "there should be a new dynamic filter");
         assertEquals(dynamicFilters.size(), 1);
-        DynamicFilter dynamicFilter = dynamicFilters.get(0).get(columnHandle);
+        DynamicFilter dynamicFilter = dynamicFilters.get(columnHandle);
         assertTrue(dynamicFilter instanceof HashSetDynamicFilter, "new dynamic filter should be hashset");
         assertEquals(dynamicFilter.getSize(), valueSet.size(), "new dynamic filter should have correct size");
         for (String value : valueSet) {

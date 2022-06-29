@@ -33,15 +33,13 @@ import static org.testng.Assert.assertEquals;
 public class TestStaticSelector
 {
     private static final ResourceEstimates EMPTY_RESOURCE_ESTIMATES = new ResourceEstimates(Optional.empty(), Optional.empty(), Optional.empty());
-    private static final Pattern USER = Pattern.compile("user.*");
-    private static final Pattern SOURCE = Pattern.compile(".*source.*");
 
     @Test
     public void testUserRegex()
     {
         ResourceGroupId resourceGroupId = new ResourceGroupId(new ResourceGroupId("global"), "foo");
         StaticSelector selector = new StaticSelector(
-                Optional.of(USER),
+                Optional.of(Pattern.compile("user.*")),
                 Optional.empty(),
                 Optional.empty(),
                 Optional.empty(),
@@ -58,7 +56,7 @@ public class TestStaticSelector
         ResourceGroupId resourceGroupId = new ResourceGroupId(new ResourceGroupId("global"), "foo");
         StaticSelector selector = new StaticSelector(
                 Optional.empty(),
-                Optional.of(SOURCE),
+                Optional.of(Pattern.compile(".*source.*")),
                 Optional.empty(),
                 Optional.empty(),
                 Optional.empty(),

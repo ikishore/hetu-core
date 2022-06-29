@@ -66,9 +66,9 @@ public class BufferingSplitSource
     }
 
     @Override
-    public List<Split> groupSmallSplits(List<Split> pendingSplits, Lifespan lifespan, int maxGroupSize)
+    public List<Split> groupSmallSplits(List<Split> pendingSplits, Lifespan lifespan)
     {
-        return source.groupSmallSplits(pendingSplits, lifespan, maxGroupSize);
+        return source.groupSmallSplits(pendingSplits, lifespan);
     }
 
     private static class GetNextBatch

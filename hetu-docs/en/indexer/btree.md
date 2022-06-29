@@ -53,9 +53,9 @@ When selecting between BTreeIndex and BloomIndex, the following should be consid
 **Creating index:**
 
 ```sql
-create index idx using btree on hive.hindex.orders (orderid);
-create index idx using btree on hive.hindex.orders (orderid) where orderDate='01-10-2020';
-create index idx using btree on hive.hindex.orders (orderid) where orderDate in ('01-10-2020', '01-10-2020');
+create index idx using btree on hive.hindex.orders (orderid) with (level=table)';
+create index idx using btree on hive.hindex.orders (orderid) with (level=partition) where orderDate='01-10-2020';
+create index idx using btree on hive.hindex.orders (orderid) with (level=partition) where orderDate in ('01-10-2020', '01-10-2020');
 ```
 
 * assuming orders table is partitioned on `orderDate`
@@ -67,7 +67,11 @@ select * from hive.hindex.orders where orderid>12345
 select * from hive.hindex.orders where orderid<12345
 select * from hive.hindex.orders where orderid>=12345
 select * from hive.hindex.orders where orderid<=12345
+<<<<<<< HEAD
+select * from hive.hindex.orders where orderid between (10000, 20000)
+=======
 select * from hive.hindex.orders where orderid between 10000 AND 20000
+>>>>>>> df007a2
 select * from hive.hindex.orders where orderid in (12345, 7890)
 ```
 
@@ -110,16 +114,8 @@ In this example, a lookup operation is performed on the BTreeIndex for `Ant`, wh
 "/hive/database.db/animals/000.orc+1024+2044+12345"
 "/hive/database.db/animals/001.orc+3+1023+12348"
 ```
-
 The file name and offsets can be used to filter out Splits which do not match the predicate.
 
-Additionally, the last modified time can be used to ensure that the index is still valid. If the original ORC file had been modified since the index was created, then the index is
-invalid and should not be used for filtering.
-
-## Disk usage
-
-BTree index uses disk to serialize its internal tree structure. Therefore, sufficient space in the system's temporary directory is required for both creation and filtering.
-
-For a big table/column, the size of BTree index could be very big (up to the same size as the column in the dataset).
-
-Check [hindex-statements](./hindex-statements.md) for how to change the temp folder path.
+Additionally, the last modified time can be used to ensure that the index is still valid.
+If the original ORC file had been modified since the index was created,
+then the index is invalid and should not be used for filtering.

@@ -14,19 +14,15 @@
 package io.prestosql.execution;
 
 import com.google.common.util.concurrent.ListenableFuture;
-import io.airlift.log.Logger;
 import io.hetu.core.spi.cube.CubeMetadata;
 import io.hetu.core.spi.cube.io.CubeMetaStore;
 import io.prestosql.Session;
 import io.prestosql.cube.CubeManager;
 import io.prestosql.heuristicindex.HeuristicIndexerManager;
 import io.prestosql.metadata.Metadata;
+import io.prestosql.metadata.QualifiedObjectName;
 import io.prestosql.security.AccessControl;
 import io.prestosql.spi.HetuConstant;
-import io.prestosql.spi.connector.QualifiedObjectName;
-import io.prestosql.spi.connector.TableNotFoundException;
-import io.prestosql.spi.heuristicindex.IndexClient;
-import io.prestosql.spi.heuristicindex.IndexRecord;
 import io.prestosql.spi.metadata.TableHandle;
 import io.prestosql.spi.service.PropertyService;
 import io.prestosql.sql.analyzer.SemanticException;
@@ -37,12 +33,8 @@ import io.prestosql.transaction.TransactionManager;
 
 import javax.inject.Inject;
 
-import java.io.IOException;
-import java.io.UncheckedIOException;
-import java.util.Collections;
 import java.util.List;
 import java.util.Optional;
-import java.util.stream.Collectors;
 
 import static com.google.common.util.concurrent.Futures.immediateFuture;
 import static io.prestosql.cube.CubeManager.STAR_TREE;
@@ -53,7 +45,6 @@ import static io.prestosql.sql.analyzer.SemanticErrorCode.MISSING_TABLE;
 public class DropTableTask
         implements DataDefinitionTask<DropTable>
 {
-    private static final Logger LOG = Logger.get(DropTableTask.class);
     private final CubeManager cubeManager;
 
     @Inject
@@ -99,44 +90,16 @@ public class DropTableTask
         }
 
         metadata.dropTable(session, tableHandle.get());
-
         if (optionalCubeMetaStore.isPresent()) {
             List<CubeMetadata> cubes = optionalCubeMetaStore.get().getMetadataList(tableName.toString());
             for (CubeMetadata cube : cubes) {
-                String[] parts = cube.getCubeName().split("\\.");
+                String[] parts = cube.getCubeTableName().split("\\.");
                 Optional<TableHandle> cubeHandle = metadata.getTableHandle(session, createQualifiedObjectName(session, null, QualifiedName.of(parts[0], parts[1], parts[2])));
-                try {
-                    cubeHandle.ifPresent(cubeTable -> metadata.dropTable(session, cubeTable));
-                    optionalCubeMetaStore.get().removeCube(cube);
-                }
-                catch (TableNotFoundException e) {
-                    // Can happen in concurrent drop table and drop cube calls
-                    LOG.debug("Tried dropping cube table but it is already dropped", e);
-                }
+                cubeHandle.ifPresent(cubeTable -> metadata.dropTable(session, cubeTable));
+                optionalCubeMetaStore.get().removeCube(cube);
             }
         }
-
-        dropIndices(heuristicIndexerManager, tableName);
 
         return immediateFuture(null);
-    }
-
-    private void dropIndices(HeuristicIndexerManager heuristicIndexerManager, QualifiedName tableName)
-    {
-        IndexClient indexClient = heuristicIndexerManager.getIndexClient();
-        try {
-            List<IndexRecord> indexRecords = indexClient.getAllIndexRecords().stream().filter(r -> r.qualifiedTable.equals(tableName.toString())).collect(Collectors.toList());
-            for (IndexRecord indexRecord : indexRecords) {
-                indexClient.deleteIndex(indexRecord.name, Collections.emptyList());
-            }
-        }
-        catch (UnsupportedOperationException ignored) {
-            // This exception is only thrown when heuristic index is not enabled so the noOpIndexClient is used.
-            // In this case we want drop table to run as normal
-            LOG.debug("heuristic index is not enabled, then noOpIndexClient is used: %s", ignored);
-        }
-        catch (IOException e) {
-            throw new UncheckedIOException(e);
-        }
     }
 }

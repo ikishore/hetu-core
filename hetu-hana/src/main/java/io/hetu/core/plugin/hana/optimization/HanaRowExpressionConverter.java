@@ -1,5 +1,5 @@
 /*
- * Copyright (C) 2018-2021. Huawei Technologies Co., Ltd. All rights reserved.
+ * Copyright (C) 2018-2020. Huawei Technologies Co., Ltd. All rights reserved.
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
  * You may obtain a copy of the License at
@@ -28,25 +28,21 @@ import io.hetu.core.plugin.hana.rewrite.functioncall.VarbinaryLiteralFunctionCal
 import io.prestosql.configmanager.ConfigSupplier;
 import io.prestosql.configmanager.DefaultUdfRewriteConfigSupplier;
 import io.prestosql.plugin.jdbc.optimization.BaseJdbcRowExpressionConverter;
-import io.prestosql.plugin.jdbc.optimization.JdbcConverterContext;
 import io.prestosql.spi.PrestoException;
-import io.prestosql.spi.function.FunctionHandle;
-import io.prestosql.spi.function.FunctionMetadata;
-import io.prestosql.spi.function.FunctionMetadataManager;
 import io.prestosql.spi.function.OperatorType;
-import io.prestosql.spi.function.StandardFunctionResolution;
+import io.prestosql.spi.function.Signature;
 import io.prestosql.spi.relation.CallExpression;
 import io.prestosql.spi.relation.ConstantExpression;
-import io.prestosql.spi.relation.DeterminismEvaluator;
 import io.prestosql.spi.relation.LambdaDefinitionExpression;
 import io.prestosql.spi.relation.RowExpression;
 import io.prestosql.spi.relation.RowExpressionService;
 import io.prestosql.spi.relation.SpecialForm;
 import io.prestosql.spi.sql.expression.QualifiedName;
-import io.prestosql.spi.type.SqlVarbinary;
+import io.prestosql.spi.type.StandardTypes;
 import io.prestosql.spi.type.Type;
 import io.prestosql.spi.type.VarcharType;
 import io.prestosql.spi.util.DateTimeUtils;
+import io.prestosql.sql.ExpressionFormatter;
 import io.prestosql.sql.builder.functioncall.FunctionWriterManager;
 import io.prestosql.sql.builder.functioncall.FunctionWriterManagerGroup;
 import io.prestosql.sql.builder.functioncall.functions.FunctionCallRewriter;
@@ -66,8 +62,16 @@ import java.util.stream.Stream;
 import static com.google.common.collect.ImmutableSet.toImmutableSet;
 import static io.prestosql.spi.StandardErrorCode.INVALID_FUNCTION_ARGUMENT;
 import static io.prestosql.spi.StandardErrorCode.NOT_SUPPORTED;
+import static io.prestosql.spi.function.Signature.unmangleOperator;
+import static io.prestosql.spi.function.StandardFunctionUtils.isArrayConstructor;
+import static io.prestosql.spi.function.StandardFunctionUtils.isLikeFunction;
+import static io.prestosql.spi.function.StandardFunctionUtils.isNotFunction;
+import static io.prestosql.spi.function.StandardFunctionUtils.isOperator;
+import static io.prestosql.spi.type.DateType.DATE;
 import static io.prestosql.spi.type.TimeType.TIME;
+import static io.prestosql.spi.type.TimestampType.TIMESTAMP;
 import static io.prestosql.spi.type.VarbinaryType.VARBINARY;
+import static io.prestosql.spi.util.DateTimeUtils.printDate;
 import static java.lang.String.format;
 import static java.util.Locale.ENGLISH;
 
@@ -84,9 +88,9 @@ public class HanaRowExpressionConverter
      *
      * @param hanaConfig hana config
      */
-    public HanaRowExpressionConverter(DeterminismEvaluator determinismEvaluator, RowExpressionService rowExpressionService, FunctionMetadataManager functionManager, StandardFunctionResolution functionResolution, HanaPushDownParameter hanaConfig)
+    public HanaRowExpressionConverter(RowExpressionService rowExpressionService, HanaPushDownParameter hanaConfig)
     {
-        super(functionManager, functionResolution, rowExpressionService, determinismEvaluator);
+        super(rowExpressionService);
         hanaFunctionManager = initFunctionManager(hanaConfig.getHanaConfig());
     }
 
@@ -153,13 +157,13 @@ public class HanaRowExpressionConverter
         }
     }
 
-    private String handleCastOperator(RowExpression expression, Type dstType, JdbcConverterContext context)
+    private String handleCastOperator(RowExpression expression, Type dstType)
     {
         /*
-         * In SqlToRowExpressionTranslator, it will translate GenericLiteral expression to a 'CONSTANT' rowExpression,
-         * so the 'CAST' operator is not needed.
-         * */
-        String value = expression.accept(this, context);
+        * In SqlToRowExpressionTranslator, it will translate GenericLiteral expression to a 'CONSTANT' rowExpression,
+        * so the 'CAST' operator is not needed.
+        * */
+        String value = expression.accept(this, null);
         if (expression instanceof ConstantExpression && expression.getType() instanceof VarcharType) {
             return value;
         }
@@ -171,15 +175,14 @@ public class HanaRowExpressionConverter
         return format("CAST(%s AS %s)", value, dstType.getDisplayName().toLowerCase(ENGLISH));
     }
 
-    private String handleOperatorFunction(CallExpression call, FunctionMetadata functionMetadata, JdbcConverterContext context)
+    private String handleOperatorFunction(CallExpression call)
     {
-        Optional<OperatorType> operatorTypeOptional = functionMetadata.getOperatorType();
-        OperatorType type = operatorTypeOptional.get();
+        OperatorType type = unmangleOperator(call.getSignature().getName());
         if (type.equals(OperatorType.CAST)) {
-            return handleCastOperator(call.getArguments().get(0), call.getType(), context);
+            return handleCastOperator(call.getArguments().get(0), call.getType());
         }
 
-        List<String> argumentList = call.getArguments().stream().map(expr -> expr.accept(this, context)).collect(Collectors.toList());
+        List<String> argumentList = call.getArguments().stream().map(expr -> expr.accept(this, null)).collect(Collectors.toList());
         if (type.isArithmeticOperator()) {
             if (type.equals(OperatorType.MODULUS)) {
                 return format("MOD(%s, %s)", argumentList.get(0), argumentList.get(1));
@@ -190,7 +193,7 @@ public class HanaRowExpressionConverter
         }
 
         if (type.isComparisonOperator()) {
-            final String[] hanaCompareOperators = new String[] {"=", ">", "<", ">=", "<=", "!=", "<>"};
+            final String[] hanaCompareOperators = new String[]{"=", ">", "<", ">=", "<=", "!=", "<>"};
             if (Arrays.asList(hanaCompareOperators).contains(type.getOperator())) {
                 return format("(%s %s %s)", argumentList.get(0), type.getOperator(), argumentList.get(1));
             }
@@ -217,30 +220,29 @@ public class HanaRowExpressionConverter
     }
 
     @Override
-    public String visitCall(CallExpression call, JdbcConverterContext context)
+    public String visitCall(CallExpression call, Void context)
     {
-        FunctionHandle functionHandle = call.getFunctionHandle();
-        FunctionMetadata functionMetadata = functionMetadataManager.getFunctionMetadata(functionHandle);
-        String functionName = functionMetadata.getName().getObjectName();
+        Signature signature = call.getSignature();
+        String functionName = call.getSignature().getName().toLowerCase(ENGLISH);
 
         if (hanaNotSupportFunctions.contains(functionName)) {
             throw new PrestoException(NOT_SUPPORTED, "Hana connector does not support " + functionName);
         }
 
-        if (standardFunctionResolution.isOperator(functionHandle)) {
-            return handleOperatorFunction(call, functionMetadata, context);
+        if (isOperator(signature)) {
+            return handleOperatorFunction(call);
         }
 
-        List<String> argumentList = call.getArguments().stream().map(expr -> expr.accept(this, context)).collect(Collectors.toList());
-        if (standardFunctionResolution.isNotFunction(functionHandle)) {
+        List<String> argumentList = call.getArguments().stream().map(expr -> expr.accept(this, null)).collect(Collectors.toList());
+        if (isNotFunction(signature)) {
             return format("(NOT %s)", argumentList.get(0));
         }
 
-        if (standardFunctionResolution.isLikeFunction(functionHandle)) {
+        if (isLikeFunction(signature)) {
             return format("(%s LIKE %s)", argumentList.get(0), argumentList.get(1));
         }
 
-        if (standardFunctionResolution.isArrayConstructor(functionHandle)) {
+        if (isArrayConstructor(signature)) {
             return format("ARRAY(%s)", Joiner.on(", ").join(argumentList));
         }
 
@@ -248,18 +250,18 @@ public class HanaRowExpressionConverter
     }
 
     @Override
-    public String visitLambda(LambdaDefinitionExpression lambda, JdbcConverterContext context)
+    public String visitLambda(LambdaDefinitionExpression lambda, Void context)
     {
         throw new PrestoException(NOT_SUPPORTED, "Hana connector does not support Lambda expression");
     }
 
-    private String visitIfExpression(SpecialForm specialForm, JdbcConverterContext context)
+    private String visitIfExpression(SpecialForm specialForm)
     {
-        String condition = specialForm.getArguments().get(0).accept(this, context);
-        String trueValue = specialForm.getArguments().get(1).accept(this, context);
+        String condition = specialForm.getArguments().get(0).accept(this, null);
+        String trueValue = specialForm.getArguments().get(1).accept(this, null);
         RowExpression falseExpression = specialForm.getArguments().get(2);
         Optional<String> falseValue = ((falseExpression instanceof ConstantExpression) && ((ConstantExpression) falseExpression).isNull())
-                ? Optional.empty() : Optional.of(falseExpression.accept(this, context));
+                ? Optional.empty() : Optional.of(falseExpression.accept(this, null));
         StringBuilder stringBuilder = new StringBuilder(HanaConstants.DEAFULT_STRINGBUFFER_CAPACITY);
         stringBuilder.append("CASE WHEN " + condition + " THEN " + trueValue);
         falseValue.ifPresent(value -> stringBuilder.append(" ELSE ").append(value));
@@ -268,7 +270,7 @@ public class HanaRowExpressionConverter
     }
 
     @Override
-    public String visitSpecialForm(SpecialForm specialForm, JdbcConverterContext context)
+    public String visitSpecialForm(SpecialForm specialForm, Void context)
     {
         if (specialForm.getForm().equals(SpecialForm.Form.DEREFERENCE)
                 || specialForm.getForm().equals(SpecialForm.Form.ROW_CONSTRUCTOR)
@@ -277,24 +279,32 @@ public class HanaRowExpressionConverter
         }
 
         if (specialForm.getForm().equals(SpecialForm.Form.IF)) {
-            return visitIfExpression(specialForm, context);
+            return visitIfExpression(specialForm);
         }
 
         return super.visitSpecialForm(specialForm, context);
     }
 
     @Override
-    public String visitConstant(ConstantExpression literal, JdbcConverterContext context)
+    public String visitConstant(ConstantExpression literal, Void context)
     {
         Type type = literal.getType();
 
+        if (type.equals(DATE)) {
+            String date = printDate((int) literal.getValue());
+            return StandardTypes.DATE + " " + ExpressionFormatter.formatStringLiteral(date);
+        }
         if (type.equals(VARBINARY)) {
-            Object hexValue = new SqlVarbinary(((Slice) literal.getValue()).getBytes());
-            return format("X'%s'", hexValue.toString().replaceAll(" ", ""));
+            String hexValue = ((Slice) literal.getValue()).toStringUtf8();
+            return format("X'%s'", hexValue);
         }
         if (type.equals(TIME)) {
             String time = DateTimeUtils.printTimeWithoutTimeZone((long) literal.getValue());
             return format("time'%s'", time);
+        }
+        if (type.equals(TIMESTAMP)) {
+            String timestamp = DateTimeUtils.printTimeWithoutTimeZone((long) literal.getValue());
+            return format("timestamp'%s'", timestamp);
         }
 
         return super.visitConstant(literal, context);

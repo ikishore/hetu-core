@@ -22,6 +22,8 @@ import io.prestosql.spi.predicate.Range;
 import io.prestosql.spi.predicate.SortedRangeSet;
 import io.prestosql.spi.predicate.TupleDomain;
 import io.prestosql.spi.type.CharType;
+import io.prestosql.spi.type.SqlTimestamp;
+import io.prestosql.testing.DateTimeTestingUtils;
 import org.testng.annotations.AfterMethod;
 import org.testng.annotations.BeforeMethod;
 import org.testng.annotations.Test;
@@ -62,15 +64,16 @@ import static io.prestosql.spi.type.IntegerType.INTEGER;
 import static io.prestosql.spi.type.RealType.REAL;
 import static io.prestosql.spi.type.SmallintType.SMALLINT;
 import static io.prestosql.spi.type.TimeType.TIME;
+import static io.prestosql.spi.type.TimeZoneKey.UTC_KEY;
 import static io.prestosql.spi.type.TimestampType.TIMESTAMP;
 import static io.prestosql.spi.type.TinyintType.TINYINT;
 import static io.prestosql.spi.type.VarcharType.VARCHAR;
-import static io.prestosql.testing.DateTimeTestingUtils.sqlTimestampOf;
 import static io.prestosql.testing.TestingConnectorSession.SESSION;
 import static java.lang.Float.floatToRawIntBits;
 import static java.lang.String.format;
 import static java.time.temporal.ChronoUnit.DAYS;
 import static java.util.function.Function.identity;
+import static org.joda.time.DateTimeZone.UTC;
 import static org.testng.Assert.assertEquals;
 
 @Test(singleThreaded = true)
@@ -395,7 +398,11 @@ public class TestJdbcQueryBuilder
 
     private static long toPrestoTimestamp(int year, int month, int day, int hour, int minute, int second)
     {
-        return sqlTimestampOf(year, month, day, hour, minute, second, 0).getMillis();
+        SqlTimestamp sqlTimestamp = DateTimeTestingUtils.sqlTimestampOf(year, month, day, hour, minute, second, 0, UTC, UTC_KEY, SESSION);
+        if (SESSION.isLegacyTimestamp()) {
+            return sqlTimestamp.getMillisUtc();
+        }
+        return sqlTimestamp.getMillis();
     }
 
     private static Timestamp toTimestamp(int year, int month, int day, int hour, int minute, int second)

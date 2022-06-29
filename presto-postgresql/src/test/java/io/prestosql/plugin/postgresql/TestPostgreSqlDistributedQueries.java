@@ -29,7 +29,6 @@ public class TestPostgreSqlDistributedQueries
         extends AbstractTestDistributedQueries
 {
     private final TestingPostgreSqlServer postgreSqlServer;
-    private final TestPostgreSqlExtendServer extendServer;
 
     public TestPostgreSqlDistributedQueries()
             throws Exception
@@ -41,26 +40,13 @@ public class TestPostgreSqlDistributedQueries
     {
         super(() -> createPostgreSqlQueryRunner(postgreSqlServer, ImmutableMap.of(), TpchTable.getTables()));
         this.postgreSqlServer = postgreSqlServer;
-        this.extendServer = null;
-    }
-
-    public TestPostgreSqlDistributedQueries(QueryRunnerSupplier supplier, TestPostgreSqlExtendServer postgreSqlServer)
-    {
-        super(supplier);
-        this.postgreSqlServer = null;
-        this.extendServer = postgreSqlServer;
     }
 
     @AfterClass(alwaysRun = true)
-    public void destroy()
+    public final void destroy()
             throws IOException
     {
-        if (extendServer != null) {
-            extendServer.close();
-        }
-        else {
-            postgreSqlServer.close();
-        }
+        postgreSqlServer.close();
     }
 
     @Override

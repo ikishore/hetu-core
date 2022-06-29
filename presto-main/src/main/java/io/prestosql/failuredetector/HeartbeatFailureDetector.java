@@ -61,7 +61,6 @@ import java.util.concurrent.ScheduledThreadPoolExecutor;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicReference;
-import java.util.stream.Collectors;
 
 import static com.google.common.base.Preconditions.checkArgument;
 import static com.google.common.collect.ImmutableList.toImmutableList;
@@ -79,8 +78,6 @@ public class HeartbeatFailureDetector
         implements FailureDetector
 {
     private static final Logger log = Logger.get(HeartbeatFailureDetector.class);
-
-    protected Duration monitoringServiceUpdateInterval = new Duration(5, TimeUnit.SECONDS);
 
     private final ServiceSelector selector;
     private final HttpClient httpClient;
@@ -100,7 +97,6 @@ public class HeartbeatFailureDetector
     private final boolean httpsRequired;
 
     private final AtomicBoolean started = new AtomicBoolean();
-    private AtomicBoolean isTasksRemoved = new AtomicBoolean();
 
     @Inject
     public HeartbeatFailureDetector(
@@ -147,13 +143,8 @@ public class HeartbeatFailureDetector
                         log.warn(e, "Error updating services");
                     }
                 }
-            }, 0, monitoringServiceUpdateInterval.toMillis(), TimeUnit.MILLISECONDS);
+            }, 0, 5, TimeUnit.SECONDS);
         }
-    }
-
-    protected HttpClient getHttpClient()
-    {
-        return this.httpClient;
     }
 
     @PreDestroy
@@ -178,12 +169,6 @@ public class HeartbeatFailureDetector
                 .collect(toImmutableSet());
     }
 
-    public Set<MonitoringTask> getAliveNodes()
-    {
-        waitForServiceStateRefresh();
-        return tasks.values().stream().filter(t -> !getFailed().contains(t)).collect(Collectors.toSet());
-    }
-
     @Override
     public State getState(HostAddress hostAddress)
     {
@@ -201,16 +186,11 @@ public class HeartbeatFailureDetector
                     // TODO: distinguish between process unresponsiveness (e.g GC pause) and host reboot
                     return UNRESPONSIVE;
                 }
-                if (lastFailureException == null) {
-                    log.debug("State is UNKNOWN. Last Failure Exception is null");
-                }
-                else {
-                    log.debug("State is UNKNOWN. Last Failure exception " + lastFailureException.toString());
-                }
+
                 return UNKNOWN;
             }
         }
-        log.debug("State is UNKNOWN");
+
         return UNKNOWN;
     }
 
@@ -241,65 +221,45 @@ public class HeartbeatFailureDetector
         return builder.build();
     }
 
-    protected long getCurrentTime()
-    {
-        Map<ServiceDescriptor, Long> waitingTasks = getTasksTimestamp();
-        return waitingTasks.values().stream().mapToLong(t -> t).max().getAsLong();
-    }
-
-    @Override
-    public void waitForServiceStateRefresh()
-    {
-        long currentTime = getCurrentTime();
-        updateMonitoredServices();
-        // remove expired tasks
-        synchronized (tasks) {
-            removeExpiredIds();
-            if (tasks.size() == 0) {
-                return;
-            }
-        }
-        Map<ServiceDescriptor, Long> finalCurrentTasks;
-        do {
-            Map<ServiceDescriptor, Long> currentTasks;
-            Set<ServiceDescriptor> failedTasks;
-            synchronized (tasks) {
-                currentTasks = getTasksTimestamp();
-                failedTasks = getFailed();
-            }
-            currentTasks.entrySet().stream().forEach(e -> {
-                if (e.getValue() > currentTime || failedTasks.contains(e.getKey())) {
-                    if (currentTasks.containsKey(e.getKey())) {
-                        currentTasks.remove(e.getKey());
-                    }
-                }
-            });
-            finalCurrentTasks = currentTasks;
-        } while (finalCurrentTasks.size() > 0);
-    }
-
-    private ConcurrentMap<ServiceDescriptor, Long> getTasksTimestamp()
-    {
-        return tasks.values().stream().collect(Collectors.toConcurrentMap(t -> t.getService(), t -> t.getLastCompleteTimestamp()));
-    }
-
     @VisibleForTesting
     void updateMonitoredServices()
     {
-        Set<ServiceDescriptor> online = getOnlineServiceDescriptors();
+        Set<ServiceDescriptor> online = selector.selectAllServices().stream()
+                .filter(descriptor -> !nodeInfo.getNodeId().equals(descriptor.getNodeId()))
+                .collect(toImmutableSet());
 
-        Set<UUID> onlineIds = getOnlineIds(online);
+        Set<UUID> onlineIds = online.stream()
+                .map(ServiceDescriptor::getId)
+                .collect(toImmutableSet());
 
         // make sure only one thread is updating the registrations
         synchronized (tasks) {
             // 1. remove expired tasks
-            removeExpiredIds();
+            List<UUID> expiredIds = tasks.values().stream()
+                    .filter(MonitoringTask::isExpired)
+                    .map(MonitoringTask::getService)
+                    .map(ServiceDescriptor::getId)
+                    .collect(toImmutableList());
+
+            tasks.keySet().removeAll(expiredIds);
 
             // 2. disable offline services
-            disableOfflineTasks(onlineIds);
+            tasks.values().stream()
+                    .filter(task -> !onlineIds.contains(task.getService().getId()))
+                    .forEach(MonitoringTask::disable);
 
             // 3. create tasks for new services
-            createTasksForNewServices(online);
+            Set<ServiceDescriptor> newServices = online.stream()
+                    .filter(service -> !tasks.keySet().contains(service.getId()))
+                    .collect(toImmutableSet());
+
+            for (ServiceDescriptor service : newServices) {
+                URI uri = getHttpUri(service);
+
+                if (uri != null) {
+                    tasks.put(service.getId(), new MonitoringTask(service, uri));
+                }
+            }
 
             // 4. enable all online tasks (existing plus newly created)
             tasks.values().stream()
@@ -308,62 +268,7 @@ public class HeartbeatFailureDetector
         }
     }
 
-    private Set<ServiceDescriptor> getNewServices(Set<ServiceDescriptor> online)
-    {
-        return online.stream()
-                .filter(service -> !tasks.keySet().contains(service.getId()))
-                .collect(toImmutableSet());
-    }
-
-    protected void createTasksForNewServices(Set<ServiceDescriptor> online)
-    {
-        Set<ServiceDescriptor> newServices = getNewServices(online);
-        for (ServiceDescriptor service : newServices) {
-            URI uri = getHttpUri(service);
-            if (uri != null) {
-                tasks.put(service.getId(), createNewTask(service, uri));
-            }
-        }
-    }
-
-    protected MonitoringTask createNewTask(ServiceDescriptor service, URI uri)
-    {
-        return new MonitoringTask(service, uri);
-    }
-
-    protected Set<ServiceDescriptor> getOnlineServiceDescriptors()
-    {
-        return selector.selectAllServices().stream()
-                .filter(descriptor -> !nodeInfo.getNodeId().equals(descriptor.getNodeId()))
-                .collect(toImmutableSet());
-    }
-
-    private Set<UUID> getOnlineIds(Set<ServiceDescriptor> online)
-    {
-        return online.stream()
-                .map(ServiceDescriptor::getId)
-                .collect(toImmutableSet());
-    }
-
-    private void disableOfflineTasks(Set<UUID> onlineIds)
-    {
-        tasks.values().stream()
-                .filter(task -> !onlineIds.contains(task.getService().getId()))
-                .forEach(MonitoringTask::disable);
-    }
-
-    private void removeExpiredIds()
-    {
-        List<UUID> expiredIds = tasks.values().stream()
-                .filter(MonitoringTask::isExpired)
-                .map(MonitoringTask::getService)
-                .map(ServiceDescriptor::getId)
-                .collect(toImmutableList());
-
-        tasks.keySet().removeAll(expiredIds);
-    }
-
-    protected URI getHttpUri(ServiceDescriptor descriptor)
+    private URI getHttpUri(ServiceDescriptor descriptor)
     {
         String url = descriptor.getProperties().get(httpsRequired ? "https" : "http");
         if (url != null) {
@@ -371,40 +276,28 @@ public class HeartbeatFailureDetector
                 return new URI(url);
             }
             catch (URISyntaxException ignored) {
-                // could be ignored
             }
         }
         return null;
     }
 
     @ThreadSafe
-    protected class MonitoringTask
+    private class MonitoringTask
     {
         private final ServiceDescriptor service;
         private final URI uri;
         private final Stats stats;
 
         @GuardedBy("this")
-        protected ScheduledFuture<?> future;
+        private ScheduledFuture<?> future;
 
         @GuardedBy("this")
-        protected Long disabledTimestamp;
+        private Long disabledTimestamp;
 
         @GuardedBy("this")
-        protected Long successTransitionTimestamp;
+        private Long successTransitionTimestamp;
 
-        @GuardedBy("this")
-        protected long lastCompleteTimestamp;
-
-        @GuardedBy("this")
-        protected double lastFailureCount;
-
-        public URI getUri()
-        {
-            return this.uri;
-        }
-
-        public MonitoringTask(ServiceDescriptor service, URI uri)
+        private MonitoringTask(ServiceDescriptor service, URI uri)
         {
             this.uri = uri;
             this.service = service;
@@ -464,16 +357,10 @@ public class HeartbeatFailureDetector
                     Duration.nanosSince(successTransitionTimestamp).compareTo(warmupInterval) < 0; // are we within the warmup period?
         }
 
-        public synchronized long getLastCompleteTimestamp()
-        {
-            return lastCompleteTimestamp;
-        }
-
-        protected void ping()
+        private void ping()
         {
             try {
                 stats.recordStart();
-                log.debug("pinging ..." + uri);
                 httpClient.executeAsync(prepareHead().setUri(uri).build(), new ResponseHandler<Object, Exception>()
                 {
                     @Override
@@ -481,6 +368,7 @@ public class HeartbeatFailureDetector
                     {
                         // ignore error
                         stats.recordFailure(exception);
+
                         // TODO: this will technically cause an NPE in httpClient, but it's not triggered because
                         // we never call get() on the response future. This behavior needs to be fixed in airlift
                         return null;
@@ -499,7 +387,7 @@ public class HeartbeatFailureDetector
             }
         }
 
-        protected synchronized void updateState()
+        private synchronized void updateState()
         {
             // is this an over/under transition?
             if (stats.getRecentFailureRatio() > failureRatioThreshold) {
@@ -507,11 +395,6 @@ public class HeartbeatFailureDetector
             }
             else if (successTransitionTimestamp == null) {
                 successTransitionTimestamp = System.nanoTime();
-                lastCompleteTimestamp = System.nanoTime();
-                lastFailureCount = stats.getRecentFailures();
-            }
-            else if (Duration.nanosSince(lastCompleteTimestamp).compareTo(new Duration(1, TimeUnit.SECONDS)) > 0 && stats.getRecentFailures() == lastFailureCount) {
-                lastCompleteTimestamp = System.nanoTime();
             }
         }
     }
@@ -627,11 +510,11 @@ public class HeartbeatFailureDetector
         @JsonProperty
         public FailureInfo getLastFailureInfo()
         {
-            Exception exception = getLastFailureException();
-            if (exception == null) {
+            Exception lastFailureException = getLastFailureException();
+            if (lastFailureException == null) {
                 return null;
             }
-            return Failures.toFailure(exception).toFailureInfo();
+            return Failures.toFailure(lastFailureException).toFailureInfo();
         }
 
         @JsonProperty

@@ -20,7 +20,6 @@ import io.prestosql.rcfile.EncodeOutput;
 import io.prestosql.spi.block.Block;
 import io.prestosql.spi.block.BlockBuilder;
 import io.prestosql.spi.type.Type;
-import org.joda.time.DateTimeZone;
 
 import static io.airlift.slice.SizeOf.SIZE_OF_INT;
 import static io.prestosql.rcfile.RcFileDecoderUtils.decodeVIntSize;
@@ -30,18 +29,15 @@ import static io.prestosql.rcfile.RcFileDecoderUtils.writeVInt;
 import static java.lang.Math.floorDiv;
 import static java.lang.Math.floorMod;
 import static java.lang.Math.toIntExact;
-import static java.util.Objects.requireNonNull;
 
 public class TimestampEncoding
         implements BinaryColumnEncoding
 {
     private final Type type;
-    private final DateTimeZone timeZone;
 
-    public TimestampEncoding(Type type, DateTimeZone timeZone)
+    public TimestampEncoding(Type type)
     {
-        this.type = requireNonNull(type, "type is null");
-        this.timeZone = requireNonNull(timeZone, "timeZone is null");
+        this.type = type;
     }
 
     @Override
@@ -116,70 +112,65 @@ public class TimestampEncoding
         return (b >> 7) != 0;
     }
 
-    private long getTimestamp(Slice slice, int offset)
+    private static long getTimestamp(Slice slice, int offset)
     {
-        int newOffset = offset;
         // read seconds (low 32 bits)
-        int lowest31BitsOfSecondsAndFlag = Integer.reverseBytes(slice.getInt(newOffset));
+        int lowest31BitsOfSecondsAndFlag = Integer.reverseBytes(slice.getInt(offset));
         long seconds = lowest31BitsOfSecondsAndFlag & 0x7FFF_FFFF;
-        newOffset += SIZE_OF_INT;
+        offset += SIZE_OF_INT;
 
         int nanos = 0;
         if (lowest31BitsOfSecondsAndFlag < 0) {
             // read nanos
             // this is an inline version of readVint so it can be stitched together
             // the the code to read the seconds high bits below
-            byte nanosFirstByte = slice.getByte(newOffset);
+            byte nanosFirstByte = slice.getByte(offset);
             int nanosLength = decodeVIntSize(nanosFirstByte);
-            nanos = (int) readVInt(slice, newOffset, nanosLength);
+            nanos = (int) readVInt(slice, offset, nanosLength);
             nanos = decodeNanos(nanos);
 
             // read seconds (high 32 bits)
             if (isNegativeVInt(nanosFirstByte)) {
                 // We compose the seconds field from two parts. The lowest 31 bits come from the first four
                 // bytes. The higher-order bits come from the second VInt that follows the nanos field.
-                long highBits = readVInt(slice, newOffset + nanosLength);
+                long highBits = readVInt(slice, offset + nanosLength);
                 seconds |= (highBits << 31);
             }
         }
 
         long millis = (seconds * 1000) + (nanos / 1_000_000);
-
-        return timeZone.convertUTCToLocal(millis);
+        return millis;
     }
 
     @SuppressWarnings("NonReproducibleMathCall")
     private static int decodeNanos(int nanos)
     {
-        int nan = nanos;
-        if (nan < 0) {
+        if (nanos < 0) {
             // This means there is a second VInt present that specifies additional bits of the timestamp.
             // The reversed nanoseconds value is still encoded in this VInt.
-            nan = -nan - 1;
+            nanos = -nanos - 1;
         }
-        int nanosDigits = (int) Math.floor(Math.log10(nan)) + 1;
+        int nanosDigits = (int) Math.floor(Math.log10(nanos)) + 1;
 
         // Reverse the nanos digits (base 10)
         int temp = 0;
-        while (nan != 0) {
+        while (nanos != 0) {
             temp *= 10;
-            temp += nan % 10;
-            nan /= 10;
+            temp += nanos % 10;
+            nanos /= 10;
         }
-        nan = temp;
+        nanos = temp;
 
         if (nanosDigits < 9) {
-            nan *= Math.pow(10, 9 - nanosDigits);
+            nanos *= Math.pow(10, 9 - nanosDigits);
         }
-        return nan;
+        return nanos;
     }
 
-    private void writeTimestamp(SliceOutput output, long millis)
+    private static void writeTimestamp(SliceOutput output, long millis)
     {
-        long ms = millis;
-        ms = timeZone.convertLocalToUTC(ms, false);
-        long seconds = floorDiv(ms, 1000);
-        int nanos = toIntExact(floorMod(ms, 1000) * 1_000_000);
+        long seconds = floorDiv(millis, 1000);
+        int nanos = toIntExact(floorMod(millis, 1000) * 1_000_000);
         writeTimestamp(seconds, nanos, output);
     }
 
@@ -217,14 +208,13 @@ public class TimestampEncoding
 
     private static int reverseDecimal(int nanos)
     {
-        int nan = nanos;
         int decimal = 0;
-        if (nan != 0) {
+        if (nanos != 0) {
             int counter = 0;
             while (counter < 9) {
                 decimal *= 10;
-                decimal += nan % 10;
-                nan /= 10;
+                decimal += nanos % 10;
+                nanos /= 10;
                 counter++;
             }
         }

@@ -22,10 +22,7 @@ import io.prestosql.spi.block.Block;
 import io.prestosql.spi.block.BlockBuilder;
 import io.prestosql.spi.type.Type;
 
-import java.nio.charset.StandardCharsets;
-
 import static io.prestosql.rcfile.RcFileDecoderUtils.calculateTruncationLength;
-import static io.prestosql.rcfile.RcFileDecoderUtils.unescapeText;
 
 public class StringEncoding
         implements TextColumnEncoding
@@ -42,24 +39,18 @@ public class StringEncoding
     }
 
     @Override
-    public void encodeColumn(Block block, SliceOutput sliceOutput, EncodeOutput encodeOutput)
+    public void encodeColumn(Block block, SliceOutput output, EncodeOutput encodeOutput)
     {
         for (int position = 0; position < block.getPositionCount(); position++) {
             if (block.isNull(position)) {
-                sliceOutput.writeBytes(nullSequence);
+                output.writeBytes(nullSequence);
             }
             else {
                 Slice slice = type.getSlice(block, position);
                 if (escapeByte != null && slice.indexOfByte(escapeByte) < 0) {
                     throw new IllegalArgumentException("escape not implemented");
                 }
-                String escapedValue = unescapeText(new String(slice.getBytes(), StandardCharsets.UTF_8));
-                if (escapedValue.getBytes(StandardCharsets.UTF_8).length < slice.getBytes().length) {
-                    sliceOutput.writeBytes(escapedValue.getBytes(StandardCharsets.UTF_8));
-                }
-                else {
-                    sliceOutput.writeBytes(slice);
-                }
+                output.writeBytes(slice);
             }
             encodeOutput.closeEntry();
         }
@@ -78,18 +69,17 @@ public class StringEncoding
     @Override
     public Block decodeColumn(ColumnData columnData)
     {
-        ColumnData data = columnData;
         if (escapeByte != null) {
-            data = unescape(data, escapeByte);
+            columnData = unescape(columnData, escapeByte);
         }
 
-        int size = data.rowCount();
+        int size = columnData.rowCount();
         BlockBuilder builder = type.createBlockBuilder(null, size);
 
-        Slice slice = data.getSlice();
+        Slice slice = columnData.getSlice();
         for (int i = 0; i < size; i++) {
-            int offset = data.getOffset(i);
-            int length = data.getLength(i);
+            int offset = columnData.getOffset(i);
+            int length = columnData.getLength(i);
             if (nullSequence.equals(0, nullSequence.length(), slice, offset, length)) {
                 builder.appendNull();
             }
@@ -134,8 +124,7 @@ public class StringEncoding
     @Override
     public void decodeValueInto(int depth, BlockBuilder builder, Slice slice, int offset, int length)
     {
-        int len = length;
-        len = calculateTruncationLength(type, slice, offset, len);
-        type.writeSlice(builder, slice, offset, len);
+        length = calculateTruncationLength(type, slice, offset, length);
+        type.writeSlice(builder, slice, offset, length);
     }
 }

@@ -22,7 +22,6 @@ import io.prestosql.execution.TaskStateMachine;
 import io.prestosql.memory.MemoryPool;
 import io.prestosql.memory.QueryContext;
 import io.prestosql.operator.TaskContext;
-import io.prestosql.snapshot.RecoveryUtils;
 import io.prestosql.spi.QueryId;
 import io.prestosql.spi.memory.MemoryPoolId;
 import io.prestosql.spiller.SpillSpaceTracker;
@@ -34,8 +33,6 @@ import java.util.concurrent.ScheduledExecutorService;
 
 import static io.airlift.units.DataSize.Unit.GIGABYTE;
 import static io.airlift.units.DataSize.Unit.MEGABYTE;
-import static io.prestosql.testing.TestingPagesSerdeFactory.TESTING_SERDE_FACTORY;
-import static io.prestosql.testing.TestingRecoveryUtils.NOOP_RECOVERY_UTILS;
 
 public final class TestingTaskContext
 {
@@ -47,11 +44,6 @@ public final class TestingTaskContext
     public static TaskContext createTaskContext(Executor notificationExecutor, ScheduledExecutorService yieldExecutor, Session session)
     {
         return builder(notificationExecutor, yieldExecutor, session).build();
-    }
-
-    public static TaskContext createTaskContext(Executor notificationExecutor, ScheduledExecutorService yieldExecutor, Session session, RecoveryUtils recoveryUtils)
-    {
-        return builder(notificationExecutor, yieldExecutor, session, recoveryUtils).build();
     }
 
     public static TaskContext createTaskContext(Executor notificationExecutor, ScheduledExecutorService yieldExecutor, Session session, DataSize maxMemory)
@@ -73,33 +65,20 @@ public final class TestingTaskContext
         return createTaskContext(queryContext, session, new TaskStateMachine(new TaskId("query", 0, 0), executor));
     }
 
-    public static TaskContext createTaskContext(QueryContext queryContext, Executor executor, Session session, TaskId taskId)
-    {
-        return createTaskContext(queryContext, session, new TaskStateMachine(taskId, executor));
-    }
-
     private static TaskContext createTaskContext(QueryContext queryContext, Session session, TaskStateMachine taskStateMachine)
     {
-        TaskContext taskContext = queryContext.addTaskContext(
+        return queryContext.addTaskContext(
                 taskStateMachine,
                 session,
                 true,
                 true,
                 OptionalInt.empty(),
-                Optional.empty(),
-                TESTING_SERDE_FACTORY);
-        taskContext.getSnapshotManager().setTotalComponents(100);
-        return taskContext;
+                Optional.empty());
     }
 
     public static Builder builder(Executor notificationExecutor, ScheduledExecutorService yieldExecutor, Session session)
     {
-        return new Builder(notificationExecutor, yieldExecutor, session, NOOP_RECOVERY_UTILS);
-    }
-
-    public static Builder builder(Executor notificationExecutor, ScheduledExecutorService yieldExecutor, Session session, RecoveryUtils recoveryUtils)
-    {
-        return new Builder(notificationExecutor, yieldExecutor, session, recoveryUtils);
+        return new Builder(notificationExecutor, yieldExecutor, session);
     }
 
     public static class Builder
@@ -114,15 +93,13 @@ public final class TestingTaskContext
         private DataSize memoryPoolSize = new DataSize(1, GIGABYTE);
         private DataSize maxSpillSize = new DataSize(1, GIGABYTE);
         private DataSize queryMaxSpillSize = new DataSize(1, GIGABYTE);
-        private RecoveryUtils recoveryUtils;
 
-        private Builder(Executor notificationExecutor, ScheduledExecutorService yieldExecutor, Session session, RecoveryUtils recoveryUtils)
+        private Builder(Executor notificationExecutor, ScheduledExecutorService yieldExecutor, Session session)
         {
             this.notificationExecutor = notificationExecutor;
             this.yieldExecutor = yieldExecutor;
             this.session = session;
             this.taskStateMachine = new TaskStateMachine(new TaskId("query", 0, 0), notificationExecutor);
-            this.recoveryUtils = recoveryUtils;
         }
 
         public Builder setTaskStateMachine(TaskStateMachine taskStateMachine)
@@ -161,12 +138,6 @@ public final class TestingTaskContext
             return this;
         }
 
-        public Builder setRecoveryUtils(RecoveryUtils recoveryUtils)
-        {
-            this.recoveryUtils = recoveryUtils;
-            return this;
-        }
-
         public TaskContext build()
         {
             MemoryPool memoryPool = new MemoryPool(new MemoryPoolId("test"), memoryPoolSize);
@@ -180,8 +151,7 @@ public final class TestingTaskContext
                     notificationExecutor,
                     yieldExecutor,
                     queryMaxSpillSize,
-                    spillSpaceTracker,
-                    recoveryUtils);
+                    spillSpaceTracker);
 
             return createTaskContext(queryContext, session, taskStateMachine);
         }

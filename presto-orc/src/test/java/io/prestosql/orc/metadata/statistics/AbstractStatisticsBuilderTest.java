@@ -266,9 +266,8 @@ public abstract class AbstractStatisticsBuilderTest<B extends StatisticsBuilder,
             return getMergedColumnStatisticsPairwise(ImmutableList.copyOf(statistics));
         }
 
-        private static ColumnStatistics getMergedColumnStatisticsPairwise(List<ColumnStatistics> statisticsList)
+        private static ColumnStatistics getMergedColumnStatisticsPairwise(List<ColumnStatistics> statistics)
         {
-            List<ColumnStatistics> statistics = statisticsList;
             while (statistics.size() > 1) {
                 ImmutableList.Builder<ColumnStatistics> mergedStatistics = ImmutableList.builder();
                 for (int i = 0; i < statistics.size(); i += 2) {

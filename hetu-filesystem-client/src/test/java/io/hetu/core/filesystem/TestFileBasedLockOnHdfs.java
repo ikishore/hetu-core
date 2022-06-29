@@ -24,7 +24,6 @@ import org.testng.annotations.Test;
 
 import java.io.IOException;
 import java.io.OutputStream;
-import java.nio.charset.StandardCharsets;
 import java.nio.file.Path;
 import java.nio.file.Paths;
 import java.util.concurrent.TimeUnit;
@@ -73,7 +72,7 @@ public class TestFileBasedLockOnHdfs
         FileBasedLock lock = new FileBasedLock(fs, testDir, 1000L,
                 FileBasedLock.DEFAULT_RETRY_INTERVAL, FileBasedLock.DEFAULT_REFRESH_RATE);
         OutputStream os = fs.newOutputStream(testDir.resolve(".lockFile"));
-        os.write("test".getBytes(StandardCharsets.UTF_8));
+        os.write("test".getBytes());
         os.close();
         assertTrue(lock.isLocked());
         Thread.sleep(1200L);
@@ -89,7 +88,7 @@ public class TestFileBasedLockOnHdfs
         FileBasedLock lock = new FileBasedLock(fs, testDir, 1000L,
                 FileBasedLock.DEFAULT_RETRY_INTERVAL, FileBasedLock.DEFAULT_REFRESH_RATE);
         OutputStream os = fs.newOutputStream(testDir.resolve(".lockInfo"));
-        os.write("test".getBytes(StandardCharsets.UTF_8));
+        os.write("test".getBytes());
         os.close();
         assertFalse(lock.acquiredLock());
         Thread.sleep(1200L);

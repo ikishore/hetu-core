@@ -19,7 +19,6 @@ import io.prestosql.queryeditorui.store.files.ExpiringFileStore;
 import io.prestosql.security.AccessControl;
 import io.prestosql.security.AccessControlUtil;
 import io.prestosql.server.ServerConfig;
-import io.prestosql.spi.security.GroupProvider;
 
 import javax.servlet.http.HttpServletRequest;
 import javax.ws.rs.GET;
@@ -41,15 +40,13 @@ public class FilesResource
     private final ExpiringFileStore fileStore;
     private final AccessControl accessControl;
     private final ServerConfig serverConfig;
-    private final GroupProvider groupProvider;
 
     @Inject
-    public FilesResource(ExpiringFileStore fileStore, AccessControl accessControl, ServerConfig serverConfig, GroupProvider groupProvider)
+    public FilesResource(ExpiringFileStore fileStore, AccessControl accessControl, ServerConfig serverConfig)
     {
         this.fileStore = fileStore;
         this.accessControl = accessControl;
         this.serverConfig = serverConfig;
-        this.groupProvider = groupProvider;
     }
 
     @GET
@@ -59,7 +56,7 @@ public class FilesResource
                             @Context HttpServletRequest servletRequest)
     {
         // if the user is admin, don't filter results by user.
-        Optional<String> filterUser = AccessControlUtil.getUserForFilter(accessControl, serverConfig, servletRequest, groupProvider);
+        Optional<String> filterUser = AccessControlUtil.getUserForFilter(accessControl, serverConfig, servletRequest);
 
         final File file = fileStore.get(fileName, filterUser);
         if (file == null) {

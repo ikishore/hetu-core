@@ -466,7 +466,7 @@ public class TestLogicalPlanner
     @Test
     public void testSubqueryPruning()
     {
-        List<QueryTemplate.Parameter> subqueries = QueryTemplate.parameter("subquery").ofStringList(
+        List<QueryTemplate.Parameter> subqueries = QueryTemplate.parameter("subquery").of(
                 "orderkey IN (SELECT orderkey FROM lineitem WHERE orderkey % 2 = 0)",
                 "EXISTS(SELECT orderkey FROM lineitem WHERE orderkey % 2 = 0)",
                 "0 = (SELECT orderkey FROM lineitem WHERE orderkey % 2 = 0)");
@@ -772,7 +772,7 @@ public class TestLogicalPlanner
                                 anyTree(
                                         node(TableScanNode.class)),
                                 anyTree(
-                                        exchange(REMOTE, REPLICATE,
+                                        exchange(REMOTE, ExchangeNode.Type.REPLICATE,
                                                 anyTree(
                                                         node(TableScanNode.class))))));
 
@@ -853,7 +853,7 @@ public class TestLogicalPlanner
                                 anyTree(
                                         exchange(REMOTE, GATHER,
                                                 anyTree(
-                                                    node(TableScanNode.class)))))));
+                                                        node(TableScanNode.class)))))));
 
         // replicated join is preserved if there are no equality criteria
         assertPlanWithSession(

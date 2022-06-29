@@ -83,8 +83,7 @@ public final class PushRemoteExchangeThroughAssignUniqueId
                                 partitioningScheme.getBucketToPartition()),
                         ImmutableList.of(assignUniqueId.getSource()),
                         ImmutableList.of(removeSymbol(getOnlyElement(node.getInputs()), assignUniqueId.getIdColumn())),
-                        Optional.empty(),
-                        node.getAggregationType()),
+                        Optional.empty()),
                 assignUniqueId.getIdColumn()));
     }
 

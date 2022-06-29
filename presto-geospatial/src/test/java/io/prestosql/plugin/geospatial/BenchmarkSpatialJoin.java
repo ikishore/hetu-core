@@ -14,12 +14,9 @@
 package io.prestosql.plugin.geospatial;
 
 import com.google.common.collect.ImmutableMap;
-import io.hetu.core.common.filesystem.TempFolder;
-import io.hetu.core.filesystem.HetuFileSystemClientPlugin;
-import io.hetu.core.metastore.HetuMetastorePlugin;
 import io.prestosql.metadata.Metadata;
+import io.prestosql.metadata.QualifiedObjectName;
 import io.prestosql.plugin.memory.MemoryConnectorFactory;
-import io.prestosql.spi.connector.QualifiedObjectName;
 import io.prestosql.spi.metadata.TableHandle;
 import io.prestosql.testing.LocalQueryRunner;
 import io.prestosql.testing.MaterializedResult;
@@ -44,7 +41,6 @@ import java.io.IOException;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.nio.file.Paths;
-import java.util.HashMap;
 import java.util.Optional;
 import java.util.stream.Collectors;
 
@@ -85,20 +81,8 @@ public class BenchmarkSpatialJoin
                     .setCatalog("memory")
                     .setSchema("default")
                     .build());
-            queryRunner.installPlugin(new HetuFileSystemClientPlugin());
-            queryRunner.installPlugin(new HetuMetastorePlugin());
             queryRunner.installPlugin(new GeoPlugin());
-
-            TempFolder folder = new TempFolder().create();
-            Runtime.getRuntime().addShutdownHook(new Thread(folder::close));
-            HashMap<String, String> metastoreConfig = new HashMap<>();
-            metastoreConfig.put("hetu.metastore.type", "hetufilesystem");
-            metastoreConfig.put("hetu.metastore.hetufilesystem.profile-name", "default");
-            metastoreConfig.put("hetu.metastore.hetufilesystem.path", folder.newFolder("metastore").getAbsolutePath());
-            metastoreConfig.put("hetu.metastore.cache.type", "local");
-            queryRunner.loadMetastore(metastoreConfig);
-            queryRunner.createCatalog("memory", new MemoryConnectorFactory(),
-                    ImmutableMap.of("memory.spill-path", folder.newFolder("memory-connector").getAbsolutePath()));
+            queryRunner.createCatalog("memory", new MemoryConnectorFactory(), ImmutableMap.of());
 
             Path path = Paths.get(BenchmarkSpatialJoin.class.getClassLoader().getResource("us-states.tsv").getPath());
             String polygonValues = Files.lines(path)

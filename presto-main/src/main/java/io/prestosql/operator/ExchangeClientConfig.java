@@ -17,16 +17,21 @@ import io.airlift.configuration.Config;
 import io.airlift.http.client.HttpClientConfig;
 import io.airlift.units.DataSize;
 import io.airlift.units.DataSize.Unit;
+import io.airlift.units.Duration;
 import io.airlift.units.MinDataSize;
+import io.airlift.units.MinDuration;
 
 import javax.validation.constraints.Min;
 import javax.validation.constraints.NotNull;
 
+import java.util.concurrent.TimeUnit;
+
 public class ExchangeClientConfig
 {
-    public static final boolean DETECT_TIMEOUT_FAILURES = true;
     private DataSize maxBufferSize = new DataSize(32, Unit.MEGABYTE);
     private int concurrentRequestMultiplier = 3;
+    private Duration minErrorDuration = new Duration(1, TimeUnit.MINUTES);
+    private Duration maxErrorDuration = new Duration(5, TimeUnit.MINUTES);
     private DataSize maxResponseSize = new HttpClientConfig().getMaxContentLength();
     private int clientThreads = 25;
     private int pageBufferClientMaxCallbackThreads = 25;
@@ -55,6 +60,33 @@ public class ExchangeClientConfig
     public ExchangeClientConfig setConcurrentRequestMultiplier(int concurrentRequestMultiplier)
     {
         this.concurrentRequestMultiplier = concurrentRequestMultiplier;
+        return this;
+    }
+
+    @Deprecated
+    public Duration getMinErrorDuration()
+    {
+        return maxErrorDuration;
+    }
+
+    @Deprecated
+    @Config("exchange.min-error-duration")
+    public ExchangeClientConfig setMinErrorDuration(Duration minErrorDuration)
+    {
+        return this;
+    }
+
+    @NotNull
+    @MinDuration("1ms")
+    public Duration getMaxErrorDuration()
+    {
+        return maxErrorDuration;
+    }
+
+    @Config("exchange.max-error-duration")
+    public ExchangeClientConfig setMaxErrorDuration(Duration maxErrorDuration)
+    {
+        this.maxErrorDuration = maxErrorDuration;
         return this;
     }
 

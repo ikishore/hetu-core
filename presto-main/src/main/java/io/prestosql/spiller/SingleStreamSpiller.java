@@ -15,10 +15,8 @@ package io.prestosql.spiller;
 
 import com.google.common.util.concurrent.ListenableFuture;
 import io.prestosql.spi.Page;
-import io.prestosql.spi.snapshot.Restorable;
 
 import java.io.Closeable;
-import java.nio.file.Path;
 import java.util.Iterator;
 import java.util.List;
 import java.util.concurrent.Future;
@@ -26,7 +24,7 @@ import java.util.concurrent.Future;
 import static com.google.common.collect.Iterators.singletonIterator;
 
 public interface SingleStreamSpiller
-        extends Closeable, Restorable
+        extends Closeable
 {
     /**
      * Initiate spilling of pages stream. Returns completed future once spilling has finished.
@@ -66,17 +64,5 @@ public interface SingleStreamSpiller
     @Override
     void close();
 
-    void deleteFile();
-
-    Path getFile();
-
-    default void commit()
-    {
-        /* do nothing */
-    }
-
-    default boolean isCommitted()
-    {
-        return true;
-    }
+    public void deleteFile();
 }

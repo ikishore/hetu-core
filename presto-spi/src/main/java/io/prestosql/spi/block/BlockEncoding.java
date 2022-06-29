@@ -16,8 +16,6 @@ package io.prestosql.spi.block;
 import io.airlift.slice.SliceInput;
 import io.airlift.slice.SliceOutput;
 
-import java.io.InputStream;
-import java.io.OutputStream;
 import java.util.Optional;
 
 public interface BlockEncoding
@@ -37,17 +35,6 @@ public interface BlockEncoding
      * Write the specified block to the specified output
      */
     void writeBlock(BlockEncodingSerde blockEncodingSerde, SliceOutput sliceOutput, Block block);
-
-    /**
-     * Read a block from the specified input.  The returned
-     * block should begin at the specified position.
-     */
-    Block readBlock(BlockEncodingSerde blockEncodingSerde, InputStream input);
-
-    /**
-     * Write the specified block to the specified output
-     */
-    void writeBlock(BlockEncodingSerde blockEncodingSerde, OutputStream output, Block block);
 
     /**
      * This method allows the implementor to specify a replacement object that will be serialized instead of the original one.

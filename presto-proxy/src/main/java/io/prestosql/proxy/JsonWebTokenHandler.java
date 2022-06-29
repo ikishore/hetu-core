@@ -89,7 +89,6 @@ public class JsonWebTokenHandler
             throw new RuntimeException("Failed to load key file: " + file, e);
         }
         catch (GeneralSecurityException ignored) {
-            // could be ignored
         }
 
         try {

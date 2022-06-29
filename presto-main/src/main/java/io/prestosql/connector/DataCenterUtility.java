@@ -1,5 +1,5 @@
 /*
- * Copyright (C) 2018-2021. Huawei Technologies Co., Ltd. All rights reserved.
+ * Copyright (C) 2018-2020. Huawei Technologies Co., Ltd. All rights reserved.
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
  * You may obtain a copy of the License at
@@ -40,14 +40,8 @@ public class DataCenterUtility
     public static void loadDCCatalogForUseTask(Use statement, Metadata metadata, Session session)
     {
         Optional<Identifier> catalogIdentifier = statement.getCatalog();
-        Optional<String> catalogName = Optional.empty();
-        if (!catalogIdentifier.isPresent()) {
-            catalogName = session.getCatalog();
-        }
-        else {
-            catalogName = Optional.ofNullable(catalogIdentifier.get().getValue());
-        }
-        if (catalogName.isPresent()) {
+        if (catalogIdentifier.isPresent()) {
+            Optional<String> catalogName = Optional.ofNullable(catalogIdentifier.get().getValue());
             if (catalogName.isPresent()) {
                 MetadataManager metadataManager = (MetadataManager) metadata;
                 DataCenterConnectorManager dataCenterConnectorManager = metadataManager.getDataCenterConnectorManager();
@@ -127,9 +121,8 @@ public class DataCenterUtility
      * @param metadata session
      * @param catalogName catalog name
      */
-    public static boolean isDCCatalog(Metadata metadata, String name)
+    public static boolean isDCCatalog(Metadata metadata, String catalogName)
     {
-        String catalogName = name;
         if (catalogName != null && catalogName.contains(".")) {
             catalogName = catalogName.substring(0, catalogName.indexOf("."));
         }

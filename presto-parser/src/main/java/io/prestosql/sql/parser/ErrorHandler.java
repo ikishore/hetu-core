@@ -64,9 +64,8 @@ public class ErrorHandler
     }
 
     @Override
-    public void syntaxError(Recognizer<?, ?> recognizer, Object offendingSymbol, int line, int charPositionInLine, String inputMessage, RecognitionException e)
+    public void syntaxError(Recognizer<?, ?> recognizer, Object offendingSymbol, int line, int charPositionInLine, String message, RecognitionException e)
     {
-        String message = inputMessage;
         try {
             Parser parser = (Parser) recognizer;
 

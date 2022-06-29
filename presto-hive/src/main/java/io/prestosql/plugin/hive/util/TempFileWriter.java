@@ -34,6 +34,7 @@ import static com.google.common.collect.ImmutableList.toImmutableList;
 import static io.airlift.units.DataSize.Unit.BYTE;
 import static io.airlift.units.DataSize.Unit.MEGABYTE;
 import static io.prestosql.orc.metadata.CompressionKind.LZ4;
+import static org.joda.time.DateTimeZone.UTC;
 
 public class TempFileWriter
         implements Closeable
@@ -67,11 +68,6 @@ public class TempFileWriter
         return orcWriter.getWrittenBytes();
     }
 
-    public long getRetainedBytes()
-    {
-        return orcWriter.getRetainedBytes();
-    }
-
     private static OrcWriter createOrcFileWriter(OrcDataSink sink, List<Type> types)
     {
         List<String> columnNames = IntStream.range(0, types.size())
@@ -89,6 +85,7 @@ public class TempFileWriter
                         .withDictionaryMaxMemory(new DataSize(1, MEGABYTE)),
                 false,
                 ImmutableMap.of(),
+                UTC,
                 false,
                 OrcWriteValidationMode.BOTH,
                 new OrcWriterStats(), Optional.empty(), Optional.empty());

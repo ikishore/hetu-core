@@ -92,18 +92,6 @@ final class AesSpillCipher
     }
 
     @Override
-    public Cipher getEncryptionCipher()
-    {
-        return createEncryptCipher(key);
-    }
-
-    @Override
-    public Cipher getDecryptionCipher(byte[] cipherIV)
-    {
-        return createDecryptCipher(key, new IvParameterSpec(cipherIV, 0, cipherIV.length));
-    }
-
-    @Override
     public void close()
     {
         /*
@@ -146,12 +134,7 @@ final class AesSpillCipher
     {
         Cipher cipher = createUninitializedCipher();
         try {
-            if (iv == null) {
-                cipher.init(Cipher.DECRYPT_MODE, throwCipherClosedIfNull(key));
-            }
-            else {
-                cipher.init(Cipher.DECRYPT_MODE, throwCipherClosedIfNull(key), iv);
-            }
+            cipher.init(Cipher.DECRYPT_MODE, throwCipherClosedIfNull(key), iv);
             return cipher;
         }
         catch (GeneralSecurityException e) {

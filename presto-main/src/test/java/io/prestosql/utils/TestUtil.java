@@ -1,5 +1,5 @@
 /*
- * Copyright (C) 2018-2021. Huawei Technologies Co., Ltd. All rights reserved.
+ * Copyright (C) 2018-2020. Huawei Technologies Co., Ltd. All rights reserved.
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
  * You may obtain a copy of the License at
@@ -29,8 +29,6 @@ import io.prestosql.execution.scheduler.SplitSchedulerStats;
 import io.prestosql.failuredetector.NoOpFailureDetector;
 import io.prestosql.filesystem.FileSystemClientManager;
 import io.prestosql.seedstore.SeedStoreManager;
-import io.prestosql.snapshot.QueryRecoveryManager;
-import io.prestosql.snapshot.QuerySnapshotManager;
 import io.prestosql.spi.QueryId;
 import io.prestosql.spi.connector.CatalogName;
 import io.prestosql.spi.connector.ColumnHandle;
@@ -54,7 +52,6 @@ import io.prestosql.sql.planner.iterative.rule.test.PlanBuilder;
 import io.prestosql.sql.planner.plan.PlanFragmentId;
 import io.prestosql.statestore.LocalStateStoreProvider;
 import io.prestosql.testing.TestingMetadata;
-import io.prestosql.testing.TestingRecoveryUtils;
 import io.prestosql.testing.TestingTransactionHandle;
 import io.prestosql.util.FinalizerService;
 
@@ -80,9 +77,9 @@ import static java.util.concurrent.Executors.newScheduledThreadPool;
 
 public class TestUtil
 {
-    private static final NodeTaskMap nodeTaskMap = new NodeTaskMap(new FinalizerService());
-    private static final ExecutorService executor = newCachedThreadPool(daemonThreadsNamed("test-executor-%s"));
-    private static final ScheduledExecutorService scheduledExecutor = newScheduledThreadPool(2, daemonThreadsNamed("test-scheduledExecutor-%s"));
+    private static NodeTaskMap nodeTaskMap = new NodeTaskMap(new FinalizerService());
+    private static ExecutorService executor = newCachedThreadPool(daemonThreadsNamed("test-executor-%s"));
+    private static ScheduledExecutorService scheduledExecutor = newScheduledThreadPool(2, daemonThreadsNamed("test-scheduledExecutor-%s"));
 
     private TestUtil()
     {
@@ -105,9 +102,7 @@ public class TestUtil
                 new NoOpFailureDetector(),
                 new SplitSchedulerStats(),
                 new DynamicFilterService(new LocalStateStoreProvider(
-                        new SeedStoreManager(new FileSystemClientManager()))),
-                new QuerySnapshotManager(stageId.getQueryId(), TestingRecoveryUtils.NOOP_RECOVERY_UTILS, TEST_SESSION),
-                new QueryRecoveryManager(TestingRecoveryUtils.NOOP_RECOVERY_UTILS, TEST_SESSION, stageId.getQueryId()));
+                        new SeedStoreManager(new FileSystemClientManager()))));
         stage.setOutputBuffers(createInitialEmptyOutputBuffers(ARBITRARY));
 
         return stage;

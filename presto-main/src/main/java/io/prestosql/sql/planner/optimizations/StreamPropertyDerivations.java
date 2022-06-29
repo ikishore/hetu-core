@@ -32,6 +32,7 @@ import io.prestosql.spi.plan.LimitNode;
 import io.prestosql.spi.plan.MarkDistinctNode;
 import io.prestosql.spi.plan.PlanNode;
 import io.prestosql.spi.plan.ProjectNode;
+import io.prestosql.spi.plan.RouterNode;
 import io.prestosql.spi.plan.Symbol;
 import io.prestosql.spi.plan.TableScanNode;
 import io.prestosql.spi.plan.TopNNode;
@@ -66,12 +67,9 @@ import io.prestosql.sql.planner.plan.SpatialJoinNode;
 import io.prestosql.sql.planner.plan.StatisticsWriterNode;
 import io.prestosql.sql.planner.plan.TableDeleteNode;
 import io.prestosql.sql.planner.plan.TableFinishNode;
-import io.prestosql.sql.planner.plan.TableUpdateNode;
 import io.prestosql.sql.planner.plan.TableWriterNode;
 import io.prestosql.sql.planner.plan.TopNRankingNumberNode;
 import io.prestosql.sql.planner.plan.UnnestNode;
-import io.prestosql.sql.planner.plan.UpdateIndexNode;
-import io.prestosql.sql.planner.plan.UpdateNode;
 import io.prestosql.sql.planner.plan.VacuumTableNode;
 import io.prestosql.sql.tree.SymbolReference;
 
@@ -290,13 +288,6 @@ public final class StreamPropertyDerivations
         }
 
         @Override
-        public StreamProperties visitUpdateIndex(UpdateIndexNode node, List<StreamProperties> inputProperties)
-        {
-            StreamProperties properties = Iterables.getOnlyElement(inputProperties);
-            return properties.withUnspecifiedPartitioning();
-        }
-
-        @Override
         public StreamProperties visitCreateIndex(CreateIndexNode node, List<StreamProperties> inputProperties)
         {
             StreamProperties properties = Iterables.getOnlyElement(inputProperties);
@@ -457,24 +448,10 @@ public final class StreamPropertyDerivations
         }
 
         @Override
-        public StreamProperties visitTableUpdate(TableUpdateNode node, List<StreamProperties> inputProperties)
-        {
-            // delete only outputs a single row count
-            return StreamProperties.singleStream();
-        }
-
-        @Override
         public StreamProperties visitDelete(DeleteNode node, List<StreamProperties> inputProperties)
         {
             StreamProperties properties = Iterables.getOnlyElement(inputProperties);
             // delete only outputs the row count
-            return properties.withUnspecifiedPartitioning();
-        }
-
-        @Override
-        public StreamProperties visitUpdate(UpdateNode node, List<StreamProperties> inputProperties)
-        {
-            StreamProperties properties = Iterables.getOnlyElement(inputProperties);
             return properties.withUnspecifiedPartitioning();
         }
 
@@ -647,6 +624,12 @@ public final class StreamPropertyDerivations
 
         @Override
         public StreamProperties visitCTEScan(CTEScanNode node, List<StreamProperties> inputProperties)
+        {
+            return Iterables.getOnlyElement(inputProperties);
+        }
+
+        @Override
+        public StreamProperties visitRouter(RouterNode node, List<StreamProperties> inputProperties)
         {
             return Iterables.getOnlyElement(inputProperties);
         }

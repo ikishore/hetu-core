@@ -37,7 +37,9 @@ import io.prestosql.plugin.hive.metastore.thrift.MockThriftMetastoreClient;
 import io.prestosql.plugin.hive.metastore.thrift.ThriftHiveMetastore;
 import io.prestosql.plugin.hive.metastore.thrift.ThriftHiveMetastoreConfig;
 import io.prestosql.plugin.hive.metastore.thrift.ThriftMetastoreClient;
+import io.prestosql.spi.Page;
 import io.prestosql.spi.PageSorter;
+import io.prestosql.spi.block.Block;
 import io.prestosql.spi.connector.ConnectorSession;
 import io.prestosql.spi.connector.SchemaTableName;
 import io.prestosql.spi.type.TypeManager;
@@ -60,27 +62,22 @@ import static io.prestosql.plugin.hive.HiveTestUtils.getDefaultHiveFileWriterFac
 import static io.prestosql.plugin.hive.HiveTestUtils.getDefaultOrcFileWriterFactory;
 import static java.util.concurrent.Executors.newCachedThreadPool;
 import static org.apache.hadoop.hive.ql.exec.Utilities.getBucketIdFromFile;
-import static org.joda.time.DateTimeZone.UTC;
 import static org.testng.Assert.assertEquals;
 
 public class TestHiveWriterFactory
 {
     private ThriftMetastoreClient mockClient;
     protected ExecutorService executor;
-    protected ExecutorService executorRefresh;
     protected HiveMetastore metastore;
 
     private void setUp()
     {
         mockClient = new MockThriftMetastoreClient();
         executor = newCachedThreadPool(daemonThreadsNamed("hive-%s"));
-        executorRefresh = newCachedThreadPool(daemonThreadsNamed("hive-refresh-%s"));
         MetastoreLocator metastoreLocator = new MockMetastoreLocator(mockClient);
         metastore = new CachingHiveMetastore(
                 new BridgingHiveMetastore(new ThriftHiveMetastore(metastoreLocator, new ThriftHiveMetastoreConfig())),
                 executor,
-                executorRefresh, Duration.valueOf("1m"),
-                Duration.valueOf("15s"),
                 Duration.valueOf("1m"),
                 Duration.valueOf("15s"),
                 10000,
@@ -118,7 +115,7 @@ public class TestHiveWriterFactory
         HivePageSinkMetadata hivePageSinkMetadata = new HivePageSinkMetadata(new SchemaTableName("schema", "table"), Optional.of(table), ImmutableMap.of());
         PageSorter pageSorter = new PagesIndexPageSorter(new PagesIndex.TestingFactory(false));
         Metadata metadata = createTestMetadataManager();
-        TypeManager typeManager = new InternalTypeManager(metadata.getFunctionAndTypeManager());
+        TypeManager typeManager = new InternalTypeManager(metadata);
         HdfsConfiguration hdfsConfiguration = new HiveHdfsConfiguration(new HdfsConfigurationInitializer(hiveConfig), ImmutableSet.of());
         HdfsEnvironment hdfsEnvironment = new HdfsEnvironment(hdfsConfiguration, hiveConfig, new NoHdfsAuthentication());
         LocationService locationService = new HiveLocationService(hdfsEnvironment);
@@ -145,14 +142,13 @@ public class TestHiveWriterFactory
                 hiveConfig.getWriterSortBufferSize(),
                 hiveConfig.getMaxOpenSortFiles(),
                 false,
-                UTC,
                 session,
                 new TestingNodeManager("fake-environment"),
                 new HiveEventClient(),
                 new HiveSessionProperties(hiveConfig, new OrcFileWriterConfig(), new ParquetFileWriterConfig()),
                 new HiveWriterStats(),
                 getDefaultOrcFileWriterFactory(hiveConfig));
-        HiveWriter hiveWriter = hiveWriterFactory.createWriter(ImmutableList.of(), OptionalInt.empty(), Optional.empty());
+        HiveWriter hiveWriter = hiveWriterFactory.createWriter(new Page(3, new Block[0]), 0, OptionalInt.empty(), Optional.empty());
         assertEquals(((SortingFileWriter) hiveWriter.getFileWriter()).getTempFilePrefix().getName(), ".tmp-sort.bucket_00000");
     }
 

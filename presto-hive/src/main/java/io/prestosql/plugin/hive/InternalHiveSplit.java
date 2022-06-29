@@ -61,7 +61,6 @@ public class InternalHiveSplit
     private final boolean s3SelectPushdownEnabled;
     private final Optional<DeleteDeltaLocations> deleteDeltaLocations;
     private final Optional<Long> startRowOffsetOfFile;
-    private final Map<String, String> customSplitInfo;
 
     private long start;
     private int currentBlockIndex;
@@ -83,8 +82,7 @@ public class InternalHiveSplit
             Optional<BucketConversion> bucketConversion,
             boolean s3SelectPushdownEnabled,
             Optional<DeleteDeltaLocations> deleteDeltaLocations,
-            Optional<Long> startRowOffsetOfFile,
-            Map<String, String> customSplitInfo)
+            Optional<Long> startRowOffsetOfFile)
     {
         checkArgument(start >= 0, "start must be positive");
         checkArgument(end >= 0, "length must be positive");
@@ -117,7 +115,6 @@ public class InternalHiveSplit
         this.s3SelectPushdownEnabled = s3SelectPushdownEnabled;
         this.deleteDeltaLocations = deleteDeltaLocations;
         this.startRowOffsetOfFile = startRowOffsetOfFile;
-        this.customSplitInfo = ImmutableMap.copyOf(requireNonNull(customSplitInfo, "customSplitInfo is null"));
     }
 
     public String getPath()
@@ -211,11 +208,6 @@ public class InternalHiveSplit
             }
             verify(start == currentBlock().getStart());
         }
-    }
-
-    public Map<String, String> getCustomSplitInfo()
-    {
-        return customSplitInfo;
     }
 
     public int getEstimatedSizeInBytes()

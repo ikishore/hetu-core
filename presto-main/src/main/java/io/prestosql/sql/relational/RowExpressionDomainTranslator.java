@@ -16,19 +16,12 @@ package io.prestosql.sql.relational;
 import com.google.common.collect.ImmutableList;
 import com.google.common.collect.ImmutableMap;
 import com.google.common.collect.PeekingIterator;
-import io.airlift.slice.Slice;
-import io.airlift.slice.Slices;
-import io.prestosql.expressions.LogicalRowExpressions;
-import io.prestosql.metadata.CastType;
-import io.prestosql.metadata.FunctionAndTypeManager;
 import io.prestosql.metadata.Metadata;
 import io.prestosql.metadata.OperatorNotFoundException;
 import io.prestosql.spi.block.Block;
 import io.prestosql.spi.connector.ConnectorSession;
-import io.prestosql.spi.function.FunctionHandle;
-import io.prestosql.spi.function.FunctionMetadata;
 import io.prestosql.spi.function.OperatorType;
-import io.prestosql.spi.function.StandardFunctionResolution;
+import io.prestosql.spi.function.Signature;
 import io.prestosql.spi.plan.Symbol;
 import io.prestosql.spi.predicate.DiscreteValues;
 import io.prestosql.spi.predicate.Domain;
@@ -50,12 +43,11 @@ import io.prestosql.spi.relation.RowExpression;
 import io.prestosql.spi.relation.RowExpressionVisitor;
 import io.prestosql.spi.relation.SpecialForm;
 import io.prestosql.spi.relation.VariableReferenceExpression;
+import io.prestosql.spi.sql.RowExpressionUtils;
 import io.prestosql.spi.type.Type;
-import io.prestosql.spi.type.VarcharType;
 import io.prestosql.sql.InterpretedFunctionInvoker;
 import io.prestosql.sql.planner.RowExpressionInterpreter;
 import io.prestosql.type.InternalTypeManager;
-import io.prestosql.type.LikeFunctions;
 
 import javax.annotation.Nullable;
 import javax.inject.Inject;
@@ -70,14 +62,8 @@ import static com.google.common.base.Preconditions.checkState;
 import static com.google.common.collect.ImmutableList.toImmutableList;
 import static com.google.common.collect.Iterables.getOnlyElement;
 import static com.google.common.collect.Iterators.peekingIterator;
-import static io.airlift.slice.SliceUtf8.countCodePoints;
-import static io.airlift.slice.SliceUtf8.getCodePointAt;
-import static io.airlift.slice.SliceUtf8.lengthOfCodePoint;
-import static io.airlift.slice.SliceUtf8.setCodePointAt;
-import static io.prestosql.expressions.LogicalRowExpressions.FALSE_CONSTANT;
-import static io.prestosql.expressions.LogicalRowExpressions.TRUE_CONSTANT;
-import static io.prestosql.expressions.LogicalRowExpressions.and;
-import static io.prestosql.expressions.LogicalRowExpressions.or;
+import static io.prestosql.spi.function.OperatorType.BETWEEN;
+import static io.prestosql.spi.function.OperatorType.CAST;
 import static io.prestosql.spi.function.OperatorType.EQUAL;
 import static io.prestosql.spi.function.OperatorType.GREATER_THAN;
 import static io.prestosql.spi.function.OperatorType.GREATER_THAN_OR_EQUAL;
@@ -85,15 +71,23 @@ import static io.prestosql.spi.function.OperatorType.IS_DISTINCT_FROM;
 import static io.prestosql.spi.function.OperatorType.LESS_THAN;
 import static io.prestosql.spi.function.OperatorType.LESS_THAN_OR_EQUAL;
 import static io.prestosql.spi.function.OperatorType.NOT_EQUAL;
+import static io.prestosql.spi.function.OperatorType.SATURATED_FLOOR_CAST;
+import static io.prestosql.spi.function.Signature.internalOperator;
+import static io.prestosql.spi.function.Signature.unmangleOperator;
 import static io.prestosql.spi.relation.SpecialForm.Form.AND;
 import static io.prestosql.spi.relation.SpecialForm.Form.IN;
 import static io.prestosql.spi.relation.SpecialForm.Form.IS_NULL;
 import static io.prestosql.spi.relation.SpecialForm.Form.OR;
+import static io.prestosql.spi.sql.RowExpressionUtils.FALSE_CONSTANT;
+import static io.prestosql.spi.sql.RowExpressionUtils.TRUE_CONSTANT;
+import static io.prestosql.spi.sql.RowExpressionUtils.and;
+import static io.prestosql.spi.sql.RowExpressionUtils.combineConjuncts;
+import static io.prestosql.spi.sql.RowExpressionUtils.or;
 import static io.prestosql.spi.type.BooleanType.BOOLEAN;
-import static io.prestosql.sql.analyzer.TypeSignatureProvider.fromTypes;
 import static io.prestosql.sql.planner.LiteralEncoder.toRowExpression;
 import static io.prestosql.sql.planner.RowExpressionInterpreter.Level.OPTIMIZED;
 import static io.prestosql.sql.relational.Expressions.call;
+import static io.prestosql.sql.relational.Signatures.castSignature;
 import static java.util.Comparator.comparing;
 import static java.util.Objects.requireNonNull;
 import static java.util.stream.Collectors.collectingAndThen;
@@ -103,15 +97,11 @@ public final class RowExpressionDomainTranslator
         implements DomainTranslator
 {
     private final Metadata metadata;
-    private final StandardFunctionResolution functionResolution;
-    private final LogicalRowExpressions logicalRowExpressions;
 
     @Inject
     public RowExpressionDomainTranslator(Metadata metadata)
     {
         this.metadata = requireNonNull(metadata, "metadata is null");
-        this.functionResolution = new FunctionResolution(metadata.getFunctionAndTypeManager());
-        this.logicalRowExpressions = new LogicalRowExpressions(new RowExpressionDeterminismEvaluator(metadata), new FunctionResolution(metadata.getFunctionAndTypeManager()), metadata.getFunctionAndTypeManager());
     }
 
     @Override
@@ -124,7 +114,7 @@ public final class RowExpressionDomainTranslator
         Map<T, Domain> domains = tupleDomain.getDomains().get();
         return domains.entrySet().stream()
                 .map(entry -> toPredicate(entry.getValue(), entry.getKey()))
-                .collect(collectingAndThen(toImmutableList(), logicalRowExpressions::combineConjuncts));
+                .collect(collectingAndThen(toImmutableList(), RowExpressionUtils::combineConjuncts));
     }
 
     public RowExpression toPredicate(TupleDomain<Symbol> tupleDomain, Map<Symbol, Type> symbols)
@@ -137,7 +127,7 @@ public final class RowExpressionDomainTranslator
         return domains.entrySet().stream()
                 .sorted(comparing(entry -> entry.getKey().getName()))
                 .map(entry -> toPredicate(entry.getValue(), new VariableReferenceExpression(entry.getKey().getName(), symbols.get(entry.getKey()))))
-                .collect(collectingAndThen(toImmutableList(), logicalRowExpressions::combineConjuncts));
+                .collect(collectingAndThen(toImmutableList(), RowExpressionUtils::combineConjuncts));
     }
 
     public ExtractionResult<VariableReferenceExpression> fromPredicate(ConnectorSession session, RowExpression predicate)
@@ -158,7 +148,7 @@ public final class RowExpressionDomainTranslator
         }
 
         if (domain.getValues().isAll()) {
-            return domain.isNullAllowed() ? TRUE_CONSTANT : not(functionResolution, isNull(reference));
+            return domain.isNullAllowed() ? TRUE_CONSTANT : not(isNull(reference));
         }
 
         List<RowExpression> disjuncts = new ArrayList<>();
@@ -175,7 +165,7 @@ public final class RowExpressionDomainTranslator
             disjuncts.add(isNull(reference));
         }
 
-        return logicalRowExpressions.combineDisjunctsWithDefault(disjuncts, TRUE_CONSTANT);
+        return RowExpressionUtils.combineDisjunctsWithDefault(disjuncts, TRUE_CONSTANT);
     }
 
     private RowExpression processRange(Type type, Range range, RowExpression reference)
@@ -186,11 +176,16 @@ public final class RowExpressionDomainTranslator
 
         if (isBetween(range)) {
             // specialize the range with BETWEEN expression if possible b/c it is currently more efficient
-            return new SpecialForm(SpecialForm.Form.BETWEEN,
-                                    BOOLEAN,
-                                    reference,
-                                    toRowExpression(range.getLow().getValue(), type),
-                                    toRowExpression(range.getHigh().getValue(), type));
+            return call(
+                    Signature.internalOperator(BETWEEN,
+                            BOOLEAN.getTypeSignature(),
+                            reference.getType().getTypeSignature(),
+                            type.getTypeSignature(),
+                            type.getTypeSignature()),
+                    BOOLEAN,
+                    reference,
+                    toRowExpression(range.getLow().getValue(), type),
+                    toRowExpression(range.getHigh().getValue(), type));
         }
 
         List<RowExpression> rangeConjuncts = new ArrayList<>();
@@ -224,7 +219,7 @@ public final class RowExpressionDomainTranslator
         }
         // If rangeConjuncts is null, then the range was ALL, which should already have been checked for
         checkState(!rangeConjuncts.isEmpty());
-        return logicalRowExpressions.combineConjuncts(rangeConjuncts);
+        return combineConjuncts(rangeConjuncts);
     }
 
     private RowExpression combineRangeWithExcludedPoints(Type type, RowExpression reference, Range range, List<RowExpression> excludedPoints)
@@ -233,12 +228,12 @@ public final class RowExpressionDomainTranslator
             return processRange(type, range, reference);
         }
 
-        RowExpression excludedPointsExpression = not(functionResolution, in(reference, excludedPoints));
+        RowExpression excludedPointsExpression = not(in(reference, excludedPoints));
         if (excludedPoints.size() == 1) {
             excludedPointsExpression = notEqual(reference, getOnlyElement(excludedPoints));
         }
 
-        return logicalRowExpressions.combineConjuncts(processRange(type, range, reference), excludedPointsExpression);
+        return combineConjuncts(processRange(type, range, reference), excludedPointsExpression);
     }
 
     private List<RowExpression> extractDisjuncts(Type type, Ranges ranges, RowExpression reference)
@@ -302,7 +297,7 @@ public final class RowExpressionDomainTranslator
         }
 
         if (!discreteValues.isWhiteList()) {
-            predicate = not(functionResolution, predicate);
+            predicate = not(predicate);
         }
         return ImmutableList.of(predicate);
     }
@@ -321,20 +316,14 @@ public final class RowExpressionDomainTranslator
         private final ConnectorSession session;
         private final DeterminismEvaluator determinismEvaluator;
         private final ColumnExtractor<T> columnExtractor;
-        private final StandardFunctionResolution resolution;
-        private final FunctionAndTypeManager functionAndTypeManager;
-        private final LogicalRowExpressions logicalRowExpressions;
 
         private Visitor(Metadata metadata, ConnectorSession session, ColumnExtractor<T> columnExtractor)
         {
-            this.functionInvoker = new InterpretedFunctionInvoker(metadata.getFunctionAndTypeManager());
+            this.functionInvoker = new InterpretedFunctionInvoker(metadata);
             this.metadata = metadata;
             this.session = session;
             this.determinismEvaluator = new RowExpressionDeterminismEvaluator(metadata);
             this.columnExtractor = requireNonNull(columnExtractor, "columnExtractor is null");
-            this.resolution = new FunctionResolution(metadata.getFunctionAndTypeManager());
-            this.functionAndTypeManager = metadata.getFunctionAndTypeManager();
-            this.logicalRowExpressions = new LogicalRowExpressions(new RowExpressionDeterminismEvaluator(metadata), new FunctionResolution(functionAndTypeManager), functionAndTypeManager);
         }
 
         @Override
@@ -352,8 +341,7 @@ public final class RowExpressionDomainTranslator
 
                     ImmutableList.Builder<RowExpression> disjuncts = ImmutableList.builder();
                     for (RowExpression expression : values) {
-                        disjuncts.add(call(EQUAL.name(),
-                                metadata.getFunctionAndTypeManager().resolveOperatorFunctionHandle(EQUAL, fromTypes(target.getType(), expression.getType())),
+                        disjuncts.add(call(Signature.internalOperator(EQUAL, BOOLEAN.getTypeSignature(), target.getType().getTypeSignature(), expression.getType().getTypeSignature()),
                                 BOOLEAN, target, expression));
                     }
                     ExtractionResult extractionResult = or(disjuncts.build()).accept(this, complement);
@@ -362,7 +350,7 @@ public final class RowExpressionDomainTranslator
                     if (extractionResult.getTupleDomain().isAll()) {
                         RowExpression originalPredicate = node;
                         if (complement) {
-                            originalPredicate = not(resolution, originalPredicate);
+                            originalPredicate = not(originalPredicate);
                         }
                         return new ExtractionResult<>(extractionResult.getTupleDomain(), originalPredicate);
                     }
@@ -416,173 +404,81 @@ public final class RowExpressionDomainTranslator
         @Override
         public ExtractionResult<T> visitCall(CallExpression node, Boolean complement)
         {
-            if (node.getFunctionHandle().equals(resolution.notFunction())) {
+            if (node.getSignature().getName().equals("not")) {
                 return node.getArguments().get(0).accept(this, !complement);
             }
 
-            if (resolution.isBetweenFunction(node.getFunctionHandle())) {
-                // Re-write as two comparison expressions
-                return and(
-                        binaryOperator(GREATER_THAN_OR_EQUAL, node.getArguments().get(0), node.getArguments().get(1)),
-                        binaryOperator(LESS_THAN_OR_EQUAL, node.getArguments().get(0), node.getArguments().get(2))).accept(this, complement);
-            }
-
-            if (resolution.isLikeFunction(node.getFunctionHandle())) {
-                Optional<ExtractionResult> result = tryVisitLikePredicate(node, complement);
-                if (result.isPresent()) {
-                    return result.get();
-                }
-                return visitRowExpression(node, complement);
-            }
-            FunctionMetadata functionMetadata = metadata.getFunctionAndTypeManager().getFunctionMetadata(node.getFunctionHandle());
-            if (functionMetadata.getOperatorType().map(OperatorType::isComparisonOperator).orElse(false)) {
-                Optional<NormalizedSimpleComparison> optionalNormalized = toNormalizedSimpleComparison(functionMetadata.getOperatorType().get(), node.getArguments().get(0), node.getArguments().get(1));
-                if (!optionalNormalized.isPresent()) {
-                    return visitRowExpression(node, complement);
-                }
-                NormalizedSimpleComparison normalized = optionalNormalized.get();
-
-                RowExpression expression = normalized.getExpression();
-                NullableValue value = normalized.getValue();
-                Domain domain = createComparisonDomain(normalized.getComparisonOperator(), value.getType(), value.getValue(), complement);
-                Optional<T> column = columnExtractor.extract(expression, domain);
-                if (column.isPresent()) {
-                    if (domain.isNone()) {
-                        return new ExtractionResult<>(TupleDomain.none(), TRUE_CONSTANT);
-                    }
-                    return new ExtractionResult<>(TupleDomain.withColumnDomains(ImmutableMap.of(column.get(), domain)), TRUE_CONSTANT);
+            if (node.getSignature().getName().contains("$operator$")) {
+                OperatorType operatorType = unmangleOperator(node.getSignature().getName());
+                if (operatorType.equals(BETWEEN)) {
+                    // Re-write as two comparison expressions
+                    return and(
+                            binaryOperator(GREATER_THAN_OR_EQUAL, node.getArguments().get(0), node.getArguments().get(1)),
+                            binaryOperator(LESS_THAN_OR_EQUAL, node.getArguments().get(0), node.getArguments().get(2))).accept(this, complement);
                 }
 
-                if (expression instanceof CallExpression && resolution.isCastFunction(((CallExpression) expression).getFunctionHandle())) {
-                    CallExpression castExpression = (CallExpression) expression;
-                    if (!isImplicitCoercion(castExpression)) {
-                        //
-                        // we cannot use non-coercion cast to literal_type on symbol side to build tuple domain
-                        //
-                        // example which illustrates the problem:
-                        //
-                        // let t be of timestamp type:
-                        //
-                        // and expression be:
-                        // cast(t as date) == date_literal
-                        //
-                        // after dropping cast we end up with:
-                        //
-                        // t == date_literal
-                        //
-                        // if we build tuple domain based coercion of date_literal to timestamp type we would
-                        // end up with tuple domain with just one time point (cast(date_literal as timestamp).
-                        // While we need range which maps to single date pointed by date_literal.
-                        //
+                if (operatorType.isComparisonOperator()) {
+                    Optional<NormalizedSimpleComparison> optionalNormalized = toNormalizedSimpleComparison(operatorType, node.getArguments().get(0), node.getArguments().get(1));
+                    if (!optionalNormalized.isPresent()) {
                         return visitRowExpression(node, complement);
                     }
+                    NormalizedSimpleComparison normalized = optionalNormalized.get();
 
-                    CallExpression cast = (CallExpression) expression;
-                    Type sourceType = cast.getArguments().get(0).getType();
-
-                    // we use saturated floor cast value -> castSourceType to rewrite original expression to new one with one cast peeled off the symbol side
-                    Optional<RowExpression> coercedExpression = coerceComparisonWithRounding(
-                            sourceType, cast.getArguments().get(0), normalized.getValue(), normalized.getComparisonOperator());
-
-                    if (coercedExpression.isPresent()) {
-                        return coercedExpression.get().accept(this, complement);
+                    RowExpression expression = normalized.getExpression();
+                    NullableValue value = normalized.getValue();
+                    Domain domain = createComparisonDomain(normalized.getComparisonOperator(), value.getType(), value.getValue(), complement);
+                    Optional<T> column = columnExtractor.extract(expression, domain);
+                    if (column.isPresent()) {
+                        if (domain.isNone()) {
+                            return new ExtractionResult<>(TupleDomain.none(), TRUE_CONSTANT);
+                        }
+                        return new ExtractionResult<>(TupleDomain.withColumnDomains(ImmutableMap.of(column.get(), domain)), TRUE_CONSTANT);
                     }
 
-                    return visitRowExpression(node, complement);
-                }
-                else {
-                    return visitRowExpression(node, complement);
+                    if (expression instanceof CallExpression && ((CallExpression) expression).getSignature().getName().equals(CAST)) {
+                        CallExpression castExpression = (CallExpression) expression;
+                        if (!isImplicitCoercion(castExpression)) {
+                            //
+                            // we cannot use non-coercion cast to literal_type on symbol side to build tuple domain
+                            //
+                            // example which illustrates the problem:
+                            //
+                            // let t be of timestamp type:
+                            //
+                            // and expression be:
+                            // cast(t as date) == date_literal
+                            //
+                            // after dropping cast we end up with:
+                            //
+                            // t == date_literal
+                            //
+                            // if we build tuple domain based coercion of date_literal to timestamp type we would
+                            // end up with tuple domain with just one time point (cast(date_literal as timestamp).
+                            // While we need range which maps to single date pointed by date_literal.
+                            //
+                            return visitRowExpression(node, complement);
+                        }
+
+                        CallExpression cast = (CallExpression) expression;
+                        Type sourceType = cast.getArguments().get(0).getType();
+
+                        // we use saturated floor cast value -> castSourceType to rewrite original expression to new one with one cast peeled off the symbol side
+                        Optional<RowExpression> coercedExpression = coerceComparisonWithRounding(
+                                sourceType, cast.getArguments().get(0), normalized.getValue(), normalized.getComparisonOperator());
+
+                        if (coercedExpression.isPresent()) {
+                            return coercedExpression.get().accept(this, complement);
+                        }
+
+                        return visitRowExpression(node, complement);
+                    }
+                    else {
+                        return visitRowExpression(node, complement);
+                    }
                 }
             }
 
             return visitRowExpression(node, complement);
-        }
-
-        private Optional<ExtractionResult> tryVisitLikePredicate(CallExpression node, Boolean complement)
-        {
-            if (node.getArguments().size() != 2
-                    || !(node.getArguments().get(0) instanceof VariableReferenceExpression)
-                    || !(node.getArguments().get(0).getType() instanceof VarcharType)
-                    || !(node.getArguments().get(1) instanceof CallExpression)) {
-                // LIKE not on a VariableReferenceExpression
-                return Optional.empty();
-            }
-
-            CallExpression call = (CallExpression) node.getArguments().get(1);
-            if (!call.getDisplayName().equals("LIKE_PATTERN") && !resolution.isCastFunction(call.getFunctionHandle())) {
-                return Optional.empty();
-            }
-
-            if (call.getDisplayName().equals("LIKE_PATTERN")
-                    && (call.getArguments().size() != 2
-                    || !(call.getArguments().get(0) instanceof ConstantExpression)
-                    || !(call.getArguments().get(0).getType() instanceof VarcharType)
-                    || !(call.getArguments().get(1) instanceof ConstantExpression)
-                    || !(call.getArguments().get(1).getType() instanceof VarcharType))) {
-                // dynamic escape
-                return Optional.empty();
-            }
-            else if (resolution.isCastFunction(call.getFunctionHandle())
-                    && (call.getArguments().size() != 1
-                    || !(call.getArguments().get(0) instanceof ConstantExpression)
-                    || !(call.getArguments().get(0).getType() instanceof VarcharType))) {
-                // dynamic pattern
-                return Optional.empty();
-            }
-
-            VariableReferenceExpression variable = (VariableReferenceExpression) node.getArguments().get(0);
-            VarcharType varcharType = (VarcharType) variable.getType();
-
-            Slice pattern = (Slice) ((ConstantExpression) call.getArguments().get(0)).getValue();
-            Optional<Slice> escape = Optional.empty();
-            if (call.getDisplayName().equals("LIKE_PATTERN")) {
-                escape = Optional.of((Slice) ((ConstantExpression) call.getArguments().get(1)).getValue());
-            }
-
-            int patternConstantPrefixBytes = LikeFunctions.patternConstantPrefixBytes(pattern, escape);
-            if (patternConstantPrefixBytes == pattern.length()) {
-                // This should not actually happen, constant LIKE pattern should be converted to equality predicate before DomainTranslator is invoked.
-
-                Slice literal = LikeFunctions.unescapeLiteralLikePattern(pattern, escape);
-                ValueSet valueSet;
-                if (varcharType.isUnbounded() || countCodePoints(literal) <= varcharType.getBoundedLength()) {
-                    valueSet = ValueSet.of(varcharType, literal);
-                }
-                else {
-                    // impossible to satisfy
-                    valueSet = ValueSet.none(varcharType);
-                }
-                Domain domain = Domain.create(complementIfNecessary(valueSet, complement), false);
-                return Optional.of(new ExtractionResult(TupleDomain.withColumnDomains(ImmutableMap.of(variable, domain)), TRUE_CONSTANT));
-            }
-
-            if (complement || patternConstantPrefixBytes == 0) {
-                // TODO
-                return Optional.empty();
-            }
-
-            Slice constantPrefix = LikeFunctions.unescapeLiteralLikePattern(pattern.slice(0, patternConstantPrefixBytes), escape);
-
-            int lastIncrementable = -1;
-            for (int position = 0; position < constantPrefix.length(); position += lengthOfCodePoint(constantPrefix, position)) {
-                // Get last ASCII character to increment, so that character length in bytes does not change.
-                // Also prefer not to produce non-ASCII if input is all-ASCII, to be on the safe side with connectors.
-                // TODO remove those limitations
-                if (getCodePointAt(constantPrefix, position) < 127) {
-                    lastIncrementable = position;
-                }
-            }
-
-            if (lastIncrementable == -1) {
-                return Optional.empty();
-            }
-
-            Slice lowerBound = constantPrefix;
-            Slice upperBound = Slices.copyOf(constantPrefix.slice(0, lastIncrementable + lengthOfCodePoint(constantPrefix, lastIncrementable)));
-            setCodePointAt(getCodePointAt(constantPrefix, lastIncrementable) + 1, upperBound, lastIncrementable);
-
-            Domain domain = Domain.create(ValueSet.ofRanges(Range.range(varcharType, lowerBound, true, upperBound, false)), false);
-            return Optional.of(new ExtractionResult(TupleDomain.withColumnDomains(ImmutableMap.of(variable, domain)), node));
         }
 
         @Override
@@ -672,8 +568,7 @@ public final class RowExpressionDomainTranslator
         private RowExpression binaryOperator(OperatorType operatorType, RowExpression left, RowExpression right)
         {
             return call(
-                    operatorType.name(),
-                    metadata.getFunctionAndTypeManager().resolveOperatorFunctionHandle(operatorType, fromTypes(left.getType(), right.getType())),
+                    internalOperator(operatorType, BOOLEAN.getTypeSignature(), left.getType().getTypeSignature(), right.getType().getTypeSignature()),
                     BOOLEAN,
                     left,
                     right);
@@ -685,10 +580,10 @@ public final class RowExpressionDomainTranslator
                     .map((operator) -> functionInvoker.invoke(operator, session, value));
         }
 
-        private Optional<FunctionHandle> getSaturatedFloorCastOperator(Type fromType, Type toType)
+        private Optional<Signature> getSaturatedFloorCastOperator(Type fromType, Type toType)
         {
             try {
-                return Optional.of(metadata.getFunctionAndTypeManager().lookupCast(CastType.SATURATED_FLOOR_CAST, fromType.getTypeSignature(), toType.getTypeSignature()));
+                return Optional.of(internalOperator(SATURATED_FLOOR_CAST, toType.getTypeSignature(), fromType.getTypeSignature()));
             }
             catch (OperatorNotFoundException e) {
                 return Optional.empty();
@@ -697,8 +592,7 @@ public final class RowExpressionDomainTranslator
 
         private int compareOriginalValueToCoerced(Type originalValueType, Object originalValue, Type coercedValueType, Object coercedValue)
         {
-            FunctionHandle castToOriginalTypeOperator = metadata.getFunctionAndTypeManager().lookupCast(CastType.CAST, coercedValueType.getTypeSignature(), originalValueType.getTypeSignature());
-            Object coercedValueInOriginalType = functionInvoker.invoke(castToOriginalTypeOperator, session, coercedValue);
+            Object coercedValueInOriginalType = functionInvoker.invoke(castSignature(originalValueType, coercedValueType), session, coercedValue);
             Block originalValueBlock = Utils.nativeValueToBlock(originalValueType, originalValue);
             Block coercedValueBlock = Utils.nativeValueToBlock(originalValueType, coercedValueInOriginalType);
             return originalValueType.compareTo(originalValueBlock, 0, coercedValueBlock, 0);
@@ -708,7 +602,7 @@ public final class RowExpressionDomainTranslator
         {
             Type sourceType = cast.getArguments().get(0).getType();
             Type targetType = cast.getType();
-            return (new InternalTypeManager(metadata.getFunctionAndTypeManager())).canCoerce(sourceType, targetType);
+            return (new InternalTypeManager(metadata)).canCoerce(sourceType, targetType);
         }
 
         private static Domain extractOrderableDomain(OperatorType comparisonOperator, Type type, Object value, boolean complement)
@@ -862,7 +756,7 @@ public final class RowExpressionDomainTranslator
 
         private RowExpression complementIfNecessary(RowExpression expression, boolean complement)
         {
-            return complement ? not(resolution, expression) : expression;
+            return complement ? not(expression) : expression;
         }
 
         private ExtractionResult<T> visitRowExpression(RowExpression node, Boolean complement)
@@ -896,7 +790,7 @@ public final class RowExpressionDomainTranslator
                 case AND: {
                     return new ExtractionResult<>(
                             leftTupleDomain.intersect(rightTupleDomain),
-                            logicalRowExpressions.combineConjuncts(leftResult.getRemainingExpression(), rightResult.getRemainingExpression()));
+                            combineConjuncts(leftResult.getRemainingExpression(), rightResult.getRemainingExpression()));
                 }
                 case OR: {
                     TupleDomain<T> columnUnionedTupleDomain = TupleDomain.columnWiseUnion(leftTupleDomain, rightTupleDomain);
@@ -939,9 +833,9 @@ public final class RowExpressionDomainTranslator
         return new SpecialForm(IS_NULL, BOOLEAN, expression);
     }
 
-    private static RowExpression not(StandardFunctionResolution resolution, RowExpression expression)
+    private static RowExpression not(RowExpression expression)
     {
-        return call("not", resolution.notFunction(), expression.getType(), expression);
+        return call(Signatures.notSignature(), expression.getType(), expression);
     }
 
     private RowExpression in(RowExpression value, List<RowExpression> inList)
@@ -951,7 +845,9 @@ public final class RowExpressionDomainTranslator
 
     private RowExpression binaryOperator(OperatorType operatorType, RowExpression left, RowExpression right)
     {
-        return call(operatorType.name(), metadata.getFunctionAndTypeManager().resolveOperatorFunctionHandle(operatorType, fromTypes(left.getType(), right.getType())), BOOLEAN, left, right);
+        return call(Signature.internalOperator(operatorType, BOOLEAN,
+                ImmutableList.<Type>builder().add(left.getType()).add(right.getType()).build()),
+                BOOLEAN, left, right);
     }
 
     private RowExpression greaterThan(RowExpression left, RowExpression right)

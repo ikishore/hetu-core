@@ -13,8 +13,6 @@
  */
 package io.prestosql.spi.spiller;
 
-import javax.crypto.Cipher;
-
 public interface SpillCipher
         extends AutoCloseable
 {
@@ -41,10 +39,6 @@ public interface SpillCipher
      * @return The length of the decrypted content in destination buffer
      */
     int decrypt(byte[] encryptedData, int inputOffset, int length, byte[] destination, int destinationOffset);
-
-    Cipher getEncryptionCipher();
-
-    Cipher getDecryptionCipher(byte[] cipherIV);
 
     /**
      * Destroys the cipher, preventing future use. Implementations should allow this to be called multiple times

@@ -29,8 +29,6 @@ public final class TableStatistics
     private static final TableStatistics EMPTY = TableStatistics.builder().build();
 
     private final Estimate rowCount;
-    private final long fileCount;
-    private final long onDiskDataSizeInBytes;
     private final Map<ColumnHandle, ColumnStatistics> columnStatistics;
 
     public static TableStatistics empty()
@@ -38,12 +36,9 @@ public final class TableStatistics
         return EMPTY;
     }
 
-    // added parameters fileCount and onDiskDataSizeInBytes used as check for invalidating tableStatisticsCache.
-    public TableStatistics(Estimate rowCount, long fileCount, long onDiskDataSizeInBytes, Map<ColumnHandle, ColumnStatistics> columnStatistics)
+    public TableStatistics(Estimate rowCount, Map<ColumnHandle, ColumnStatistics> columnStatistics)
     {
         this.rowCount = requireNonNull(rowCount, "rowCount can not be null");
-        this.fileCount = requireNonNull(fileCount, "fileCount can not be null");
-        this.onDiskDataSizeInBytes = requireNonNull(onDiskDataSizeInBytes, "onDiskDataSizeInBytes can not be null");
         if (!rowCount.isUnknown() && rowCount.getValue() < 0) {
             throw new IllegalArgumentException(format("rowCount must be greater than or equal to 0: %s", rowCount.getValue()));
         }
@@ -53,16 +48,6 @@ public final class TableStatistics
     public Estimate getRowCount()
     {
         return rowCount;
-    }
-
-    public long getFileCount()
-    {
-        return fileCount;
-    }
-
-    public long getOnDiskDataSizeInBytes()
-    {
-        return onDiskDataSizeInBytes;
     }
 
     public Map<ColumnHandle, ColumnStatistics> getColumnStatistics()
@@ -107,25 +92,11 @@ public final class TableStatistics
     public static final class Builder
     {
         private Estimate rowCount = Estimate.unknown();
-        private long fileCount;
-        private long onDiskDataSizeInBytes;
         private Map<ColumnHandle, ColumnStatistics> columnStatisticsMap = new LinkedHashMap<>();
 
         public Builder setRowCount(Estimate rowCount)
         {
             this.rowCount = requireNonNull(rowCount, "rowCount can not be null");
-            return this;
-        }
-
-        public Builder setFileCount(long fileCount)
-        {
-            this.fileCount = requireNonNull(fileCount, "fileCount can not be null");
-            return this;
-        }
-
-        public Builder setOnDiskDataSizeInBytes(long onDiskDataSizeInBytes)
-        {
-            this.onDiskDataSizeInBytes = requireNonNull(onDiskDataSizeInBytes, "onDiskDataSizeInBytes can not be null");
             return this;
         }
 
@@ -139,7 +110,7 @@ public final class TableStatistics
 
         public TableStatistics build()
         {
-            return new TableStatistics(rowCount, fileCount, onDiskDataSizeInBytes, columnStatisticsMap);
+            return new TableStatistics(rowCount, columnStatisticsMap);
         }
     }
 }

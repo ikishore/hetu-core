@@ -32,9 +32,11 @@ import io.prestosql.orc.protobuf.MessageLite;
 
 import java.io.IOException;
 import java.io.OutputStream;
+import java.time.ZoneId;
 import java.util.List;
 import java.util.Map.Entry;
 import java.util.Optional;
+import java.util.TimeZone;
 
 import static java.lang.Math.toIntExact;
 import static java.util.stream.Collectors.toList;
@@ -282,6 +284,8 @@ public class OrcMetadataWriter
     public int writeStripeFooter(SliceOutput output, StripeFooter footer)
             throws IOException
     {
+        ZoneId zone = footer.getTimeZone().orElseThrow(() -> new IllegalArgumentException("Time zone not set"));
+
         OrcProto.StripeFooter footerProtobuf = OrcProto.StripeFooter.newBuilder()
                 .addAllStreams(footer.getStreams().stream()
                         .map(OrcMetadataWriter::toStream)
@@ -289,7 +293,7 @@ public class OrcMetadataWriter
                 .addAllColumns(footer.getColumnEncodings().stream()
                         .map(OrcMetadataWriter::toColumnEncoding)
                         .collect(toList()))
-                .setWriterTimezone(footer.getTimeZone().getId())
+                .setWriterTimezone(TimeZone.getTimeZone(zone).getID())
                 .build();
 
         return writeProtobufObject(output, footerProtobuf);

@@ -17,7 +17,6 @@ import com.google.common.collect.ImmutableList;
 import com.google.common.collect.ImmutableMap;
 import io.prestosql.metadata.Metadata;
 import io.prestosql.spi.block.BlockBuilder;
-import io.prestosql.spi.connector.QualifiedObjectName;
 import io.prestosql.spi.function.Signature;
 import io.prestosql.spi.type.ArrayType;
 import io.prestosql.spi.type.MapType;
@@ -54,8 +53,8 @@ public class TestMapAggAggregation
     public void testDuplicateKeysValues()
     {
         MapType mapType = mapType(DOUBLE, VARCHAR);
-        InternalAggregationFunction aggFunc = metadata.getFunctionAndTypeManager().getAggregateFunctionImplementation(
-                new Signature(QualifiedObjectName.valueOfDefaultFunction(NAME),
+        InternalAggregationFunction aggFunc = metadata.getAggregateFunctionImplementation(
+                new Signature(NAME,
                         AGGREGATE,
                         mapType.getTypeSignature(),
                         parseTypeSignature(StandardTypes.DOUBLE),
@@ -67,8 +66,8 @@ public class TestMapAggAggregation
                 createStringsBlock("a", "b", "c"));
 
         mapType = mapType(DOUBLE, INTEGER);
-        aggFunc = metadata.getFunctionAndTypeManager().getAggregateFunctionImplementation(
-                new Signature(QualifiedObjectName.valueOfDefaultFunction(NAME),
+        aggFunc = metadata.getAggregateFunctionImplementation(
+                new Signature(NAME,
                         AGGREGATE,
                         mapType.getTypeSignature(),
                         parseTypeSignature(StandardTypes.DOUBLE),
@@ -84,8 +83,8 @@ public class TestMapAggAggregation
     public void testSimpleMaps()
     {
         MapType mapType = mapType(DOUBLE, VARCHAR);
-        InternalAggregationFunction aggFunc = metadata.getFunctionAndTypeManager().getAggregateFunctionImplementation(
-                new Signature(QualifiedObjectName.valueOfDefaultFunction(NAME),
+        InternalAggregationFunction aggFunc = metadata.getAggregateFunctionImplementation(
+                new Signature(NAME,
                         AGGREGATE,
                         mapType.getTypeSignature(),
                         parseTypeSignature(StandardTypes.DOUBLE),
@@ -97,8 +96,8 @@ public class TestMapAggAggregation
                 createStringsBlock("a", "b", "c"));
 
         mapType = mapType(DOUBLE, INTEGER);
-        aggFunc = metadata.getFunctionAndTypeManager().getAggregateFunctionImplementation(
-                new Signature(QualifiedObjectName.valueOfDefaultFunction(NAME),
+        aggFunc = metadata.getAggregateFunctionImplementation(
+                new Signature(NAME,
                         AGGREGATE,
                         mapType.getTypeSignature(),
                         parseTypeSignature(StandardTypes.DOUBLE),
@@ -110,8 +109,8 @@ public class TestMapAggAggregation
                 createTypedLongsBlock(INTEGER, ImmutableList.of(3L, 2L, 1L)));
 
         mapType = mapType(DOUBLE, BOOLEAN);
-        aggFunc = metadata.getFunctionAndTypeManager().getAggregateFunctionImplementation(
-                new Signature(QualifiedObjectName.valueOfDefaultFunction(NAME),
+        aggFunc = metadata.getAggregateFunctionImplementation(
+                new Signature(NAME,
                         AGGREGATE,
                         mapType.getTypeSignature(),
                         parseTypeSignature(StandardTypes.DOUBLE),
@@ -126,8 +125,8 @@ public class TestMapAggAggregation
     @Test
     public void testNull()
     {
-        InternalAggregationFunction doubleDouble = metadata.getFunctionAndTypeManager().getAggregateFunctionImplementation(
-                new Signature(QualifiedObjectName.valueOfDefaultFunction(NAME),
+        InternalAggregationFunction doubleDouble = metadata.getAggregateFunctionImplementation(
+                new Signature(NAME,
                         AGGREGATE,
                         mapType(DOUBLE, DOUBLE).getTypeSignature(),
                         parseTypeSignature(StandardTypes.DOUBLE),
@@ -160,7 +159,7 @@ public class TestMapAggAggregation
     {
         ArrayType arrayType = new ArrayType(VARCHAR);
         MapType mapType = mapType(DOUBLE, arrayType);
-        InternalAggregationFunction aggFunc = metadata.getFunctionAndTypeManager().getAggregateFunctionImplementation(new Signature(QualifiedObjectName.valueOfDefaultFunction(NAME),
+        InternalAggregationFunction aggFunc = metadata.getAggregateFunctionImplementation(new Signature(NAME,
                 AGGREGATE,
                 mapType.getTypeSignature(),
                 parseTypeSignature(StandardTypes.DOUBLE),
@@ -180,7 +179,7 @@ public class TestMapAggAggregation
     {
         MapType innerMapType = mapType(VARCHAR, VARCHAR);
         MapType mapType = mapType(DOUBLE, innerMapType);
-        InternalAggregationFunction aggFunc = metadata.getFunctionAndTypeManager().getAggregateFunctionImplementation(new Signature(QualifiedObjectName.valueOfDefaultFunction(NAME),
+        InternalAggregationFunction aggFunc = metadata.getAggregateFunctionImplementation(new Signature(NAME,
                 AGGREGATE,
                 mapType.getTypeSignature(),
                 parseTypeSignature(StandardTypes.DOUBLE),
@@ -207,7 +206,7 @@ public class TestMapAggAggregation
                 RowType.field("f1", INTEGER),
                 RowType.field("f2", DOUBLE)));
         MapType mapType = mapType(DOUBLE, innerRowType);
-        InternalAggregationFunction aggFunc = metadata.getFunctionAndTypeManager().getAggregateFunctionImplementation(new Signature(QualifiedObjectName.valueOfDefaultFunction(NAME),
+        InternalAggregationFunction aggFunc = metadata.getAggregateFunctionImplementation(new Signature(NAME,
                 AGGREGATE,
                 mapType.getTypeSignature(),
                 parseTypeSignature(StandardTypes.DOUBLE),
@@ -232,8 +231,8 @@ public class TestMapAggAggregation
     {
         ArrayType arrayType = new ArrayType(VARCHAR);
         MapType mapType = mapType(arrayType, DOUBLE);
-        InternalAggregationFunction aggFunc = metadata.getFunctionAndTypeManager().getAggregateFunctionImplementation(new Signature(
-                QualifiedObjectName.valueOfDefaultFunction(NAME),
+        InternalAggregationFunction aggFunc = metadata.getAggregateFunctionImplementation(new Signature(
+                NAME,
                 AGGREGATE,
                 mapType.getTypeSignature(),
                 arrayType.getTypeSignature(),

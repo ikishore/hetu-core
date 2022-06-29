@@ -37,7 +37,6 @@ import java.util.Optional;
 import static com.google.common.base.MoreObjects.toStringHelper;
 import static com.google.common.base.Preconditions.checkArgument;
 import static io.prestosql.SystemSessionProperties.getHashPartitionCount;
-import static io.prestosql.snapshot.RecoveryConfig.calculateTaskCount;
 import static io.prestosql.spi.StandardErrorCode.NO_NODES_AVAILABLE;
 import static io.prestosql.util.Failures.checkCondition;
 import static java.util.Objects.requireNonNull;
@@ -135,10 +134,9 @@ public final class SystemPartitioningHandle
         return partitioning.toString();
     }
 
-    public NodePartitionMap getNodePartitionMap(Session session, NodeScheduler nodeScheduler, boolean isRecoveryEnabled, Integer inputNodeCount)
+    public NodePartitionMap getNodePartitionMap(Session session, NodeScheduler nodeScheduler)
     {
-        NodeSelector nodeSelector = nodeScheduler.createNodeSelector(null, false, null);
-        Integer nodeCount = inputNodeCount;
+        NodeSelector nodeSelector = nodeScheduler.createNodeSelector(null);
         List<InternalNode> nodes;
         if (partitioning == SystemPartitioning.COORDINATOR_ONLY) {
             nodes = ImmutableList.of(nodeSelector.selectCurrentNode());
@@ -147,17 +145,7 @@ public final class SystemPartitioningHandle
             nodes = nodeSelector.selectRandomNodes(1);
         }
         else if (partitioning == SystemPartitioning.FIXED) {
-            if (isRecoveryEnabled) {
-                if (nodeCount == null) {
-                    // Snapshot: don't allocate all nodes
-                    nodeCount = Math.min(getHashPartitionCount(session), calculateTaskCount(nodeSelector.selectableNodeCount()));
-                }
-                nodes = nodeSelector.selectRandomNodes(nodeCount);
-                checkCondition(nodes.size() == nodeCount, NO_NODES_AVAILABLE, "Snapshot: not enough worker nodes to resume expected number of tasks: " + nodeCount);
-            }
-            else {
-                nodes = nodeSelector.selectRandomNodes(getHashPartitionCount(session));
-            }
+            nodes = nodeSelector.selectRandomNodes(getHashPartitionCount(session));
         }
         else {
             throw new IllegalArgumentException("Unsupported plan distribution " + partitioning);

@@ -19,9 +19,6 @@ import com.google.common.collect.ImmutableMap;
 import com.google.common.collect.ImmutableSortedMap;
 import com.google.common.collect.Lists;
 import com.google.common.primitives.Primitives;
-import io.airlift.units.DataSize;
-import io.airlift.units.Duration;
-import io.hetu.core.spi.cube.CubeFilter;
 import io.hetu.core.spi.cube.CubeMetadata;
 import io.hetu.core.spi.cube.CubeStatus;
 import io.hetu.core.spi.cube.aggregator.AggregationSignature;
@@ -34,7 +31,7 @@ import io.prestosql.execution.TableCacheInfo;
 import io.prestosql.execution.warnings.WarningCollector;
 import io.prestosql.heuristicindex.HeuristicIndexerManager;
 import io.prestosql.metadata.Metadata;
-import io.prestosql.metadata.MetadataManager;
+import io.prestosql.metadata.QualifiedObjectName;
 import io.prestosql.metadata.SessionPropertyManager.SessionPropertyValue;
 import io.prestosql.security.AccessControl;
 import io.prestosql.spi.HetuConstant;
@@ -44,40 +41,29 @@ import io.prestosql.spi.connector.CatalogName;
 import io.prestosql.spi.connector.CatalogSchemaName;
 import io.prestosql.spi.connector.ConnectorTableMetadata;
 import io.prestosql.spi.connector.ConnectorViewDefinition;
-import io.prestosql.spi.connector.QualifiedObjectName;
 import io.prestosql.spi.connector.SchemaTableName;
 import io.prestosql.spi.function.FunctionKind;
-import io.prestosql.spi.function.Signature;
 import io.prestosql.spi.function.SqlFunction;
-import io.prestosql.spi.function.SqlInvokedFunction;
 import io.prestosql.spi.heuristicindex.IndexRecord;
 import io.prestosql.spi.metadata.TableHandle;
 import io.prestosql.spi.security.PrestoPrincipal;
 import io.prestosql.spi.security.PrincipalType;
 import io.prestosql.spi.service.PropertyService;
 import io.prestosql.spi.session.PropertyMetadata;
-import io.prestosql.spi.type.TypeSignature;
-import io.prestosql.sql.ExpressionUtils;
 import io.prestosql.sql.analyzer.QueryExplainer;
 import io.prestosql.sql.analyzer.SemanticException;
 import io.prestosql.sql.parser.ParsingException;
-import io.prestosql.sql.parser.ParsingOptions;
 import io.prestosql.sql.parser.SqlParser;
 import io.prestosql.sql.tree.AllColumns;
 import io.prestosql.sql.tree.ArrayConstructor;
 import io.prestosql.sql.tree.AstVisitor;
 import io.prestosql.sql.tree.BooleanLiteral;
 import io.prestosql.sql.tree.ColumnDefinition;
-import io.prestosql.sql.tree.CreateCube;
-import io.prestosql.sql.tree.CreateFunction;
 import io.prestosql.sql.tree.CreateTable;
 import io.prestosql.sql.tree.CreateView;
 import io.prestosql.sql.tree.DoubleLiteral;
 import io.prestosql.sql.tree.Explain;
 import io.prestosql.sql.tree.Expression;
-import io.prestosql.sql.tree.ExternalBodyReference;
-import io.prestosql.sql.tree.FunctionCall;
-import io.prestosql.sql.tree.FunctionProperty;
 import io.prestosql.sql.tree.Identifier;
 import io.prestosql.sql.tree.LikePredicate;
 import io.prestosql.sql.tree.LongLiteral;
@@ -85,15 +71,12 @@ import io.prestosql.sql.tree.Node;
 import io.prestosql.sql.tree.Property;
 import io.prestosql.sql.tree.QualifiedName;
 import io.prestosql.sql.tree.Query;
-import io.prestosql.sql.tree.RefreshMetadataCache;
 import io.prestosql.sql.tree.Relation;
-import io.prestosql.sql.tree.RoutineCharacteristics;
 import io.prestosql.sql.tree.ShowCache;
 import io.prestosql.sql.tree.ShowCatalogs;
 import io.prestosql.sql.tree.ShowColumns;
 import io.prestosql.sql.tree.ShowCreate;
 import io.prestosql.sql.tree.ShowCubes;
-import io.prestosql.sql.tree.ShowExternalFunction;
 import io.prestosql.sql.tree.ShowFunctions;
 import io.prestosql.sql.tree.ShowGrants;
 import io.prestosql.sql.tree.ShowIndex;
@@ -102,9 +85,7 @@ import io.prestosql.sql.tree.ShowRoles;
 import io.prestosql.sql.tree.ShowSchemas;
 import io.prestosql.sql.tree.ShowSession;
 import io.prestosql.sql.tree.ShowTables;
-import io.prestosql.sql.tree.ShowViews;
 import io.prestosql.sql.tree.SortItem;
-import io.prestosql.sql.tree.SqlParameterDeclaration;
 import io.prestosql.sql.tree.Statement;
 import io.prestosql.sql.tree.StringLiteral;
 import io.prestosql.sql.tree.TableElement;
@@ -112,8 +93,6 @@ import io.prestosql.sql.tree.Values;
 
 import java.io.IOException;
 import java.io.UncheckedIOException;
-import java.util.Arrays;
-import java.util.Collection;
 import java.util.Collections;
 import java.util.HashMap;
 import java.util.List;
@@ -121,7 +100,6 @@ import java.util.Map;
 import java.util.Optional;
 import java.util.Set;
 import java.util.SortedMap;
-import java.util.concurrent.TimeUnit;
 import java.util.function.LongSupplier;
 import java.util.stream.Collectors;
 
@@ -133,29 +111,20 @@ import static io.prestosql.connector.informationschema.InformationSchemaMetadata
 import static io.prestosql.connector.informationschema.InformationSchemaMetadata.TABLE_SCHEMATA;
 import static io.prestosql.connector.informationschema.InformationSchemaMetadata.TABLE_TABLES;
 import static io.prestosql.connector.informationschema.InformationSchemaMetadata.TABLE_TABLE_PRIVILEGES;
-import static io.prestosql.connector.informationschema.InformationSchemaMetadata.TABLE_VIEWS;
 import static io.prestosql.cube.CubeManager.STAR_TREE;
-import static io.prestosql.metadata.FunctionAndTypeManager.qualifyObjectName;
 import static io.prestosql.metadata.MetadataListing.listCatalogs;
 import static io.prestosql.metadata.MetadataListing.listSchemas;
 import static io.prestosql.metadata.MetadataUtil.createCatalogSchemaName;
 import static io.prestosql.metadata.MetadataUtil.createQualifiedObjectName;
-import static io.prestosql.metadata.MetadataUtil.toCatalogSchemaTableName;
-import static io.prestosql.spi.HetuConstant.INDEX_OK;
-import static io.prestosql.spi.HetuConstant.INDEX_OUT_OF_SYNC;
-import static io.prestosql.spi.HetuConstant.INDEX_TABLE_DELETED;
-import static io.prestosql.spi.StandardErrorCode.FUNCTION_NOT_FOUND;
 import static io.prestosql.spi.StandardErrorCode.GENERIC_USER_ERROR;
 import static io.prestosql.spi.StandardErrorCode.INVALID_COLUMN_PROPERTY;
 import static io.prestosql.spi.StandardErrorCode.INVALID_TABLE_PROPERTY;
-import static io.prestosql.spi.connector.CatalogSchemaName.DEFAULT_NAMESPACE;
 import static io.prestosql.sql.ExpressionUtils.combineConjuncts;
 import static io.prestosql.sql.ParsingUtil.createParsingOptions;
 import static io.prestosql.sql.QueryUtil.aliased;
 import static io.prestosql.sql.QueryUtil.aliasedName;
 import static io.prestosql.sql.QueryUtil.aliasedNullToEmpty;
 import static io.prestosql.sql.QueryUtil.ascending;
-import static io.prestosql.sql.QueryUtil.descending;
 import static io.prestosql.sql.QueryUtil.equal;
 import static io.prestosql.sql.QueryUtil.functionCall;
 import static io.prestosql.sql.QueryUtil.identifier;
@@ -171,20 +140,17 @@ import static io.prestosql.sql.SqlFormatter.formatSql;
 import static io.prestosql.sql.analyzer.SemanticErrorCode.CATALOG_NOT_SPECIFIED;
 import static io.prestosql.sql.analyzer.SemanticErrorCode.MISSING_CACHE;
 import static io.prestosql.sql.analyzer.SemanticErrorCode.MISSING_CATALOG;
-import static io.prestosql.sql.analyzer.SemanticErrorCode.MISSING_CUBE;
 import static io.prestosql.sql.analyzer.SemanticErrorCode.MISSING_SCHEMA;
 import static io.prestosql.sql.analyzer.SemanticErrorCode.MISSING_TABLE;
 import static io.prestosql.sql.analyzer.SemanticErrorCode.NOT_SUPPORTED;
 import static io.prestosql.sql.analyzer.SemanticErrorCode.VIEW_PARSE_ERROR;
 import static io.prestosql.sql.tree.BooleanLiteral.FALSE_LITERAL;
 import static io.prestosql.sql.tree.BooleanLiteral.TRUE_LITERAL;
-import static io.prestosql.sql.tree.ShowCreate.Type.CUBE;
 import static io.prestosql.sql.tree.ShowCreate.Type.TABLE;
 import static io.prestosql.sql.tree.ShowCreate.Type.VIEW;
 import static java.lang.String.format;
 import static java.util.Locale.ENGLISH;
 import static java.util.Objects.requireNonNull;
-import static java.util.stream.Collectors.joining;
 import static java.util.stream.Collectors.toList;
 
 final class ShowQueriesRewrite
@@ -205,7 +171,7 @@ final class ShowQueriesRewrite
             WarningCollector warningCollector,
             HeuristicIndexerManager heuristicIndexerManager)
     {
-        return (Statement) new Visitor(cubeManager, metadata, parser, session, parameters, accessControl, warningCollector, heuristicIndexerManager).process(node, null);
+        return (Statement) new Visitor(cubeManager, metadata, parser, session, parameters, accessControl, heuristicIndexerManager).process(node, null);
     }
 
     private static class Visitor
@@ -218,9 +184,8 @@ final class ShowQueriesRewrite
         private final List<Expression> parameters;
         private final AccessControl accessControl;
         private final HeuristicIndexerManager heuristicIndexerManager;
-        private final WarningCollector warningCollector;
 
-        public Visitor(CubeManager cubeManager, Metadata metadata, SqlParser sqlParser, Session session, List<Expression> parameters, AccessControl accessControl, WarningCollector warningCollector, HeuristicIndexerManager heuristicIndexerManager)
+        public Visitor(CubeManager cubeManager, Metadata metadata, SqlParser sqlParser, Session session, List<Expression> parameters, AccessControl accessControl, HeuristicIndexerManager heuristicIndexerManager)
         {
             //TODO: Replace with NoOpCubeManager. Here CubeManager can be null
             this.cubeManager = cubeManager;
@@ -230,7 +195,6 @@ final class ShowQueriesRewrite
             this.parameters = requireNonNull(parameters, "parameters is null");
             this.accessControl = requireNonNull(accessControl, "accessControl is null");
             this.heuristicIndexerManager = requireNonNull(heuristicIndexerManager, "heuristicIndexerManager is null");
-            this.warningCollector = requireNonNull(warningCollector, "warningCollector is null");
         }
 
         @Override
@@ -248,12 +212,6 @@ final class ShowQueriesRewrite
         @Override
         protected Node visitShowTables(ShowTables showTables, Void context)
         {
-            if (metadata instanceof MetadataManager) {
-                MetadataManager metadataManager = (MetadataManager) metadata;
-                if (metadataManager.getDataCenterConnectorManager() != null) {
-                    metadataManager.getDataCenterConnectorManager().loadAllDCCatalogs();
-                }
-            }
             CatalogSchemaName schema = createCatalogSchemaName(session, showTables, showTables.getSchema());
 
             accessControl.checkCanShowTablesMetadata(session.getRequiredTransactionId(), session.getIdentity(), schema);
@@ -295,34 +253,23 @@ final class ShowQueriesRewrite
             }
             else {
                 QualifiedObjectName qualifiedTableName = createQualifiedObjectName(session, node, node.getTableName().get());
-                Optional<TableHandle> tableHandle = metadata.getTableHandle(session, qualifiedTableName);
-                if (!tableHandle.isPresent()) {
-                    throw new SemanticException(MISSING_TABLE, node, "Table %s does not exist", qualifiedTableName.toString());
-                }
                 cubeMetadataList = cubeMetaStore.getMetadataList(qualifiedTableName.toString());
             }
             Map<String, String> cubeStatusMap = new HashMap<>();
             cubeMetadataList.forEach(cubeMetadata -> {
-                QualifiedObjectName qualifiedTableName = QualifiedObjectName.valueOf(cubeMetadata.getSourceTableName());
+                QualifiedObjectName qualifiedTableName = QualifiedObjectName.valueOf(cubeMetadata.getOriginalTableName());
                 Map<QualifiedObjectName, Long> tableLastModifiedTimeMap = new HashMap<>();
                 long tableLastModifiedTime = tableLastModifiedTimeMap.computeIfAbsent(qualifiedTableName, ignored -> {
-                    Optional<TableHandle> tableHandle = metadata.getTableHandle(session, qualifiedTableName);
-                    if (!tableHandle.isPresent()) {
-                        return -1L;
-                    }
-                    LongSupplier lastModifiedTimeSupplier = metadata.getTableLastModifiedTimeSupplier(session, tableHandle.get());
+                    TableHandle tableHandle = metadata.getTableHandle(session, qualifiedTableName).get();
+                    LongSupplier lastModifiedTimeSupplier = metadata.getTableLastModifiedTimeSupplier(session, tableHandle);
                     return lastModifiedTimeSupplier == null ? -1L : lastModifiedTimeSupplier.getAsLong();
                 });
                 CubeStatus status = cubeMetadata.getCubeStatus();
                 if (status == CubeStatus.INACTIVE) {
-                    cubeStatusMap.put(cubeMetadata.getCubeName(), "Inactive");
-                }
-                else if (tableLastModifiedTime == -1L) {
-                    // The table handle isn't present, or we got an error while trying to retrieve last modified time
-                    cubeStatusMap.put(cubeMetadata.getCubeName(), "Invalid");
+                    cubeStatusMap.put(cubeMetadata.getCubeTableName(), "InActive");
                 }
                 else {
-                    cubeStatusMap.put(cubeMetadata.getCubeName(), tableLastModifiedTime > cubeMetadata.getSourceTableLastUpdatedTime() ? "Expired" : "Active");
+                    cubeStatusMap.put(cubeMetadata.getCubeTableName(), tableLastModifiedTime > cubeMetadata.getLastUpdated() ? "Expired" : "Active");
                 }
             });
             rows.add(row(
@@ -334,43 +281,31 @@ final class ShowQueriesRewrite
                     new StringLiteral(""),
                     FALSE_LITERAL));
             cubeMetadataList.forEach(cubeMetadata -> {
-                CubeFilter cubeFilter = cubeMetadata.getCubeFilter();
-                String cubeFilterString = "";
-                if (cubeFilter != null) {
-                    if (cubeFilter.getSourceTablePredicate() != null) {
-                        cubeFilterString = cubeFilter.getSourceTablePredicate() + Optional.ofNullable(cubeFilter.getCubePredicate())
-                                .map(predicate -> " AND " + predicate)
-                                .orElse("");
-                    }
-                    else {
-                        cubeFilterString = cubeFilter.getCubePredicate();
-                    }
-                }
                 rows.add(row(
-                        new StringLiteral(cubeMetadata.getSourceTableName()),
-                        new StringLiteral(cubeMetadata.getCubeName()),
-                        new StringLiteral(cubeStatusMap.get(cubeMetadata.getCubeName())),
+                        new StringLiteral(cubeMetadata.getCubeTableName()),
+                        new StringLiteral(cubeMetadata.getOriginalTableName()),
+                        new StringLiteral(cubeStatusMap.get(cubeMetadata.getCubeTableName())),
                         new StringLiteral(String.join(",", cubeMetadata.getDimensions())),
                         new StringLiteral(cubeMetadata.getAggregationSignatures().stream().map(AggregationSignature::toString).collect(Collectors.joining(","))),
-                        new StringLiteral(cubeFilterString),
+                        new StringLiteral(String.join(",", cubeMetadata.getPredicateString())),
                         TRUE_LITERAL));
             });
 
             ImmutableList<Expression> expressions = rows.build();
             return simpleQuery(
                     selectList(
-                            aliasedName("table_name", "Table Name"),
                             aliasedName("cube_name", "Cube Name"),
+                            aliasedName("table_name", "Table Name"),
                             aliasedName("cube_status", "Status"),
                             aliasedName("dimensions", "Dimensions"),
                             aliasedName("aggregations", "Aggregations"),
-                            aliasedName("cube_predicate", "Cube Predicate")),
+                            aliasedName("predicate_string", "Where Clause")),
                     aliased(
                             new Values(expressions),
                             "Cube Result",
-                            ImmutableList.of("table_name", "cube_name", "cube_status", "dimensions", "aggregations", "cube_predicate", "include")),
+                            ImmutableList.of("cube_name", "table_name", "cube_status", "dimensions", "aggregations", "predicate_string", "include")),
                     identifier("include"),
-                    ordering(ascending("table_name"), ascending("cube_name")));
+                    ordering(ascending("cube_name")));
         }
 
         @Override
@@ -531,7 +466,7 @@ final class ShowQueriesRewrite
                 throw new SemanticException(MISSING_TABLE, showColumns, "Table '%s' does not exist", tableName);
             }
 
-            accessControl.checkCanShowColumnsMetadata(session.getRequiredTransactionId(), session.getIdentity(), toCatalogSchemaTableName(tableName));
+            accessControl.checkCanShowColumnsMetadata(session.getRequiredTransactionId(), session.getIdentity(), tableName.asCatalogSchemaTableName());
 
             return simpleQuery(
                     selectList(
@@ -639,76 +574,7 @@ final class ShowQueriesRewrite
                 return singleValueQuery("Create Table", formatSql(createTable, Optional.of(parameters)).trim());
             }
 
-            if (node.getType() == CUBE) {
-                SqlParser parser = new SqlParser();
-                ImmutableList.Builder<Expression> rows = ImmutableList.builder();
-                CubeMetaStore cubeMetaStore = this.cubeManager.getMetaStore(STAR_TREE).orElseThrow(() -> new RuntimeException("HetuMetastore is not initialized"));
-                Optional<TableHandle> tableHandle = metadata.getTableHandle(session, objectName);
-                if (!tableHandle.isPresent()) {
-                    throw new SemanticException(MISSING_CUBE, node, "CUBE '%s' does not exist", objectName);
-                }
-                ConnectorTableMetadata connectorTableMetadata = metadata.getTableMetadata(session, tableHandle.get()).getMetadata();
-                QualifiedObjectName cubeTableName = createQualifiedObjectName(session, node, node.getName());
-                Optional<CubeMetadata> matchedCube = cubeMetaStore.getMetadataFromCubeName(cubeTableName.toString());
-                CubeMetadata cubeMetadata = matchedCube.orElseThrow(() -> new SemanticException(MISSING_CUBE, node, "Cube '%s' does not exist", objectName));
-                QualifiedObjectName qualifiedTableName = QualifiedObjectName.valueOf(cubeMetadata.getSourceTableName());
-                String aggregation = cubeMetadata.getAggregationSignatures().stream()
-                        .map(String::valueOf)
-                        .collect(Collectors.joining(", "));
-                String predicate = Optional.ofNullable(cubeMetadata.getCubeFilter())
-                        .map(CubeFilter::getCubePredicate)
-                        .orElse(null);
-                String dimension = "";
-                if (cubeMetadata.getCubeFilter() != null && cubeMetadata.getCubeFilter().getSourceTablePredicate() != null) {
-                    Set<Identifier> sourceFilterPredicateColumns = ExpressionUtils.getIdentifiers(sqlParser.createExpression(cubeMetadata.getCubeFilter().getSourceTablePredicate(), new ParsingOptions()));
-                    final List<String> filterColumns = sourceFilterPredicateColumns.stream().map(Identifier::getValue).map(String::valueOf).collect(Collectors.toList());
-                    dimension = cubeMetadata.getGroup().stream()
-                            .filter(x -> !filterColumns.contains(x))
-                            .map(String::valueOf)
-                            .collect(Collectors.joining(", "));
-                }
-                else {
-                    dimension = cubeMetadata.getGroup().stream()
-                            .map(String::valueOf)
-                            .collect(Collectors.joining(", "));
-                }
-                String allPartitions = "";
-                if (connectorTableMetadata.getProperties().containsKey("partitioned_by")) {
-                    allPartitions = Arrays.stream(connectorTableMetadata.getProperties().get("partitioned_by").toString()
-                            .substring(1, connectorTableMetadata.getProperties().get("partitioned_by").toString().length() - 1).split(","))
-                            .map(String::valueOf)
-                            .map(i -> "'" + i.trim() + "'")
-                            .collect(Collectors.joining(", "));
-                }
-                StringBuilder query = new StringBuilder();
-                query.append("CREATE CUBE ").append(cubeTableName).append(" ON ").append(qualifiedTableName).append(" WITH (AGGREGATIONS=(").append(aggregation).append("), GROUP=(").append(dimension).append(")");
-                if (connectorTableMetadata.getProperties().containsKey("format")) {
-                    query.append(", format='").append(Optional.ofNullable(connectorTableMetadata.getProperties().get("format"))
-                            .map(String::valueOf)
-                            .orElse(null)).append("'");
-                }
-                if (!allPartitions.equals("")) {
-                    query.append(", partitioned_by=ARRAY[").append(allPartitions).append("]");
-                }
-                if (cubeMetadata.getCubeFilter() != null && cubeMetadata.getCubeFilter().getSourceTablePredicate() != null) {
-                    query.append(", FILTER=(").append(cubeMetadata.getCubeFilter().getSourceTablePredicate()).append(")");
-                }
-                query.append(")");
-                if (predicate != null) {
-                    query.append(" WHERE ").append(predicate);
-                }
-                CreateCube createCube = (CreateCube) parser.createStatement(query.toString(), new ParsingOptions(ParsingOptions.DecimalLiteralTreatment.AS_DOUBLE));
-                QualifiedName cubeName = createCube.getCubeName();
-                Optional<Expression> cubePredicate = createCube.getWhere();
-                QualifiedName sourceTableName = createCube.getSourceTableName();
-                Set<FunctionCall> aggregations = createCube.getAggregations();
-                List<Identifier> groupingSet = createCube.getGroupingSet();
-                List<Property> properties = createCube.getProperties();
-                boolean notExists = createCube.isNotExists();
-                CreateCube modifiedCreateCube = new CreateCube(cubeName, sourceTableName, groupingSet, aggregations, notExists, properties, cubePredicate, createCube.getSourceFilter().orElse(null));
-                return singleValueQuery("Create Cube", formatSql(modifiedCreateCube, Optional.of(parameters)).trim());
-            }
-            throw new UnsupportedOperationException("SHOW CREATE only supported for tables, views and cubes");
+            throw new UnsupportedOperationException("SHOW CREATE only supported for tables and views");
         }
 
         private List<Property> buildProperties(
@@ -759,20 +625,16 @@ final class ShowQueriesRewrite
         @Override
         protected Node visitShowFunctions(ShowFunctions node, Void context)
         {
-            ImmutableList.Builder<Expression> rows = ImmutableList.builder();
-            for (SqlFunction function : metadata.listFunctions(Optional.of(session))) {
-                Signature signature = function.getSignature();
-                boolean builtIn = signature.getName().getCatalogSchemaName().equals(DEFAULT_NAMESPACE);
-                rows.add(row(
-                        builtIn ? new StringLiteral(signature.getNameSuffix()) : new StringLiteral(signature.getName().toString()),
-                        new StringLiteral(signature.getReturnType().toString()),
-                        new StringLiteral(Joiner.on(", ").join(signature.getArgumentTypes())),
-                        new StringLiteral(getFunctionType(function)),
-                        function.isDeterministic() ? TRUE_LITERAL : FALSE_LITERAL,
-                        new StringLiteral(nullToEmpty(function.getDescription())),
-                        signature.isVariableArity() ? TRUE_LITERAL : FALSE_LITERAL,
-                        builtIn ? TRUE_LITERAL : FALSE_LITERAL));
-            }
+            List<Expression> rows = metadata.listFunctions().stream()
+                    .filter(function -> !function.isHidden())
+                    .map(function -> row(
+                            new StringLiteral(function.getSignature().getName()),
+                            new StringLiteral(function.getSignature().getReturnType().toString()),
+                            new StringLiteral(Joiner.on(", ").join(function.getSignature().getArgumentTypes())),
+                            new StringLiteral(getFunctionType(function)),
+                            function.isDeterministic() ? TRUE_LITERAL : FALSE_LITERAL,
+                            new StringLiteral(nullToEmpty(function.getDescription()))))
+                    .collect(toImmutableList());
 
             Map<String, String> columns = ImmutableMap.<String, String>builder()
                     .put("function_name", "Function")
@@ -781,92 +643,21 @@ final class ShowQueriesRewrite
                     .put("function_type", "Function Type")
                     .put("deterministic", "Deterministic")
                     .put("description", "Description")
-                    .put("variable_arity", "Variable Arity")
-                    .put("built_in", "Built In")
                     .build();
 
             return simpleQuery(
                     selectAll(columns.entrySet().stream()
                             .map(entry -> aliasedName(entry.getKey(), entry.getValue()))
                             .collect(toImmutableList())),
-                    aliased(new Values(rows.build()), "functions", ImmutableList.copyOf(columns.keySet())),
-                    node.getLikePattern().map(pattern -> new LikePredicate(
-                            identifier("function_name"),
-                            new StringLiteral(pattern),
-                            node.getEscape().map(StringLiteral::new))),
-                    Optional.of(ordering(
-                            descending("built_in"),
+                    aliased(new Values(rows), "functions", ImmutableList.copyOf(columns.keySet())),
+                    ordering(
                             new SortItem(
                                     functionCall("lower", identifier("function_name")),
                                     SortItem.Ordering.ASCENDING,
                                     SortItem.NullOrdering.UNDEFINED),
                             ascending("return_type"),
                             ascending("argument_types"),
-                            ascending("function_type"))));
-        }
-
-        @Override
-        protected Node visitShowExternalFunction(ShowExternalFunction node, Void context)
-        {
-            QualifiedObjectName functionName = qualifyObjectName(node.getName());
-            Collection<? extends SqlFunction> functions = metadata.getFunctionAndTypeManager().getFunctions(session.getTransactionId(), functionName);
-            if (node.getParameterTypes().isPresent()) {
-                List<TypeSignature> parameterTypes = node.getParameterTypes().get().stream()
-                        .map(TypeSignature::parseTypeSignature)
-                        .collect(toImmutableList());
-                functions = functions.stream()
-                        .filter(function -> function.getSignature().getArgumentTypes().equals(parameterTypes))
-                        .collect(toImmutableList());
-            }
-            if (functions.isEmpty()) {
-                String types = node.getParameterTypes().map(parameterTypes -> format("(%s)", Joiner.on(", ").join(parameterTypes))).orElse("");
-                throw new PrestoException(FUNCTION_NOT_FOUND, format("Function not found: %s%s", functionName, types));
-            }
-
-            ImmutableList.Builder<Expression> rows = ImmutableList.builder();
-            for (SqlFunction function : functions) {
-                if (!(function instanceof SqlInvokedFunction)) {
-                    throw new PrestoException(GENERIC_USER_ERROR, "SHOW EXTERNAL FUNCTION is only supported for SQL functions");
-                }
-
-                SqlInvokedFunction sqlFunction = (SqlInvokedFunction) function;
-                ImmutableList.Builder<FunctionProperty> functionPropertyBuilder = ImmutableList.builder();
-                Map<String, String> propertyMap = sqlFunction.getFunctionProperties();
-                for (Map.Entry<String, String> entry : propertyMap.entrySet()) {
-                    functionPropertyBuilder.add(new FunctionProperty(new Identifier(entry.getKey()), new StringLiteral(entry.getValue())));
-                }
-                CreateFunction createFunction = new CreateFunction(
-                        node.getName(),
-                        false,
-                        sqlFunction.getParameters().stream()
-                                .map(parameter -> new SqlParameterDeclaration(new Identifier(parameter.getName()), parameter.getType().toString()))
-                                .collect(toImmutableList()),
-                        sqlFunction.getSignature().getReturnType().toString(),
-                        Optional.of(sqlFunction.getDescription()),
-                        new RoutineCharacteristics(
-                                new RoutineCharacteristics.Language(sqlFunction.getRoutineCharacteristics().getLanguage().getLanguage()),
-                                RoutineCharacteristics.Determinism.valueOf(sqlFunction.getRoutineCharacteristics().getDeterminism().name()),
-                                RoutineCharacteristics.NullCallClause.valueOf(sqlFunction.getRoutineCharacteristics().getNullCallClause().name())),
-                        sqlFunction.getBody().equals("EXTERNAL") ? new ExternalBodyReference() : sqlParser.createReturn(sqlFunction.getBody(), createParsingOptions(session, warningCollector)),
-                        functionPropertyBuilder.build());
-                rows.add(row(
-                        new StringLiteral(formatSql(createFunction, Optional.empty())),
-                        new StringLiteral(function.getSignature().getArgumentTypes().stream()
-                                .map(TypeSignature::toString)
-                                .collect(joining(", ")))));
-            }
-
-            Map<String, String> columns = ImmutableMap.<String, String>builder()
-                    .put("external_function", "External Function")
-                    .put("argument_types", "Argument Types")
-                    .build();
-
-            return simpleQuery(
-                    selectAll(columns.entrySet().stream()
-                            .map(entry -> aliasedName(entry.getKey(), entry.getValue()))
-                            .collect(toImmutableList())),
-                    aliased(new Values(rows.build()), "functions", ImmutableList.copyOf(columns.keySet())),
-                    ordering(ascending("argument_types")));
+                            ascending("function_type")));
         }
 
         private static String getFunctionType(SqlFunction function)
@@ -879,8 +670,6 @@ final class ShowQueriesRewrite
                     return "window";
                 case SCALAR:
                     return "scalar";
-                case EXTERNAL:
-                    return "external";
             }
             throw new IllegalArgumentException("Unsupported function kind: " + kind);
         }
@@ -935,8 +724,7 @@ final class ShowQueriesRewrite
         {
             List<IndexRecord> indexRecords;
             try {
-                String indexName = node.getIndexName();
-                indexRecords = indexName == null ? heuristicIndexerManager.getAllIndexRecordsWithUsage() : heuristicIndexerManager.getIndexRecordWithUsage(indexName);
+                indexRecords = readIndexRecords(node.getIndexName());
             }
             catch (IOException e) {
                 throw new UncheckedIOException("Error reading index records, ", e);
@@ -958,32 +746,22 @@ final class ShowQueriesRewrite
                 String partitions = (v.partitions == null || v.partitions.isEmpty()) ? "all" : String.join(",", v.partitions);
                 StringBuilder partitionsStrToDisplay = new StringBuilder();
 
+                String inProgressHint = "";
+                if (v.isInProgressRecord()) {
+                    long timeElapsed = System.currentTimeMillis() - v.lastModifiedTime;
+                    long millis = timeElapsed % 1000;
+                    long second = (timeElapsed / 1000) % 60;
+                    long minute = (timeElapsed / (1000 * 60)) % 60;
+                    long hour = (timeElapsed / (1000 * 60 * 60)) % 24;
+
+                    inProgressHint = String.format(" (has been in progress for %02dh %02dm %02d.%ds)", hour, minute, second, millis);
+                }
+
                 for (int i = 0; i < partitions.length(); i += COL_MAX_LENGTH) {
                     partitionsStrToDisplay.append(partitions, i, Math.min(i + COL_MAX_LENGTH, partitions.length()));
                     if (i + COL_MAX_LENGTH < partitions.length()) {
                         // have next line
                         partitionsStrToDisplay.append("\n");
-                    }
-                }
-
-                QualifiedObjectName indexFullName = QualifiedObjectName.valueOf(v.qualifiedTable);
-
-                String indexStatus;
-                // if user runs SHOW INDEX while index creation is in-progress, show the duration in the status column
-                if (v.isInProgressRecord()) {
-                    long timeElapsed = System.currentTimeMillis() - v.lastModifiedTime;
-                    Duration duration = Duration.succinctDuration(Double.valueOf(timeElapsed), TimeUnit.MILLISECONDS);
-                    indexStatus = String.format("Creation in-progress for %s", duration.toString());
-                }
-                else {
-                    Optional<TableHandle> tableHandle = metadata.getTableHandle(session, indexFullName);
-                    if (!tableHandle.isPresent()) {
-                        indexStatus = INDEX_TABLE_DELETED;
-                    }
-                    else {
-                        LongSupplier lastModifiedTimeSupplier = metadata.getTableLastModifiedTimeSupplier(session, tableHandle.get());
-                        long lastModifiedTime = lastModifiedTimeSupplier.getAsLong();
-                        indexStatus = lastModifiedTime > v.lastModifiedTime ? INDEX_OUT_OF_SYNC : INDEX_OK;
                     }
                 }
 
@@ -993,19 +771,14 @@ final class ShowQueriesRewrite
                         new StringLiteral(v.qualifiedTable),
                         new StringLiteral(String.join(",", v.columns)),
                         new StringLiteral(v.indexType),
-                        new StringLiteral(DataSize.succinctBytes(v.indexSize).toString()),
-                        new StringLiteral(indexStatus),
                         new StringLiteral(partitionsStrToDisplay.toString()),
-                        new StringLiteral(String.join(",", v.propertiesAsList)),
-                        new StringLiteral(DataSize.succinctBytes(v.memoryUsage).toString()),
-                        new StringLiteral(DataSize.succinctBytes(v.diskUsage).toString()), TRUE_LITERAL));
+                        new StringLiteral(String.join(",", v.properties) + inProgressHint),
+                        TRUE_LITERAL));
             }
 
             //bogus row to support empty index
             rows.add(row(new StringLiteral(""), new StringLiteral(""), new StringLiteral(""),
-                    new StringLiteral(""), new StringLiteral(""), new StringLiteral(""),
-                    new StringLiteral(""), new StringLiteral(""), new StringLiteral(""),
-                    new StringLiteral(""), new StringLiteral(""), FALSE_LITERAL));
+                    new StringLiteral(""), new StringLiteral(""), new StringLiteral(""), new StringLiteral(""), FALSE_LITERAL));
 
             ImmutableList<Expression> expressions = rows.build();
             return simpleQuery(
@@ -1015,30 +788,14 @@ final class ShowQueriesRewrite
                             aliasedName("table_name", "Table Name"),
                             aliasedName("index_columns", "Index Columns"),
                             aliasedName("index_type", "Index Type"),
-                            aliasedName("index_storage_size", "Index Size"),
-                            aliasedName("index_status", "Index Status"),
                             aliasedName("partitions", "Partitions"),
-                            aliasedName("index_props", "Index Properties"),
-                            aliasedName("index_memoryUse", "Memory Usage (Coordinator Only)"),
-                            aliasedName("index_diskUse", "Disk Usage (Coordinator Only)")),
+                            aliasedName("index_props", "IndexProps")),
                     aliased(
                             new Values(expressions),
                             "Index Result",
-                            ImmutableList.of("index_name", "user", "table_name", "index_columns", "index_type", "index_storage_size", "index_status", "partitions", "index_props", "index_memoryUse", "index_diskUse", "include")),
+                            ImmutableList.of("index_name", "user", "table_name", "index_columns", "index_type", "partitions", "index_props", "include")),
                     identifier("include"),
                     ordering(ascending("index_name")));
-        }
-
-        @Override
-        protected Node visitRefreshMetadataCache(RefreshMetadataCache node, Void context)
-        {
-            if (!node.getCatalog().isPresent() && !session.getCatalog().isPresent()) {
-                throw new SemanticException(CATALOG_NOT_SPECIFIED, node, "Catalog must be specified when session catalog is not set");
-            }
-
-            String catalog = node.getCatalog().map(Identifier::getValue).orElseGet(() -> session.getCatalog().get());
-            metadata.refreshMetadataCache(session, Optional.of(catalog));
-            return simpleQuery(selectList(ImmutableList.of()));
         }
 
         @Override
@@ -1080,48 +837,6 @@ final class ShowQueriesRewrite
                     identifier("include"));
         }
 
-        @Override
-        protected Node visitShowViews(ShowViews showViews, Void context)
-        {
-            CatalogSchemaName schema = createCatalogSchemaName(session, showViews, showViews.getSchema());
-
-            accessControl.checkCanShowTablesMetadata(session.getRequiredTransactionId(), session.getIdentity(), schema);
-
-            if (!metadata.catalogExists(session, schema.getCatalogName())) {
-                throw new SemanticException(MISSING_CATALOG, showViews, "Catalog '%s' does not exist", schema.getCatalogName());
-            }
-
-            if (!metadata.schemaExists(session, schema)) {
-                throw new SemanticException(MISSING_SCHEMA, showViews, "Schema '%s' does not exist", schema.getSchemaName());
-            }
-
-            Expression predicate = equal(identifier("table_schema"), new StringLiteral(schema.getSchemaName()));
-            Optional<String> likePattern = showViews.getLikePattern();
-            if (likePattern.isPresent()) {
-                /*
-                 * Given that hive supports regex '*' to match string wildcard pattern
-                 * we change '*' to '%' for hetu wildcard pattern matching
-                 * */
-                final char asterisk = '*';
-                final char percent = '%';
-                String likePatternStr = likePattern.get();
-                if (likePattern.get().indexOf(asterisk) >= 0) {
-                    likePatternStr = likePattern.get().replace(asterisk, percent);
-                }
-                Expression likePredicate = new LikePredicate(
-                        identifier("table_name"),
-                        new StringLiteral(likePatternStr),
-                        showViews.getEscape().map(StringLiteral::new));
-                predicate = logicalAnd(predicate, likePredicate);
-            }
-
-            return simpleQuery(
-                    selectList(aliasedName("table_name", "Table")),
-                    from(schema.getCatalogName(), TABLE_VIEWS),
-                    predicate,
-                    ordering(ascending("table_name")));
-        }
-
         private Query parseView(String view, QualifiedObjectName name, Node node)
         {
             try {
@@ -1142,6 +857,22 @@ final class ShowQueriesRewrite
         protected Node visitNode(Node node, Void context)
         {
             return node;
+        }
+
+        private List<IndexRecord> readIndexRecords(String indexName)
+                throws IOException
+        {
+            if (indexName == null || indexName.equals(Optional.empty().toString())) {
+                return heuristicIndexerManager.getIndexClient().getAllIndexRecords();
+            }
+            else {
+                List<IndexRecord> records = Collections.singletonList(
+                        heuristicIndexerManager.getIndexClient().lookUpIndexRecord(indexName));
+                if (records.get(0) == null) {
+                    return Collections.emptyList();
+                }
+                return records;
+            }
         }
     }
 }

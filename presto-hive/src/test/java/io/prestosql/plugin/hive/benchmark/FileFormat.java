@@ -55,6 +55,7 @@ import io.prestosql.spi.type.Type;
 import org.apache.hadoop.conf.Configuration;
 import org.apache.hadoop.fs.Path;
 import org.apache.hadoop.mapred.JobConf;
+import org.joda.time.DateTimeZone;
 
 import java.io.File;
 import java.io.FileOutputStream;
@@ -76,7 +77,6 @@ import static org.apache.hadoop.hive.metastore.api.hive_metastoreConstants.FILE_
 import static org.apache.hadoop.hive.metastore.api.hive_metastoreConstants.META_TABLE_COLUMNS;
 import static org.apache.hadoop.hive.metastore.api.hive_metastoreConstants.META_TABLE_COLUMN_TYPES;
 import static org.apache.hadoop.hive.serde.serdeConstants.SERIALIZATION_LIB;
-import static org.joda.time.DateTimeZone.UTC;
 
 public enum FileFormat
 {
@@ -84,7 +84,7 @@ public enum FileFormat
         @Override
         public ConnectorPageSource createFileFormatReader(ConnectorSession session, HdfsEnvironment hdfsEnvironment, File targetFile, List<String> columnNames, List<Type> columnTypes)
         {
-            HivePageSourceFactory pageSourceFactory = new RcFilePageSourceFactory(TYPE_MANAGER, hdfsEnvironment, new FileFormatDataSourceStats(), new HiveConfig().setRcfileTimeZone("UTC"));
+            HivePageSourceFactory pageSourceFactory = new RcFilePageSourceFactory(TYPE_MANAGER, hdfsEnvironment, new FileFormatDataSourceStats());
             return createPageSource(pageSourceFactory, session, targetFile, columnNames, columnTypes, HiveStorageFormat.RCBINARY);
         }
 
@@ -100,7 +100,7 @@ public enum FileFormat
             return new PrestoRcFileFormatWriter(
                     targetFile,
                     columnTypes,
-                    new BinaryRcFileEncoding(UTC),
+                    new BinaryRcFileEncoding(),
                     compressionCodec);
         }
     },
@@ -108,7 +108,7 @@ public enum FileFormat
         @Override
         public ConnectorPageSource createFileFormatReader(ConnectorSession session, HdfsEnvironment hdfsEnvironment, File targetFile, List<String> columnNames, List<Type> columnTypes)
         {
-            HivePageSourceFactory pageSourceFactory = new RcFilePageSourceFactory(TYPE_MANAGER, hdfsEnvironment, new FileFormatDataSourceStats(), new HiveConfig().setRcfileTimeZone("UTC"));
+            HivePageSourceFactory pageSourceFactory = new RcFilePageSourceFactory(TYPE_MANAGER, hdfsEnvironment, new FileFormatDataSourceStats());
             return createPageSource(pageSourceFactory, session, targetFile, columnNames, columnTypes, HiveStorageFormat.RCTEXT);
         }
 
@@ -124,7 +124,7 @@ public enum FileFormat
             return new PrestoRcFileFormatWriter(
                     targetFile,
                     columnTypes,
-                    new TextRcFileEncoding(),
+                    new TextRcFileEncoding(DateTimeZone.forID(session.getTimeZoneKey().getId())),
                     compressionCodec);
         }
     },
@@ -158,6 +158,7 @@ public enum FileFormat
                     targetFile,
                     columnNames,
                     columnTypes,
+                    DateTimeZone.forID(session.getTimeZoneKey().getId()),
                     compressionCodec);
         }
     },
@@ -166,7 +167,7 @@ public enum FileFormat
         @Override
         public ConnectorPageSource createFileFormatReader(ConnectorSession session, HdfsEnvironment hdfsEnvironment, File targetFile, List<String> columnNames, List<Type> columnTypes)
         {
-            HivePageSourceFactory pageSourceFactory = new ParquetPageSourceFactory(TYPE_MANAGER, hdfsEnvironment, new FileFormatDataSourceStats(), new HiveConfig().setParquetTimeZone("UTC"));
+            HivePageSourceFactory pageSourceFactory = new ParquetPageSourceFactory(TYPE_MANAGER, hdfsEnvironment, new FileFormatDataSourceStats());
             return createPageSource(pageSourceFactory, session, targetFile, columnNames, columnTypes, HiveStorageFormat.PARQUET);
         }
 
@@ -246,7 +247,7 @@ public enum FileFormat
         @Override
         public ConnectorPageSource createFileFormatReader(ConnectorSession session, HdfsEnvironment hdfsEnvironment, File targetFile, List<String> columnNames, List<Type> columnTypes)
         {
-            HivePageSourceFactory pageSourceFactory = new ParquetPageSourceFactory(TYPE_MANAGER, hdfsEnvironment, new FileFormatDataSourceStats(), new HiveConfig().setParquetTimeZone("UTC"));
+            HivePageSourceFactory pageSourceFactory = new ParquetPageSourceFactory(TYPE_MANAGER, hdfsEnvironment, new FileFormatDataSourceStats());
             return createPageSource(pageSourceFactory, session, targetFile, columnNames, columnTypes, HiveStorageFormat.PARQUET);
         }
 
@@ -308,16 +309,16 @@ public enum FileFormat
                 .createRecordCursor(
                         conf,
                         session,
-                        getPath(targetFile),
+                        new Path(targetFile.getAbsolutePath()),
                         0,
                         targetFile.length(),
                         targetFile.length(),
                         createSchema(format, columnNames, columnTypes),
                         columnHandles,
                         TupleDomain.all(),
+                        DateTimeZone.forID(session.getTimeZoneKey().getId()),
                         TYPE_MANAGER,
-                        false,
-                        ImmutableMap.of())
+                        false)
                 .get();
         return new RecordPageSource(columnTypes, recordCursor);
     }
@@ -343,31 +344,21 @@ public enum FileFormat
                 .createPageSource(
                         conf,
                         session,
-                        getPath(targetFile),
+                        new Path(targetFile.getAbsolutePath()),
                         0,
                         targetFile.length(),
                         targetFile.length(),
                         createSchema(format, columnNames, columnTypes),
                         columnHandles,
                         TupleDomain.all(),
+                        DateTimeZone.forID(session.getTimeZoneKey().getId()),
                         Optional.empty(),
                         Optional.empty(),
                         Optional.empty(),
                         Optional.empty(),
                         null,
-                        false,
-                        targetFile.lastModified())
+                        false)
                 .get();
-    }
-
-    private static Path getPath(File targetFile)
-    {
-        try {
-            return new Path(targetFile.getCanonicalPath());
-        }
-        catch (IOException e) {
-            throw new IllegalArgumentException("Path Traversal vulnerabilities may exist！");
-        }
     }
 
     private static class RecordFormatWriter
@@ -393,7 +384,6 @@ public enum FileFormat
                     format.getEstimatedWriterSystemMemoryUsage(),
                     config,
                     TYPE_MANAGER,
-                    UTC,
                     session);
         }
 
@@ -466,7 +456,7 @@ public enum FileFormat
     {
         private final OrcWriter writer;
 
-        public PrestoOrcFormatWriter(File targetFile, List<String> columnNames, List<Type> types, HiveCompressionCodec compressionCodec)
+        public PrestoOrcFormatWriter(File targetFile, List<String> columnNames, List<Type> types, DateTimeZone hiveStorageTimeZone, HiveCompressionCodec compressionCodec)
                 throws IOException
         {
             writer = new OrcWriter(
@@ -477,6 +467,7 @@ public enum FileFormat
                     new OrcWriterOptions(),
                     false,
                     ImmutableMap.of(),
+                    hiveStorageTimeZone,
                     false,
                     BOTH,
                     new OrcWriterStats(), Optional.empty(), Optional.empty());

@@ -4,9 +4,6 @@
 除了手动部署openLooKeng服务器外，还可以按照以下指导更快、更容易地完成部署。这个脚本对大多数Linux操作系统都很友好。但是，对于Ubuntu，需要手动安装以下依赖项。
 
 > sshpass1.06及以上版本
-~~~shell
-yum install sshpass
-~~~
 
 ## 在单个节点上部署openLooKeng
 
@@ -39,6 +36,7 @@ wget -O - https://download.openlookeng.io/install.sh|bash
 ## 将openLooKeng在线部署到集群
 
 执行以下命令，按照提示分別输入coordinator、worker节点ip，安装openLooKeng多节点集群：
+
 
 ```shell
 bash <(wget -qO- https://download.openlookeng.io/install.sh) -m

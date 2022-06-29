@@ -43,7 +43,6 @@ public class FunctionCallBuilder
     private Optional<Expression> filter = Optional.empty();
     private Optional<OrderBy> orderBy = Optional.empty();
     private boolean distinct;
-    private boolean ignoreNulls;
 
     public FunctionCallBuilder(Metadata metadata)
     {
@@ -130,17 +129,10 @@ public class FunctionCallBuilder
         return this;
     }
 
-    public FunctionCallBuilder setIgnoreNulls(boolean ignoreNulls)
-    {
-        this.ignoreNulls = ignoreNulls;
-        return this;
-    }
-
     public FunctionCall build()
     {
         checkState(name != null, "name was not set");
-
-        metadata.getFunctionAndTypeManager().lookupFunction(name.getSuffix(), TypeSignatureProvider.fromTypeSignatures(argumentTypes));
+        metadata.resolveFunction(name, TypeSignatureProvider.fromTypeSignatures(argumentTypes));
         return new FunctionCall(
                 location,
                 name,
@@ -148,7 +140,6 @@ public class FunctionCallBuilder
                 filter,
                 orderBy,
                 distinct,
-                ignoreNulls,
                 argumentValues);
     }
 }

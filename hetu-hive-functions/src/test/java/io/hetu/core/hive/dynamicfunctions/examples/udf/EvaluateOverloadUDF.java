@@ -26,7 +26,7 @@ public class EvaluateOverloadUDF
         return x;
     }
 
-    public int evaluateByInteger(Integer x)
+    public int evaluate(Integer x)
     {
         return x;
     }

@@ -548,7 +548,7 @@ public class PageFunctionCompiler
                             innerScope,
                             callSiteBinder,
                             cachedInstanceBinder,
-                            metadata.getFunctionAndTypeManager());
+                            metadata);
 
                     innerBody.append(generator.generateExpression(null, generatorContext, subFilter.getType(), subFilter.getArguments()))
                             .putVariable(result1)

@@ -170,10 +170,8 @@ public class BufferedOutputStreamSliceOutput
     }
 
     @Override
-    public void writeBytes(Slice source, int inputSourceIndex, int inputLength)
+    public void writeBytes(Slice source, int sourceIndex, int length)
     {
-        int sourceIndex = inputSourceIndex;
-        int length = inputLength;
         if (length >= CHUNK_SIZE) {
             if (bufferPosition > 0) {
                 // fill up the current buffer
@@ -209,10 +207,8 @@ public class BufferedOutputStreamSliceOutput
     }
 
     @Override
-    public void writeBytes(byte[] source, int inputSourceIndex, int inputLength)
+    public void writeBytes(byte[] source, int sourceIndex, int length)
     {
-        int sourceIndex = inputSourceIndex;
-        int length = inputLength;
         if (length >= CHUNK_SIZE) {
             if (bufferPosition > 0) {
                 // fill up the current buffer
@@ -242,10 +238,9 @@ public class BufferedOutputStreamSliceOutput
     }
 
     @Override
-    public void writeBytes(InputStream in, int inputLength)
+    public void writeBytes(InputStream in, int length)
             throws IOException
     {
-        int length = inputLength;
         while (length > 0) {
             int batch = ensureBatchSize(length);
             slice.setBytes(bufferPosition, in, batch);
@@ -255,9 +250,8 @@ public class BufferedOutputStreamSliceOutput
     }
 
     @Override
-    public void writeZero(int inputLength)
+    public void writeZero(int length)
     {
-        int length = inputLength;
         checkArgument(length >= 0, "length must be 0 or greater than 0.");
 
         while (length > 0) {

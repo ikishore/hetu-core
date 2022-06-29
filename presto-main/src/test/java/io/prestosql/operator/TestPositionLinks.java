@@ -314,6 +314,7 @@ public class TestPositionLinks
                 ImmutableList.of(),
                 OptionalInt.empty(),
                 Optional.of(0),
+                -1,
                 createTestMetadataManager());
     }
 

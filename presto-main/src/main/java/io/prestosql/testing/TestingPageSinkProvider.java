@@ -22,7 +22,6 @@ import io.prestosql.spi.connector.ConnectorPageSink;
 import io.prestosql.spi.connector.ConnectorPageSinkProvider;
 import io.prestosql.spi.connector.ConnectorSession;
 import io.prestosql.spi.connector.ConnectorTransactionHandle;
-import io.prestosql.spi.snapshot.RestorableConfig;
 
 import java.util.Collection;
 import java.util.concurrent.CompletableFuture;
@@ -44,7 +43,6 @@ public class TestingPageSinkProvider
         return new TestingPageSink();
     }
 
-    @RestorableConfig(unsupported = true)
     private static class TestingPageSink
             implements ConnectorPageSink
     {

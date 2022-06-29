@@ -1,5 +1,5 @@
 /*
- * Copyright (C) 2018-2021. Huawei Technologies Co., Ltd. All rights reserved.
+ * Copyright (C) 2018-2020. Huawei Technologies Co., Ltd. All rights reserved.
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
  * You may obtain a copy of the License at
@@ -36,7 +36,6 @@ import io.prestosql.spi.type.Type;
 import io.prestosql.spi.type.VarcharType;
 import org.apache.commons.lang3.tuple.Pair;
 import org.apache.hadoop.conf.Configuration;
-import org.apache.hadoop.fs.FileSystem;
 import org.apache.hadoop.fs.Path;
 import org.apache.hadoop.hbase.HBaseConfiguration;
 import org.apache.hadoop.hbase.HColumnDescriptor;
@@ -93,8 +92,6 @@ public class HBaseConnection
     // if zookeeper.sasl.client.config not set，then ZOOKEEPER_DEFAULT_LOGIN_CONTEXT_NAME is Client_new，
     // otherwise the kerberos on zookeeper will fail
     private static final String ZOOKEEPER_DEFAULT_LOGIN_CONTEXT_NAME = "Client_new";
-    private static final String KRB5_CONF_KEY = "java.security.krb5.conf";
-
     /**
      * hbase config
      */
@@ -111,13 +108,9 @@ public class HBaseConnection
      * Configuration
      */
     protected Configuration cfg;
-    /**
-     * FileSystem
-     */
-    protected FileSystem fs;
 
     private UserGroupInformation ugi;
-    private HBaseMetastore hbaseMetastore;
+    private HBaseMetastore hBaseMetastore;
 
     /**
      * constructor
@@ -128,22 +121,20 @@ public class HBaseConnection
     public HBaseConnection(HBaseConfig config)
     {
         this.hbaseConfig = config;
-        this.hbaseMetastore = new HBaseMetastoreFactory(config).create();
-        hbaseMetastore.init();
+        this.hBaseMetastore = new HBaseMetastoreFactory(config).create();
         authenticate();
-        this.conn = createConnection();
     }
 
     /**
      * constructor for test
      *
-     * @param hbaseMetastore HBaseMetaStore
+     * @param hBaseMetastore HBaseMetaStore
      * @param config HBaseConfig
      */
-    protected HBaseConnection(HBaseMetastore hbaseMetastore, HBaseConfig config)
+    protected HBaseConnection(HBaseMetastore hBaseMetastore, HBaseConfig config)
     {
         this.hbaseConfig = config;
-        this.hbaseMetastore = hbaseMetastore;
+        this.hBaseMetastore = hBaseMetastore;
         authenticate();
     }
 
@@ -170,28 +161,11 @@ public class HBaseConnection
     private void authenticate()
     {
         cfg = HBaseConfiguration.create();
-        cfg.set("hbase.zookeeper.quorum", hbaseConfig.getZkQuorum());
-        cfg.set("hbase.zookeeper.property.clientPort", hbaseConfig.getZkClientPort());
-        cfg.set("zookeeper.znode.parent", hbaseConfig.getZkZnodeParent());
         cfg.set("hbase.client.retries.number", hbaseConfig.getRetryNumber() + "");
         cfg.set("hbase.client.pause", hbaseConfig.getPauseTime() + "");
 
-        try {
-            if (hbaseConfig.isClientSideEnable()) {
-                cfg.set("hbase.cluster.distributed", "true");
-                cfg.set("hbase.mob.file.cache.size", "0");
-                if (!Utils.isFileExist(hbaseConfig.getCoreSitePath())) {
-                    throw new FileNotFoundException(hbaseConfig.getCoreSitePath());
-                }
-                cfg.addResource(new Path(hbaseConfig.getCoreSitePath()));
-                if (!Utils.isFileExist(hbaseConfig.getHdfsSitePath())) {
-                    throw new FileNotFoundException(hbaseConfig.getHdfsSitePath());
-                }
-                cfg.addResource(new Path(hbaseConfig.getHdfsSitePath()));
-                cfg.set("fs.hdfs.impl", "org.apache.hadoop.hdfs.DistributedFileSystem");
-            }
-
-            if (Constants.HDFS_AUTHENTICATION_KERBEROS.equals(hbaseConfig.getKerberos())) {
+        if (Constants.HDFS_AUTHENTICATION_KERBEROS.equals(hbaseConfig.getKerberos())) {
+            try {
                 if (!Utils.isFileExist(hbaseConfig.getHbaseSitePath())) {
                     throw new FileNotFoundException(hbaseConfig.getHbaseSitePath());
                 }
@@ -217,50 +191,39 @@ public class HBaseConnection
                 HBaseKerberosAuthentication.setJaasConf(ZOOKEEPER_DEFAULT_LOGIN_CONTEXT_NAME, userName, userKeytabFile);
                 ugi = HBaseKerberosAuthentication.authenticateAndReturnUGI(userName, userKeytabFile, krb5File, cfg);
             }
+            catch (IOException e) {
+                LOG.error("auth failed...cause by %s", e);
+            }
+        }
+    }
+
+    /**
+     * initConnection
+     */
+    public void initConnection()
+    {
+        cfg.set("hbase.zookeeper.quorum", hbaseConfig.getZkQuorum());
+        cfg.set("hbase.zookeeper.property.clientPort", hbaseConfig.getZkClientPort());
+        cfg.set("zookeeper.znode.parent", hbaseConfig.getZkZnodeParent());
+
+        try {
+            init();
+            hBaseMetastore.init();
         }
         catch (IOException e) {
-            LOG.error("auth failed...cause by %s", e);
+            LOG.error("initConnection failed...cause by %s", e);
+            conn = null;
         }
     }
 
     /**
-     * getConfiguration
+     * init
      *
-     * @return Configuration
+     * @throws IOException IOException
      */
-    public Configuration getConfiguration()
+    public void init()
+            throws IOException
     {
-        return cfg;
-    }
-
-    /**
-     * getFileSystem
-     *
-     * @return FileSystem
-     */
-    public FileSystem getFileSystem() throws IOException
-    {
-        return (fs == null) ? FileSystem.get(cfg) : fs;
-    }
-
-    /**
-     * getConnection
-     *
-     * @return Connection
-     */
-    public Connection getConn()
-    {
-        return (conn == null) ? createConnection() : conn;
-    }
-
-    /**
-     * getConn
-     *
-     * @return Connection
-     */
-    public Connection createConnection()
-    {
-        final Connection[] connection = new Connection[1];
         if (Constants.HDFS_AUTHENTICATION_KERBEROS.equals(hbaseConfig.getKerberos())) {
             ugi.doAs(
                     new PrivilegedAction<Connection>()
@@ -271,26 +234,49 @@ public class HBaseConnection
                         public Connection run()
                         {
                             try {
-                                connection[0] = ConnectionFactory.createConnection(cfg);
+                                conn = ConnectionFactory.createConnection(cfg);
                             }
                             catch (IOException e) {
-                                LOG.error("[kerberos] create hbase connector failed...cause by : %s", e);
+                                LOG.error("[safemode] create hbase connector failed...cause by : %s", e);
                             }
-                            return connection[0];
+                            return conn;
                         }
                     });
         }
         else {
             try {
-                connection[0] = ConnectionFactory.createConnection(cfg);
+                conn = ConnectionFactory.createConnection(cfg);
             }
             catch (IOException e) {
                 LOG.error("create hbase connection failed...cause by: %s", e);
-                connection[0] = null;
+                conn = null;
+            }
+        }
+    }
+
+    /**
+     * getConn
+     *
+     * @return Connection
+     */
+    public Connection getConn()
+    {
+        if (conn == null) {
+            initConnection();
+        }
+        if (conn.isClosed()) {
+            LOG.info("Connection is null or closed, creating a new one");
+            try {
+                init();
+            }
+            catch (IOException e) {
+                throw new PrestoException(
+                        HBaseErrorCode.UNEXPECTED_HBASE_ERROR,
+                        format("init hbase connection failed... cause by %s", e.getMessage()));
             }
         }
 
-        return connection[0];
+        return conn;
     }
 
     /**
@@ -340,8 +326,9 @@ public class HBaseConnection
      * createSchema
      *
      * @param schemaName schemaName
+     * @param properties properties
      */
-    public void createSchema(String schemaName)
+    public void createSchema(String schemaName, Map<String, Object> properties)
     {
         try {
             NamespaceDescriptor[] namespaces = this.getHbaseAdmin().listNamespaceDescriptors();
@@ -397,7 +384,7 @@ public class HBaseConnection
      */
     public void addColumn(HBaseTableHandle tableHandle, ColumnMetadata column)
     {
-        HBaseTable htable = hbaseMetastore.getHBaseTable(tableHandle.getFullTableName());
+        HBaseTable htable = hBaseMetastore.getHBaseTable(tableHandle.getFullTableName());
         if (htable == null) {
             throw new PrestoException(
                     HBaseErrorCode.HBASE_TABLE_DNE,
@@ -446,8 +433,8 @@ public class HBaseConnection
         htable.getColumnsMap().put(newColumn.getName(), newColumn);
         htable.getColumnMetadatas().add(newColumn.getColumnMetadata());
 
-        hbaseMetastore.dropHBaseTable(htable);
-        hbaseMetastore.addHBaseTable(htable);
+        hBaseMetastore.dropHBaseTable(htable);
+        hBaseMetastore.addHBaseTable(htable);
     }
 
     /**
@@ -512,7 +499,7 @@ public class HBaseConnection
         String tableName = table;
 
         // check whether table exist or not in Memory or hbasetable'store
-        return hbaseMetastore.getHBaseTable(tableName);
+        return hBaseMetastore.getHBaseTable(tableName);
     }
 
     /**
@@ -524,7 +511,7 @@ public class HBaseConnection
     {
         Map<String, List<SchemaTableName>> map = new HashMap<>();
         List<SchemaTableName> schemaNames;
-        for (String table : hbaseMetastore.getAllHBaseTables().keySet()) {
+        for (String table : hBaseMetastore.getAllHBaseTables().keySet()) {
             SchemaTableName st =
                     new SchemaTableName(table.split(Constants.SPLITPOINT)[0], table.split(Constants.SPLITPOINT)[1]);
             schemaNames = map.get(table.split(Constants.SPLITPOINT)[0]);
@@ -581,7 +568,7 @@ public class HBaseConnection
                     // hbase has exist this table, so update the tableCatalog for new
                     // check the family exist or not in hbase table
                     checkFamilyExist(table, rowIdColumn);
-                    hbaseMetastore.addHBaseTable(table);
+                    hBaseMetastore.addHBaseTable(table);
                     return table;
                 }
                 else {
@@ -604,7 +591,7 @@ public class HBaseConnection
                 // create hbase table
                 createHBaseTable(table);
                 // save tableCatalog to memory and file
-                hbaseMetastore.addHBaseTable(table);
+                hBaseMetastore.addHBaseTable(table);
                 return table;
             }
         }
@@ -679,7 +666,7 @@ public class HBaseConnection
         List<byte[]> splitKeys = new ArrayList<>();
         allRanges.forEach(range -> {
             for (char index = range.getStart(); index <= range.getEnd(); index += 1) {
-                splitKeys.add(String.valueOf(index).getBytes(UTF_8));
+                splitKeys.add(String.valueOf(index).getBytes());
             }
         });
 
@@ -719,14 +706,14 @@ public class HBaseConnection
     public void dropTable(HBaseTable table)
     {
         // check whether table exist in memory or not
-        if (hbaseMetastore.getHBaseTable(table.getFullTableName()) != null) {
+        if (hBaseMetastore.getHBaseTable(table.getFullTableName()) != null) {
             try {
                 // if table is not external, drop hbase table
                 if (!table.isExternal()) {
                     deleteTableIgnoreExistOrNot(table.getHbaseTableName().get());
                 }
 
-                hbaseMetastore.dropHBaseTable(table);
+                hBaseMetastore.dropHBaseTable(table);
             }
             catch (IOException e) {
                 LOG.error("deleteTableIgnoreExistOrNot: when delete table, cause by %s", e);
@@ -767,7 +754,7 @@ public class HBaseConnection
 
         oldTable.setTable(newName.getTableName());
         oldTable.setSchema(newName.getSchemaName());
-        hbaseMetastore.renameHBaseTable(oldTable, oldTableName);
+        hBaseMetastore.renameHBaseTable(oldTable, oldTableName);
     }
 
     /**

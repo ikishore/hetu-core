@@ -354,9 +354,9 @@ public class EqualityInference
             return this;
         }
 
-        public Builder addEquality(Expression inputExpression)
+        public Builder addEquality(Expression expression)
         {
-            Expression expression = normalizeInPredicateToEquality(inputExpression);
+            expression = normalizeInPredicateToEquality(expression);
             checkArgument(isInferenceCandidate().apply(expression), "Expression must be a simple equality: " + expression);
             ComparisonExpression comparison = (ComparisonExpression) expression;
             addEquality(comparison.getLeft(), comparison.getRight());

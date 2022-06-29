@@ -14,6 +14,7 @@
 package io.prestosql.sql.planner.optimizations;
 
 import com.google.common.base.Functions;
+import com.google.common.collect.ImmutableBiMap;
 import com.google.common.collect.ImmutableList;
 import com.google.common.collect.ImmutableMap;
 import com.google.common.collect.ImmutableSet;
@@ -21,10 +22,10 @@ import com.google.common.collect.Lists;
 import com.google.common.collect.Maps;
 import io.prestosql.Session;
 import io.prestosql.execution.warnings.WarningCollector;
-import io.prestosql.expressions.LogicalRowExpressions;
 import io.prestosql.metadata.Metadata;
 import io.prestosql.metadata.ResolvedIndex;
 import io.prestosql.spi.connector.ColumnHandle;
+import io.prestosql.spi.function.Signature;
 import io.prestosql.spi.plan.AggregationNode;
 import io.prestosql.spi.plan.FilterNode;
 import io.prestosql.spi.plan.JoinNode;
@@ -34,12 +35,15 @@ import io.prestosql.spi.plan.ProjectNode;
 import io.prestosql.spi.plan.Symbol;
 import io.prestosql.spi.plan.TableScanNode;
 import io.prestosql.spi.plan.WindowNode;
+import io.prestosql.spi.plan.WindowNode.Function;
 import io.prestosql.spi.predicate.TupleDomain;
-import io.prestosql.spi.relation.DomainTranslator;
 import io.prestosql.spi.relation.RowExpression;
 import io.prestosql.spi.relation.VariableReferenceExpression;
 import io.prestosql.spi.sql.expression.Types;
+import io.prestosql.sql.planner.ExpressionDomainTranslator;
+import io.prestosql.sql.planner.LiteralEncoder;
 import io.prestosql.sql.planner.PlanSymbolAllocator;
+import io.prestosql.sql.planner.SymbolUtils;
 import io.prestosql.sql.planner.TypeProvider;
 import io.prestosql.sql.planner.plan.AssignmentUtils;
 import io.prestosql.sql.planner.plan.IndexJoinNode;
@@ -47,9 +51,11 @@ import io.prestosql.sql.planner.plan.IndexSourceNode;
 import io.prestosql.sql.planner.plan.InternalPlanVisitor;
 import io.prestosql.sql.planner.plan.SimplePlanRewriter;
 import io.prestosql.sql.planner.plan.SortNode;
-import io.prestosql.sql.relational.FunctionResolution;
-import io.prestosql.sql.relational.RowExpressionDeterminismEvaluator;
-import io.prestosql.sql.relational.RowExpressionDomainTranslator;
+import io.prestosql.sql.relational.OriginalExpressionUtils;
+import io.prestosql.sql.tree.BooleanLiteral;
+import io.prestosql.sql.tree.Expression;
+import io.prestosql.sql.tree.QualifiedName;
+import io.prestosql.sql.tree.SymbolReference;
 
 import java.util.HashMap;
 import java.util.List;
@@ -63,9 +69,12 @@ import static com.google.common.base.Preconditions.checkState;
 import static com.google.common.base.Predicates.in;
 import static com.google.common.collect.ImmutableMap.toImmutableMap;
 import static com.google.common.collect.ImmutableSet.toImmutableSet;
-import static io.prestosql.expressions.LogicalRowExpressions.TRUE_CONSTANT;
-import static io.prestosql.spi.function.FunctionKind.AGGREGATE;
-import static io.prestosql.sql.planner.plan.AssignmentUtils.identityAssignments;
+import static io.prestosql.sql.ExpressionUtils.combineConjuncts;
+import static io.prestosql.sql.planner.plan.AssignmentUtils.identityAsSymbolReferences;
+import static io.prestosql.sql.relational.OriginalExpressionUtils.castToExpression;
+import static io.prestosql.sql.relational.OriginalExpressionUtils.castToRowExpression;
+import static io.prestosql.sql.relational.OriginalExpressionUtils.isExpression;
+import static io.prestosql.sql.tree.BooleanLiteral.TRUE_LITERAL;
 import static java.util.Objects.requireNonNull;
 import static java.util.function.Function.identity;
 
@@ -163,7 +172,7 @@ public class IndexJoinOptimizer
                                 indexJoinNode = new ProjectNode(
                                         idAllocator.getNextId(),
                                         indexJoinNode,
-                                        identityAssignments(planSymbolAllocator.getTypes(), node.getOutputSymbols()));
+                                        identityAsSymbolReferences(node.getOutputSymbols()));
                             }
 
                             return indexJoinNode;
@@ -173,14 +182,14 @@ public class IndexJoinOptimizer
                     case LEFT:
                         // We cannot use indices for outer joins until index join supports in-line filtering
                         if (!node.getFilter().isPresent() && rightIndexCandidate.isPresent()) {
-                            return createIndexJoinWithExpectedOutputs(node.getOutputSymbols(), IndexJoinNode.Type.SOURCE_OUTER, leftRewritten, rightIndexCandidate.get(), createEquiJoinClause(leftJoinSymbols, rightJoinSymbols), idAllocator, planSymbolAllocator.getTypes());
+                            return createIndexJoinWithExpectedOutputs(node.getOutputSymbols(), IndexJoinNode.Type.SOURCE_OUTER, leftRewritten, rightIndexCandidate.get(), createEquiJoinClause(leftJoinSymbols, rightJoinSymbols), idAllocator);
                         }
                         break;
 
                     case RIGHT:
                         // We cannot use indices for outer joins until index join supports in-line filtering
                         if (!node.getFilter().isPresent() && leftIndexCandidate.isPresent()) {
-                            return createIndexJoinWithExpectedOutputs(node.getOutputSymbols(), IndexJoinNode.Type.SOURCE_OUTER, rightRewritten, leftIndexCandidate.get(), createEquiJoinClause(rightJoinSymbols, leftJoinSymbols), idAllocator, planSymbolAllocator.getTypes());
+                            return createIndexJoinWithExpectedOutputs(node.getOutputSymbols(), IndexJoinNode.Type.SOURCE_OUTER, rightRewritten, leftIndexCandidate.get(), createEquiJoinClause(rightJoinSymbols, leftJoinSymbols), idAllocator);
                         }
                         break;
 
@@ -198,14 +207,14 @@ public class IndexJoinOptimizer
             return node;
         }
 
-        private static PlanNode createIndexJoinWithExpectedOutputs(List<Symbol> expectedOutputs, IndexJoinNode.Type type, PlanNode probe, PlanNode index, List<IndexJoinNode.EquiJoinClause> equiJoinClause, PlanNodeIdAllocator idAllocator, TypeProvider types)
+        private static PlanNode createIndexJoinWithExpectedOutputs(List<Symbol> expectedOutputs, IndexJoinNode.Type type, PlanNode probe, PlanNode index, List<IndexJoinNode.EquiJoinClause> equiJoinClause, PlanNodeIdAllocator idAllocator)
         {
             PlanNode result = new IndexJoinNode(idAllocator.getNextId(), type, probe, index, equiJoinClause, Optional.empty(), Optional.empty());
             if (!result.getOutputSymbols().equals(expectedOutputs)) {
                 result = new ProjectNode(
                         idAllocator.getNextId(),
                         result,
-                        AssignmentUtils.identityAssignments(types, expectedOutputs));
+                        AssignmentUtils.identityAsSymbolReferences(expectedOutputs));
             }
             return result;
         }
@@ -230,13 +239,13 @@ public class IndexJoinOptimizer
         private final PlanSymbolAllocator planSymbolAllocator;
         private final PlanNodeIdAllocator idAllocator;
         private final Metadata metadata;
-        private final RowExpressionDomainTranslator domainTranslator;
+        private final ExpressionDomainTranslator domainTranslator;
         private final Session session;
 
         private IndexSourceRewriter(PlanSymbolAllocator planSymbolAllocator, PlanNodeIdAllocator idAllocator, Metadata metadata, Session session)
         {
             this.metadata = requireNonNull(metadata, "metadata is null");
-            this.domainTranslator = new RowExpressionDomainTranslator(metadata);
+            this.domainTranslator = new ExpressionDomainTranslator(new LiteralEncoder(metadata));
             this.planSymbolAllocator = requireNonNull(planSymbolAllocator, "symbolAllocator is null");
             this.idAllocator = requireNonNull(idAllocator, "idAllocator is null");
             this.session = requireNonNull(session, "session is null");
@@ -269,15 +278,19 @@ public class IndexJoinOptimizer
         @Override
         public PlanNode visitTableScan(TableScanNode node, RewriteContext<Context> context)
         {
-            return planTableScan(node, TRUE_CONSTANT, context.get());
+            return planTableScan(node, BooleanLiteral.TRUE_LITERAL, context.get());
         }
 
-        private PlanNode planTableScan(TableScanNode node, RowExpression predicate, Context context)
+        private PlanNode planTableScan(TableScanNode node, Expression predicate, Context context)
         {
-            DomainTranslator.ExtractionResult<VariableReferenceExpression> decomposedPredicate = domainTranslator.fromPredicate(session.toConnectorSession(), predicate);
+            ExpressionDomainTranslator.ExtractionResult decomposedPredicate = ExpressionDomainTranslator.fromPredicate(
+                    metadata,
+                    session,
+                    predicate,
+                    planSymbolAllocator.getTypes());
 
             TupleDomain<ColumnHandle> simplifiedConstraint = decomposedPredicate.getTupleDomain()
-                    .transform(variable -> node.getAssignments().get(new Symbol(variable.getName())))
+                    .transform(node.getAssignments()::get)
                     .intersect(node.getEnforcedConstraint());
 
             checkState(node.getOutputSymbols().containsAll(context.getLookupSymbols()));
@@ -295,10 +308,7 @@ public class IndexJoinOptimizer
             }
             ResolvedIndex resolvedIndex = optionalResolvedIndex.get();
 
-            Map<ColumnHandle, VariableReferenceExpression> inverseAssignments = new HashMap<>();
-            for (Symbol symbol : node.getAssignments().keySet()) {
-                inverseAssignments.put(node.getAssignments().get(symbol), new VariableReferenceExpression(symbol.getName(), planSymbolAllocator.getTypes().get(symbol)));
-            }
+            Map<ColumnHandle, Symbol> inverseAssignments = ImmutableBiMap.copyOf(node.getAssignments()).inverse();
 
             PlanNode source = new IndexSourceNode(
                     idAllocator.getNextId(),
@@ -309,16 +319,13 @@ public class IndexJoinOptimizer
                     node.getAssignments(),
                     simplifiedConstraint);
 
-            LogicalRowExpressions logicalRowExpressions = new LogicalRowExpressions(new RowExpressionDeterminismEvaluator(metadata),
-                                                                                    new FunctionResolution(metadata.getFunctionAndTypeManager()),
-                                                                                    metadata.getFunctionAndTypeManager());
-            RowExpression resultingPredicate = logicalRowExpressions.combineConjuncts(
+            Expression resultingPredicate = combineConjuncts(
                     domainTranslator.toPredicate(resolvedIndex.getUnresolvedTupleDomain().transform(inverseAssignments::get)),
                     decomposedPredicate.getRemainingExpression());
 
-            if (!resultingPredicate.equals(TRUE_CONSTANT)) {
+            if (!resultingPredicate.equals(TRUE_LITERAL)) {
                 // todo it is likely we end up with redundant filters here because the predicate push down has already been run... the fix is to run predicate push down again
-                source = new FilterNode(idAllocator.getNextId(), source, resultingPredicate);
+                source = new FilterNode(idAllocator.getNextId(), source, castToRowExpression(resultingPredicate));
             }
             context.markSuccess();
             return source;
@@ -330,8 +337,9 @@ public class IndexJoinOptimizer
             // Rewrite the lookup symbols in terms of only the pre-projected symbols that have direct translations
             Set<Symbol> newLookupSymbols = context.get().getLookupSymbols().stream()
                     .map(node.getAssignments()::get)
-                    .filter(VariableReferenceExpression.class::isInstance)
-                    .map(variable -> new Symbol(((VariableReferenceExpression) variable).getName()))
+                    .map(OriginalExpressionUtils::castToExpression)
+                    .filter(SymbolReference.class::isInstance)
+                    .map(SymbolUtils::from)
                     .collect(toImmutableSet());
 
             if (newLookupSymbols.isEmpty()) {
@@ -345,7 +353,7 @@ public class IndexJoinOptimizer
         public PlanNode visitFilter(FilterNode node, RewriteContext<Context> context)
         {
             if (node.getSource() instanceof TableScanNode) {
-                return planTableScan((TableScanNode) node.getSource(), node.getPredicate(), context.get());
+                return planTableScan((TableScanNode) node.getSource(), castToExpression(node.getPredicate()), context.get());
             }
 
             return context.defaultRewrite(node, new Context(context.get().getLookupSymbols(), context.get().getSuccess()));
@@ -355,7 +363,10 @@ public class IndexJoinOptimizer
         public PlanNode visitWindow(WindowNode node, RewriteContext<Context> context)
         {
             if (!node.getWindowFunctions().values().stream()
-                    .allMatch(function -> metadata.getFunctionAndTypeManager().getFunctionMetadata(function.getFunctionHandle()).getFunctionKind() == AGGREGATE)) {
+                    .map(Function::getSignature)
+                    .map(Signature::getName)
+                    .map(QualifiedName::of)
+                    .allMatch(metadata::isAggregationFunction)) {
                 return node;
             }
 
@@ -490,8 +501,16 @@ public class IndexJoinOptimizer
                 // Map from output Symbols to source Symbols
                 Map<Symbol, Symbol> directSymbolTranslationOutputMap = new HashMap<>();
                 for (Map.Entry<Symbol, RowExpression> entry : node.getAssignments().getMap().entrySet()) {
-                    if (entry.getValue() instanceof VariableReferenceExpression) {
-                        directSymbolTranslationOutputMap.put(entry.getKey(), new Symbol(((VariableReferenceExpression) entry.getValue()).getName()));
+                    if (isExpression(entry.getValue())) {
+                        Expression expression = castToExpression(entry.getValue());
+                        if (expression instanceof SymbolReference) {
+                            directSymbolTranslationOutputMap.put(entry.getKey(), SymbolUtils.from(expression));
+                        }
+                    }
+                    else {
+                        if (entry.getValue() instanceof VariableReferenceExpression) {
+                            directSymbolTranslationOutputMap.put(entry.getKey(), new Symbol(((VariableReferenceExpression) entry.getValue()).getName()));
+                        }
                     }
                 }
 

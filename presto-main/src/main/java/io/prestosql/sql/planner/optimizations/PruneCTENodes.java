@@ -1,5 +1,5 @@
 /*
- * Copyright (C) 2018-2021. Huawei Technologies Co., Ltd. All rights reserved.
+ * Copyright (C) 2018-2020. Huawei Technologies Co., Ltd. All rights reserved.
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
  * You may obtain a copy of the License at
@@ -16,28 +16,33 @@ package io.prestosql.sql.planner.optimizations;
 
 import io.prestosql.Session;
 import io.prestosql.execution.warnings.WarningCollector;
-import io.prestosql.metadata.Metadata;
-import io.prestosql.spi.metadata.TableHandle;
 import io.prestosql.spi.plan.CTEScanNode;
 import io.prestosql.spi.plan.FilterNode;
 import io.prestosql.spi.plan.JoinNode;
 import io.prestosql.spi.plan.PlanNode;
 import io.prestosql.spi.plan.PlanNodeIdAllocator;
 import io.prestosql.spi.plan.ProjectNode;
-import io.prestosql.spi.plan.TableScanNode;
+import io.prestosql.spi.plan.Symbol;
+import io.prestosql.spi.plan.WindowNode;
+import io.prestosql.spi.relation.RowExpression;
 import io.prestosql.sql.planner.PlanSymbolAllocator;
-import io.prestosql.sql.planner.TypeAnalyzer;
+import io.prestosql.sql.planner.SymbolsExtractor;
 import io.prestosql.sql.planner.TypeProvider;
 import io.prestosql.sql.planner.plan.ExchangeNode;
 import io.prestosql.sql.planner.plan.SimplePlanRewriter;
+import io.prestosql.sql.relational.OriginalExpressionUtils;
 import io.prestosql.sql.tree.Expression;
+import io.prestosql.sql.tree.SymbolReference;
 
 import java.util.HashMap;
 import java.util.HashSet;
+import java.util.List;
 import java.util.Map;
 import java.util.Set;
+import java.util.stream.Collectors;
 
 import static io.prestosql.SystemSessionProperties.isCTEReuseEnabled;
+import static io.prestosql.sql.relational.OriginalExpressionUtils.castToExpression;
 import static java.util.Objects.requireNonNull;
 
 /*
@@ -46,20 +51,20 @@ import static java.util.Objects.requireNonNull;
 public class PruneCTENodes
         implements PlanOptimizer
 {
-    private final Metadata metadata;
-    private final TypeAnalyzer typeAnalyzer;
+    private final boolean pruneCTEWithFilter;
     private final boolean pruneCTEWithCrossJoin;
+    private final boolean pruneCTEWithDynFilter;
 
-    public PruneCTENodes(Metadata metadata, TypeAnalyzer typeAnalyzer, boolean pruneCTEWithCrossJoin)
+    public PruneCTENodes(boolean pruneCTEWithFilter, boolean pruneCTEWithCrossJoin, boolean pruneCTEWithDynFilter)
     {
-        this.metadata = metadata;
-        this.typeAnalyzer = typeAnalyzer;
+        this.pruneCTEWithFilter = pruneCTEWithFilter;
         this.pruneCTEWithCrossJoin = pruneCTEWithCrossJoin;
+        this.pruneCTEWithDynFilter = pruneCTEWithDynFilter;
     }
 
     @Override
     public PlanNode optimize(PlanNode plan, Session session, TypeProvider types, PlanSymbolAllocator symbolAllocator,
-            PlanNodeIdAllocator idAllocator, WarningCollector warningCollector)
+                             PlanNodeIdAllocator idAllocator, WarningCollector warningCollector)
     {
         requireNonNull(plan, "plan is null");
         requireNonNull(session, "session is null");
@@ -71,7 +76,7 @@ public class PruneCTENodes
             return plan;
         }
         else {
-            OptimizedPlanRewriter optimizedPlanRewriter = new OptimizedPlanRewriter(metadata, typeAnalyzer, false, pruneCTEWithCrossJoin);
+            OptimizedPlanRewriter optimizedPlanRewriter = new OptimizedPlanRewriter(false, pruneCTEWithFilter, pruneCTEWithCrossJoin, pruneCTEWithDynFilter);
             PlanNode newNode = SimplePlanRewriter.rewriteWith(optimizedPlanRewriter, plan);
             if (optimizedPlanRewriter.isSecondTraverseRequired()) {
                 return SimplePlanRewriter.rewriteWith(optimizedPlanRewriter, newNode);
@@ -82,29 +87,37 @@ public class PruneCTENodes
     }
 
     private static class OptimizedPlanRewriter
-            extends SimplePlanRewriter<Expression>
+            extends SimplePlanRewriter<ExpressionDetails>
     {
-        private final Metadata metadata;
-        private final TypeAnalyzer typeAnalyzer;
         private boolean isNodeAlreadyVisited;
+        private final boolean pruneCTEWithFilter;
         private final boolean pruneCTEWithCrossJoin;
+        private final boolean pruneCTEWithDynFilter;
         private Set<Integer> cTEWithCrossJoinList = new HashSet<>();
 
         private final Map<Integer, Integer> cteUsageMap;
+        private final Map<Integer, Integer> cteJoinDynMap;
         private final Set<Integer> cteToPrune; //because of dynamic filter not matching
 
-        private OptimizedPlanRewriter(Metadata metadata, TypeAnalyzer typeAnalyzer, Boolean isNodeAlreadyVisited, boolean pruneCTEWithCrossJoin)
+        private OptimizedPlanRewriter(Boolean isNodeAlreadyVisited, boolean pruneCTEWithFilter, boolean pruneCTEWithCrossJoin, boolean pruneCTEWithDynFilter)
         {
-            this.metadata = metadata;
-            this.typeAnalyzer = typeAnalyzer;
             this.isNodeAlreadyVisited = isNodeAlreadyVisited;
             this.cteUsageMap = new HashMap<>();
+            this.pruneCTEWithFilter = pruneCTEWithFilter;
             this.pruneCTEWithCrossJoin = pruneCTEWithCrossJoin;
+            this.pruneCTEWithDynFilter = pruneCTEWithDynFilter;
+            cteJoinDynMap = new HashMap<>();
             cteToPrune = new HashSet<>();
         }
 
         @Override
-        public PlanNode visitJoin(JoinNode node, RewriteContext<Expression> context)
+        public PlanNode visitFilter(FilterNode node, RewriteContext<ExpressionDetails> context)
+        {
+            return context.defaultRewrite(node, new ExpressionDetails(context.get() != null ? context.get().getDynFilCount() : 0, node.getPredicate()));
+        }
+
+        @Override
+        public PlanNode visitJoin(JoinNode node, RewriteContext<ExpressionDetails> context)
         {
             if (pruneCTEWithCrossJoin && node.isCrossJoin()) {
                 Integer left = getChildCTERefNum(node.getLeft());
@@ -113,7 +126,23 @@ public class PruneCTENodes
                     cTEWithCrossJoinList.add(left);
                 }
             }
-            return context.defaultRewrite(node, context.get());
+
+            int currentCount = context.get() != null ? context.get().getDynFilCount() : 0;
+            if (pruneCTEWithDynFilter) {
+                Integer left = getChildCTERefNum(node.getLeft());
+                if (left != null && !cteToPrune.contains(left)) {
+                    if (cteJoinDynMap.containsKey(left)) {
+                        if (cteJoinDynMap.get(left) != currentCount + node.getDynamicFilters().size()) {
+                            cteToPrune.add(left);
+                        }
+                    }
+                    else {
+                        cteJoinDynMap.put(left, currentCount + node.getDynamicFilters().size());
+                    }
+                }
+            }
+            return context.defaultRewrite(node, new ExpressionDetails(currentCount + node.getDynamicFilters().size(),
+                                                                        context.get() != null ? context.get().getPredicate() : null));
         }
 
         private Integer getChildCTERefNum(PlanNode node)
@@ -133,30 +162,62 @@ public class PruneCTENodes
             return null;
         }
 
-        @Override
-        public PlanNode visitCTEScan(CTEScanNode inputNode, RewriteContext<Expression> context)
+        private static boolean isSymbolBaseColumn(String name)
         {
-            CTEScanNode node = inputNode;
+            return !(name.startsWith("sum") || name.startsWith("avg") || name.startsWith("count")
+                        || name.startsWith("max") || name.startsWith("min"));
+        }
+
+        private static boolean isExprBaseColumn(RowExpression rowExpression)
+        {
+            // This is temp way to continue optimization of queries where Filter node is there on top of CTE
+            // but filter is on derived expression.
+            // Later anyway this will be removed to support optimization for such cases also.
+            if (OriginalExpressionUtils.isExpression(rowExpression)) {
+                Expression expression = castToExpression(rowExpression);
+                if (expression instanceof SymbolReference) {
+                    SymbolReference symbol = (SymbolReference) expression;
+                    return isSymbolBaseColumn(symbol.getName());
+                }
+            }
+
+            return false;
+        }
+
+        @Override
+        public PlanNode visitCTEScan(CTEScanNode node, RewriteContext<ExpressionDetails> context)
+        {
             Integer commonCTERefNum = node.getCommonCTERefNum();
             if (pruneCTEWithCrossJoin) {
                 if (cTEWithCrossJoinList.contains(commonCTERefNum)) {
                     node = (CTEScanNode) visitPlan(node, context);
                     return node.getSource();
                 }
+            }
+            if (!isNodeAlreadyVisited) {
+                if (pruneCTEWithFilter && context.get() != null && context.get().getPredicate() != null) {
+                    List<Symbol> deterministicSymbols;
+                    if (node.getSource() instanceof ProjectNode) {
+                        ProjectNode projectNode = (ProjectNode) node.getSource();
+                        deterministicSymbols = projectNode.getAssignments().entrySet().stream()
+                                .filter(entry -> isExprBaseColumn(entry.getValue()))
+                                .map(Map.Entry::getKey)
+                                .collect(Collectors.toList());
+                    }
+                    else {
+                        deterministicSymbols = node.getOutputSymbols().stream()
+                                                .filter(entry -> isSymbolBaseColumn(entry.getName()))
+                                                .collect(Collectors.toList());
+                    }
 
-                // If there is a self join below CTE node, then CTE should be removed.
-                if (node.getSource() instanceof JoinNode) {
-                    // check if this join is self join
-                    TableHandle left = getTableHandle(((JoinNode) node.getSource()).getLeft());
-                    TableHandle right = getTableHandle(((JoinNode) node.getSource()).getRight());
-                    if (left != null && right != null && left.getConnectorHandle().equals(right.getConnectorHandle())) {
-                        // both tables are same, means it is self join.
+                    if (SymbolsExtractor.extractUnique(context.get().getPredicate()).stream().anyMatch(deterministicSymbols::contains)
+                            && !(!node.getSource().getSources().isEmpty() && node.getSource().getSources().get(0) instanceof WindowNode)) {
+                        // If there is any filter on top of CTE, then we dont apply optimization; so return child from here.
                         node = (CTEScanNode) visitPlan(node, context);
                         return node.getSource();
                     }
                 }
-            }
-            if (!isNodeAlreadyVisited) {
+
                 cteUsageMap.merge(commonCTERefNum, 1, Integer::sum);
             }
             else {
@@ -168,29 +229,33 @@ public class PruneCTENodes
             return visitPlan(node, context);
         }
 
-        private TableHandle getTableHandle(PlanNode node)
-        {
-            if (node instanceof TableScanNode) {
-                return ((TableScanNode) node).getTable();
-            }
-            else if (node instanceof ProjectNode) {
-                return getTableHandle(((ProjectNode) node).getSource());
-            }
-            else if (node instanceof FilterNode) {
-                return getTableHandle(((FilterNode) node).getSource());
-            }
-            else if (node.getSources().size() == 1 && node instanceof ExchangeNode) {
-                return getTableHandle(node.getSources().get(0));
-            }
-            return null;
-        }
-
         // If only there was any CTE with just one usage, we need to traverse again to remove CTE node otherwise no need.
         private boolean isSecondTraverseRequired()
         {
-            isNodeAlreadyVisited = cteUsageMap.size() != 0 && cteUsageMap.values().stream().filter(x -> x <= 1).count() > 0
-                                    || cteToPrune.size() > 0;
+            isNodeAlreadyVisited = cteUsageMap.size() != 0 && cteUsageMap.values().stream().filter(x -> x <= 1).count() > 0 || cteToPrune.size() > 0;
             return isNodeAlreadyVisited;
+        }
+    }
+
+    public static class ExpressionDetails
+    {
+        int dynFilCount;
+        RowExpression predicate;
+
+        public ExpressionDetails(int dynFilCount, RowExpression predicate)
+        {
+            this.dynFilCount = dynFilCount;
+            this.predicate = predicate;
+        }
+
+        public int getDynFilCount()
+        {
+            return dynFilCount;
+        }
+
+        public RowExpression getPredicate()
+        {
+            return predicate;
         }
     }
 }

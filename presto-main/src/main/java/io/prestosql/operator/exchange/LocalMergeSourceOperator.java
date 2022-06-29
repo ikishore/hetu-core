@@ -22,11 +22,9 @@ import io.prestosql.operator.OperatorFactory;
 import io.prestosql.operator.PageWithPositionComparator;
 import io.prestosql.operator.WorkProcessor;
 import io.prestosql.operator.exchange.LocalExchange.LocalExchangeFactory;
-import io.prestosql.snapshot.MultiInputSnapshotState;
 import io.prestosql.spi.Page;
 import io.prestosql.spi.block.SortOrder;
 import io.prestosql.spi.plan.PlanNodeId;
-import io.prestosql.spi.snapshot.RestorableConfig;
 import io.prestosql.spi.type.Type;
 import io.prestosql.sql.gen.OrderingCompiler;
 
@@ -39,8 +37,6 @@ import static com.google.common.collect.ImmutableList.toImmutableList;
 import static io.prestosql.util.MergeSortedPages.mergeSortedPages;
 import static java.util.Objects.requireNonNull;
 
-// This operator's state will not be captured, because markers are received before any data pages
-@RestorableConfig(unsupported = true)
 public class LocalMergeSourceOperator
         implements Operator
 {
@@ -79,16 +75,15 @@ public class LocalMergeSourceOperator
         {
             checkState(!closed, "Factory is already closed");
 
-            OperatorContext context = driverContext.addOperatorContext(operatorId, planNodeId, LocalMergeSourceOperator.class.getSimpleName());
+            LocalExchange localExchange = localExchangeFactory.getLocalExchange(driverContext.getLifespan());
 
-            LocalExchange localExchange = localExchangeFactory.getLocalExchange(driverContext.getLifespan(), driverContext.getPipelineContext().getTaskContext(), planNodeId.toString(), context.isSnapshotEnabled());
-
+            OperatorContext operatorContext = driverContext.addOperatorContext(operatorId, planNodeId, LocalMergeSourceOperator.class.getSimpleName());
             PageWithPositionComparator comparator = orderingCompiler.compilePageWithPositionComparator(types, sortChannels, orderings);
-            List<LocalExchangeSource> localExchangeSources = IntStream.range(0, localExchange.getBufferCount())
+            List<LocalExchangeSource> sources = IntStream.range(0, localExchange.getBufferCount())
                     .boxed()
                     .map(index -> localExchange.getNextSource())
                     .collect(toImmutableList());
-            return new LocalMergeSourceOperator(context, localExchangeSources, types, comparator, localExchange.getSnapshotState(), planNodeId.toString());
+            return new LocalMergeSourceOperator(operatorContext, sources, types, comparator);
         }
 
         @Override
@@ -108,19 +103,10 @@ public class LocalMergeSourceOperator
     private final List<LocalExchangeSource> sources;
     private final WorkProcessor<Page> mergedPages;
 
-    // Snapshot: this is created for the local-exchange, but made available here,
-    // so this operator can return markers to downstream operators
-    private final MultiInputSnapshotState snapshotState;
-    // For taskSnapshotManager.updateFinishedComponents(), LocalMergeSourceOperator needs to report the same id as LocalExchange
-    // because SnapshotState is affiliated with LocalExchange rather than LocalMergeSourceOperator. LocalExchange is identified by
-    // planNodeId, so LocalMerge will also store a copy to identify itself so it won't get counted as a new component.
-    private final String planNodeId;
-
-    public LocalMergeSourceOperator(OperatorContext operatorContext, List<LocalExchangeSource> sources, List<Type> types, PageWithPositionComparator comparator, MultiInputSnapshotState snapshotState, String planNodeId)
+    public LocalMergeSourceOperator(OperatorContext operatorContext, List<LocalExchangeSource> sources, List<Type> types, PageWithPositionComparator comparator)
     {
         this.operatorContext = requireNonNull(operatorContext, "operatorContext is null");
         this.sources = requireNonNull(sources, "sources is null");
-        this.snapshotState = snapshotState;
         List<WorkProcessor<Page>> pageProducers = sources.stream()
                 .map(LocalExchangeSource::pages)
                 .collect(toImmutableList());
@@ -130,18 +116,12 @@ public class LocalMergeSourceOperator
                 types,
                 operatorContext.aggregateUserMemoryContext(),
                 operatorContext.getDriverContext().getYieldSignal());
-        this.planNodeId = planNodeId;
     }
 
     @Override
     public OperatorContext getOperatorContext()
     {
         return operatorContext;
-    }
-
-    public String getPlanNodeId()
-    {
-        return planNodeId;
     }
 
     @Override
@@ -153,11 +133,6 @@ public class LocalMergeSourceOperator
     @Override
     public boolean isFinished()
     {
-        if (snapshotState != null && snapshotState.hasPendingPages()) {
-            // Snapshot: there are pending markers. Need to send them out before finishing this operator.
-            return false;
-        }
-
         return mergedPages.isFinished();
     }
 
@@ -186,13 +161,6 @@ public class LocalMergeSourceOperator
     @Override
     public Page getOutput()
     {
-        if (snapshotState != null) {
-            Page marker = snapshotState.nextMarker();
-            if (marker != null) {
-                return marker;
-            }
-        }
-
         if (!mergedPages.process() || mergedPages.isFinished()) {
             return null;
         }
@@ -200,12 +168,6 @@ public class LocalMergeSourceOperator
         Page page = mergedPages.getResult();
         operatorContext.recordProcessedInput(page.getSizeInBytes(), page.getPositionCount());
         return page;
-    }
-
-    @Override
-    public Page pollMarker()
-    {
-        return snapshotState.nextMarker();
     }
 
     @Override

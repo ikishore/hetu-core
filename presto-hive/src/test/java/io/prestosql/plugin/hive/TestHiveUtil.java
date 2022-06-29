@@ -56,14 +56,10 @@ import static io.prestosql.plugin.hive.HiveUtil.getPartitionKeyColumnHandles;
 import static io.prestosql.plugin.hive.HiveUtil.getRegularColumnHandles;
 import static io.prestosql.plugin.hive.HiveUtil.isPartitionFiltered;
 import static io.prestosql.plugin.hive.HiveUtil.parseHiveTimestamp;
-import static io.prestosql.plugin.hive.HiveUtil.shouldUseRecordReaderFromInputFormat;
 import static io.prestosql.plugin.hive.HiveUtil.toPartitionValues;
 import static io.prestosql.spi.type.StandardTypes.BIGINT;
 import static io.prestosql.spi.type.StandardTypes.VARCHAR;
 import static io.prestosql.spi.type.TypeSignature.parseTypeSignature;
-import static org.apache.hadoop.hive.metastore.api.hive_metastoreConstants.FILE_INPUT_FORMAT;
-import static org.apache.hadoop.hive.metastore.api.hive_metastoreConstants.FILE_OUTPUT_FORMAT;
-import static org.apache.hadoop.hive.metastore.api.hive_metastoreConstants.META_TABLE_SERDE;
 import static org.apache.hadoop.hive.serde.serdeConstants.SERIALIZATION_CLASS;
 import static org.apache.hadoop.hive.serde.serdeConstants.SERIALIZATION_FORMAT;
 import static org.apache.hadoop.hive.serde.serdeConstants.SERIALIZATION_LIB;
@@ -100,7 +96,7 @@ public class TestHiveUtil
     @Test
     public void testParseHiveTimestamp()
     {
-        DateTime time = new DateTime(2011, 5, 6, 7, 8, 9, 123, DateTimeZone.UTC);
+        DateTime time = new DateTime(2011, 5, 6, 7, 8, 9, 123, nonDefaultTimeZone());
         assertEquals(parse(time, "yyyy-MM-dd HH:mm:ss"), unixTime(time, 0));
         assertEquals(parse(time, "yyyy-MM-dd HH:mm:ss.S"), unixTime(time, 1));
         assertEquals(parse(time, "yyyy-MM-dd HH:mm:ss.SSS"), unixTime(time, 3));
@@ -132,21 +128,6 @@ public class TestHiveUtil
     }
 
     @Test
-    public void testShouldUseRecordReaderFromInputFormat()
-    {
-        Properties schema = new Properties();
-        schema.setProperty(FILE_INPUT_FORMAT, "org.apache.hudi.hadoop.HoodieParquetInputFormat");
-        schema.setProperty(META_TABLE_SERDE, "parquet.hive.serde.ParquetHiveSerDe");
-        schema.setProperty(FILE_OUTPUT_FORMAT, "");
-        assertTrue(shouldUseRecordReaderFromInputFormat(new Configuration(), schema));
-
-        schema.setProperty(FILE_INPUT_FORMAT, "org.apache.hudi.hadoop.realtime.HoodieParquetRealtimeInputFormat");
-        schema.setProperty(META_TABLE_SERDE, "parquet.hive.serde.ParquetHiveSerDe");
-        schema.setProperty(FILE_OUTPUT_FORMAT, "");
-        assertTrue(shouldUseRecordReaderFromInputFormat(new Configuration(), schema));
-    }
-
-    @Test
     public void testIsPartitionFiltered()
     {
         TypeManager typeManager = new TestingTypeManager();
@@ -156,29 +137,29 @@ public class TestHiveUtil
         List<HivePartitionKey> partitions = new ArrayList<>();
 
         assertFalse(isPartitionFiltered(partitions, null, typeManager), "Should not filter partition if either partitions or dynamicFilters is null");
-        assertFalse(isPartitionFiltered(null, ImmutableList.of(dynamicFilters), typeManager), "Should not filter partition if either partitions or dynamicFilters is null");
-        assertFalse(isPartitionFiltered(partitions, ImmutableList.of(dynamicFilters), typeManager), "Should not filter partition if partitions and dynamicFilters are empty");
+        assertFalse(isPartitionFiltered(null, dynamicFilters, typeManager), "Should not filter partition if either partitions or dynamicFilters is null");
+        assertFalse(isPartitionFiltered(partitions, dynamicFilters, typeManager), "Should not filter partition if partitions and dynamicFilters are empty");
 
         partitions.add(new HivePartitionKey("pt_d", "0"));
         partitions.add(new HivePartitionKey("app_id", "10000"));
-        assertFalse(isPartitionFiltered(partitions, ImmutableList.of(dynamicFilters), typeManager), "Should not filter partition if dynamicFilters is empty");
+        assertFalse(isPartitionFiltered(partitions, dynamicFilters, typeManager), "Should not filter partition if dynamicFilters is empty");
 
         ColumnHandle dayColumn = new HiveColumnHandle("pt_d", HIVE_LONG, parseTypeSignature(BIGINT), 0, PARTITION_KEY, Optional.empty());
         BloomFilter dayFilter = new BloomFilter(1024 * 1024, 0.01);
         dynamicFilters.add(new BloomFilterDynamicFilter("1", dayColumn, dayFilter, DynamicFilter.Type.GLOBAL));
-        assertTrue(isPartitionFiltered(partitions, ImmutableList.of(dynamicFilters), typeManager), "Should filter partition if any dynamicFilter has 0 element count");
+        assertTrue(isPartitionFiltered(partitions, dynamicFilters, typeManager), "Should filter partition if any dynamicFilter has 0 element count");
 
         dayFilter.add(1L);
-        assertTrue(isPartitionFiltered(partitions, ImmutableList.of(dynamicFilters), typeManager), "Should filter partition if partition value not in dynamicFilter");
+        assertTrue(isPartitionFiltered(partitions, dynamicFilters, typeManager), "Should filter partition if partition value not in dynamicFilter");
 
         dayFilter.add(0L);
-        assertFalse(isPartitionFiltered(partitions, ImmutableList.of(dynamicFilters), typeManager), "Should not filter partition if partition value is in dynamicFilter");
+        assertFalse(isPartitionFiltered(partitions, dynamicFilters, typeManager), "Should not filter partition if partition value is in dynamicFilter");
 
         Set<DynamicFilter> dynamicFilters1 = new HashSet<>();
         BloomFilter dayFilter1 = new BloomFilter(1024 * 1024, 0.01);
         dynamicFilters1.add(new BloomFilterDynamicFilter("1", dayColumn, dayFilter1, DynamicFilter.Type.GLOBAL));
         dayFilter1.add(0L);
-        assertFalse(isPartitionFiltered(partitions, ImmutableList.of(dynamicFilters1), typeManager), "Should not filter partition if partition value is in dynamicFilter");
+        assertFalse(isPartitionFiltered(partitions, dynamicFilters1, typeManager), "Should not filter partition if partition value is in dynamicFilter");
     }
 
     @Test
@@ -195,7 +176,7 @@ public class TestHiveUtil
         Set nameFilter = new HashSet();
         nameFilter.add("Alice");
         dynamicFilters.add(new HashSetDynamicFilter("1", nameColumn, nameFilter, DynamicFilter.Type.GLOBAL));
-        assertFalse(isPartitionFiltered(partitions, ImmutableList.of(dynamicFilters), typeManager), "Should not filter partition if dynamicFilter is on non-partition column");
+        assertFalse(isPartitionFiltered(partitions, dynamicFilters, typeManager), "Should not filter partition if dynamicFilter is on non-partition column");
     }
 
     @Test
@@ -232,7 +213,7 @@ public class TestHiveUtil
 
     private static long parse(DateTime time, String pattern)
     {
-        return parseHiveTimestamp(DateTimeFormat.forPattern(pattern).print(time));
+        return parseHiveTimestamp(DateTimeFormat.forPattern(pattern).print(time), nonDefaultTimeZone());
     }
 
     private static long unixTime(DateTime time, int factionalDigits)

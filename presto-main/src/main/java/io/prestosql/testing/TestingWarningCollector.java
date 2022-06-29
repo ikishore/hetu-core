@@ -48,8 +48,8 @@ public class TestingWarningCollector
         requireNonNull(testConfig, "testConfig is null");
         addWarnings = testConfig.getAddWarnings();
         // Start warning codes at 1
-        for (int tmpWarningCode = 1; tmpWarningCode <= testConfig.getPreloadedWarnings(); tmpWarningCode++) {
-            add(createTestWarning(tmpWarningCode));
+        for (int warningCode = 1; warningCode <= testConfig.getPreloadedWarnings(); warningCode++) {
+            add(createTestWarning(warningCode));
         }
         warningCode.set(testConfig.getPreloadedWarnings());
     }

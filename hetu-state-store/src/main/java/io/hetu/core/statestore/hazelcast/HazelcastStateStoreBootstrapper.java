@@ -1,5 +1,5 @@
 /*
- * Copyright (C) 2018-2021. Huawei Technologies Co., Ltd. All rights reserved.
+ * Copyright (C) 2018-2020. Huawei Technologies Co., Ltd. All rights reserved.
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
  * You may obtain a copy of the License at
@@ -30,9 +30,6 @@ import io.airlift.slice.Slice;
 import io.hetu.core.security.authentication.kerberos.KerberosConfig;
 import io.hetu.core.security.networking.ssl.SslConfig;
 import io.prestosql.spi.PrestoException;
-import io.prestosql.spi.metastore.model.CatalogEntity;
-import io.prestosql.spi.metastore.model.DatabaseEntity;
-import io.prestosql.spi.metastore.model.TableEntity;
 import io.prestosql.spi.statestore.CipherService;
 import io.prestosql.spi.statestore.StateStoreBootstrapper;
 
@@ -50,8 +47,6 @@ import static io.hetu.core.statestore.hazelcast.HazelcastConstants.DISCOVERY_MOD
 import static io.hetu.core.statestore.hazelcast.HazelcastConstants.DISCOVERY_MULTICAST_STRATEGY_CLASS_NAME;
 import static io.hetu.core.statestore.hazelcast.HazelcastConstants.DISCOVERY_PORT_CONFIG_NAME;
 import static io.hetu.core.statestore.hazelcast.HazelcastConstants.HAZELCAST_SSL_ENABLED;
-import static io.hetu.core.statestore.hazelcast.HazelcastConstants.HEARTBEAT_INTERVAL_SECONDS;
-import static io.hetu.core.statestore.hazelcast.HazelcastConstants.HEARTBEAT_TIMEOUT_SECONDS;
 import static io.hetu.core.statestore.hazelcast.HazelcastConstants.JAAS_CONFIG_FILE;
 import static io.hetu.core.statestore.hazelcast.HazelcastConstants.KERBEROS_ENABLED;
 import static io.hetu.core.statestore.hazelcast.HazelcastConstants.KERBEROS_LOGIN_CONTEXT_NAME;
@@ -80,8 +75,8 @@ public class HazelcastStateStoreBootstrapper
     private static final String HEARTBEAT_INTERVAL_SECONDS = "hazelcast.heartbeat.interval.seconds";
     private static final String HEARTBEAT_TIMEOUT_SECONDS = "hazelcast.max.no.heartbeat.seconds";
     private static final int MAXIDLESECONDS = 30;
-    private static final int EVICTIONSIZE = 10000;
-    private static final int TIMETOLIVESECONDS = 3000;
+    private static final int EVICTIONSIZE = 200;
+    private static final int TIMETOLIVESECONDS = 300;
 
     @Override
     public HazelcastStateStore bootstrap(Collection<String> locations, Map<String, String> config)
@@ -95,15 +90,6 @@ public class HazelcastStateStoreBootstrapper
         // Add serialization for Slice
         SerializerConfig sc = new SerializerConfig().setImplementation(new HazelCastSliceSerializer()).setTypeClass(Slice.class);
         hzConfig.getSerializationConfig().addSerializerConfig(sc);
-
-        SerializerConfig catalogEntity = new SerializerConfig().setImplementation(new HazelcastCatalogSerializer()).setTypeClass(CatalogEntity.class);
-        hzConfig.getSerializationConfig().addSerializerConfig(catalogEntity);
-
-        SerializerConfig dataEntity = new SerializerConfig().setImplementation(new HazelcastDatabaseEntitySerializer()).setTypeClass(DatabaseEntity.class);
-        hzConfig.getSerializationConfig().addSerializerConfig(dataEntity);
-
-        SerializerConfig tableEntity = new SerializerConfig().setImplementation(new HazelcastTableEntitySerializer()).setTypeClass(TableEntity.class);
-        hzConfig.getSerializationConfig().addSerializerConfig(tableEntity);
 
         String clusterId = config.get(STATE_STORE_CLUSTER_CONFIG_NAME);
         if (clusterId == null) {
@@ -120,7 +106,8 @@ public class HazelcastStateStoreBootstrapper
         hzConfig = setPortConfigs(config, hzConfig);
 
         // Set timeout rules
-        hzConfig = setTimeoutConfigs(config, hzConfig);
+        hzConfig.setProperty(HEARTBEAT_INTERVAL_SECONDS, String.valueOf(HazelcastConstants.HEARTBEAT_INTERVAL_SECONDS));
+        hzConfig.setProperty(HEARTBEAT_TIMEOUT_SECONDS, String.valueOf(HazelcastConstants.HEARTBEAT_TIMEOUT_SECONDS + HazelcastConstants.HEARTBEAT_INTERVAL_SECONDS));
 
         // Set hazelcast authentication config
         if (Boolean.parseBoolean(config.get(KERBEROS_ENABLED))) {
@@ -228,23 +215,6 @@ public class HazelcastStateStoreBootstrapper
                     "CP member count should not be smaller than " + MINIMUM_CP_MEMBER_COUNT);
         }
         config.getCPSubsystemConfig().setCPMemberCount(cpMemberCount);
-
-        return config;
-    }
-
-    private Config setTimeoutConfigs(Map<String, String> properties, Config config)
-    {
-        final String heartbeatInterval = properties.get(HEARTBEAT_INTERVAL_SECONDS);
-        final String heartbeatTimeout = properties.get(HEARTBEAT_TIMEOUT_SECONDS);
-
-        if (heartbeatInterval != null) {
-            Integer.parseInt(heartbeatInterval);
-            config.setProperty(HEARTBEAT_INTERVAL_SECONDS, heartbeatInterval);
-        }
-        if (heartbeatTimeout != null) {
-            Integer.parseInt(heartbeatTimeout);
-            config.setProperty(HEARTBEAT_TIMEOUT_SECONDS, heartbeatTimeout);
-        }
 
         return config;
     }

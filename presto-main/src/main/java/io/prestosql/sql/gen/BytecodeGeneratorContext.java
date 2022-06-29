@@ -17,8 +17,7 @@ import io.airlift.bytecode.BytecodeNode;
 import io.airlift.bytecode.FieldDefinition;
 import io.airlift.bytecode.Scope;
 import io.airlift.bytecode.Variable;
-import io.prestosql.metadata.FunctionAndTypeManager;
-import io.prestosql.spi.function.BuiltInScalarFunctionImplementation;
+import io.prestosql.metadata.Metadata;
 import io.prestosql.spi.function.ScalarFunctionImplementation;
 import io.prestosql.spi.relation.RowExpression;
 
@@ -34,7 +33,7 @@ public class BytecodeGeneratorContext
     private final Scope scope;
     private final CallSiteBinder callSiteBinder;
     private final CachedInstanceBinder cachedInstanceBinder;
-    private final FunctionAndTypeManager manager;
+    private final Metadata metadata;
     private final Variable wasNull;
 
     public BytecodeGeneratorContext(
@@ -42,19 +41,19 @@ public class BytecodeGeneratorContext
             Scope scope,
             CallSiteBinder callSiteBinder,
             CachedInstanceBinder cachedInstanceBinder,
-            FunctionAndTypeManager manager)
+            Metadata metadata)
     {
         requireNonNull(rowExpressionCompiler, "bytecodeGenerator is null");
         requireNonNull(cachedInstanceBinder, "cachedInstanceBinder is null");
         requireNonNull(scope, "scope is null");
         requireNonNull(callSiteBinder, "callSiteBinder is null");
-        requireNonNull(manager, "manager is null");
+        requireNonNull(metadata, "metadata is null");
 
         this.rowExpressionCompiler = rowExpressionCompiler;
         this.scope = scope;
         this.callSiteBinder = callSiteBinder;
         this.cachedInstanceBinder = cachedInstanceBinder;
-        this.manager = manager;
+        this.metadata = metadata;
         this.wasNull = scope.getVariable("wasNull");
     }
 
@@ -78,9 +77,9 @@ public class BytecodeGeneratorContext
         return rowExpressionCompiler.compile(expression, scope, lambdaInterface);
     }
 
-    public FunctionAndTypeManager getFunctionManager()
+    public Metadata getMetadata()
     {
-        return manager;
+        return metadata;
     }
 
     /**
@@ -89,8 +88,8 @@ public class BytecodeGeneratorContext
     public BytecodeNode generateCall(String name, ScalarFunctionImplementation function, List<BytecodeNode> arguments)
     {
         Optional<BytecodeNode> instance = Optional.empty();
-        if (function instanceof BuiltInScalarFunctionImplementation && ((BuiltInScalarFunctionImplementation) function).getInstanceFactory().isPresent()) {
-            FieldDefinition field = cachedInstanceBinder.getCachedInstance(((BuiltInScalarFunctionImplementation) function).getInstanceFactory().get());
+        if (function.getInstanceFactory().isPresent()) {
+            FieldDefinition field = cachedInstanceBinder.getCachedInstance(function.getInstanceFactory().get());
             instance = Optional.of(scope.getThis().getField(field));
         }
         return generateInvocation(scope, name, function, instance, arguments, callSiteBinder);

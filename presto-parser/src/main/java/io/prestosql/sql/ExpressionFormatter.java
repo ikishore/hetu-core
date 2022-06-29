@@ -383,10 +383,6 @@ public final class ExpressionFormatter
 
             builder.append(')');
 
-            if (node.isIgnoreNulls()) {
-                builder.append(" IGNORE NULLS");
-            }
-
             if (node.getFilter().isPresent()) {
                 builder.append(" FILTER ").append(visitFilter(node.getFilter().get(), context));
             }
@@ -706,17 +702,17 @@ public final class ExpressionFormatter
 
     public static String formatStringLiteral(String s)
     {
-        String tmpStr = s.replace("'", "''");
-        if (CharMatcher.inRange((char) 0x20, (char) 0x7E).matchesAllOf(tmpStr)) {
-            return "'" + tmpStr + "'";
+        s = s.replace("'", "''");
+        if (CharMatcher.inRange((char) 0x20, (char) 0x7E).matchesAllOf(s)) {
+            return "'" + s + "'";
         }
 
         StringBuilder builder = new StringBuilder();
         builder.append("U&'");
-        PrimitiveIterator.OfInt iterator = tmpStr.codePoints().iterator();
+        PrimitiveIterator.OfInt iterator = s.codePoints().iterator();
         while (iterator.hasNext()) {
             int codePoint = iterator.nextInt();
-            checkArgument(codePoint >= 0, "Invalid UTF-8 encoding in characters: %s", tmpStr);
+            checkArgument(codePoint >= 0, "Invalid UTF-8 encoding in characters: %s", s);
             if (isAsciiPrintable(codePoint)) {
                 char ch = (char) codePoint;
                 if (ch == '\\') {

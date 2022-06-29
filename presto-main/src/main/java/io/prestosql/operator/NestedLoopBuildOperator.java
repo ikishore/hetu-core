@@ -15,22 +15,17 @@ package io.prestosql.operator;
 
 import com.google.common.util.concurrent.ListenableFuture;
 import io.prestosql.memory.context.LocalMemoryContext;
-import io.prestosql.snapshot.SingleInputSnapshotState;
 import io.prestosql.spi.Page;
 import io.prestosql.spi.plan.PlanNodeId;
-import io.prestosql.spi.snapshot.BlockEncodingSerdeProvider;
-import io.prestosql.spi.snapshot.RestorableConfig;
 
-import java.io.Serializable;
 import java.util.Optional;
 import java.util.concurrent.Future;
 
 import static com.google.common.base.Preconditions.checkState;
 import static java.util.Objects.requireNonNull;
 
-@RestorableConfig(uncapturedFields = {"nestedLoopJoinBridge", "probeDoneWithPages", "snapshotState"})
 public class NestedLoopBuildOperator
-        implements SinkOperator
+        implements Operator
 {
     public static class NestedLoopBuildOperatorFactory
             implements OperatorFactory
@@ -52,8 +47,8 @@ public class NestedLoopBuildOperator
         public Operator createOperator(DriverContext driverContext)
         {
             checkState(!closed, "Factory is already closed");
-            OperatorContext addOperatorContext = driverContext.addOperatorContext(operatorId, planNodeId, NestedLoopBuildOperator.class.getSimpleName());
-            return new NestedLoopBuildOperator(addOperatorContext, nestedLoopJoinBridgeManager.getJoinBridge(driverContext.getLifespan()));
+            OperatorContext operatorContext = driverContext.addOperatorContext(operatorId, planNodeId, NestedLoopBuildOperator.class.getSimpleName());
+            return new NestedLoopBuildOperator(operatorContext, nestedLoopJoinBridgeManager.getJoinBridge(driverContext.getLifespan()));
         }
 
         @Override
@@ -82,15 +77,12 @@ public class NestedLoopBuildOperator
     // When the pages are no longer needed, the isFinished method on this operator will return true.
     private Optional<ListenableFuture<?>> probeDoneWithPages = Optional.empty();
 
-    private final SingleInputSnapshotState snapshotState;
-
     public NestedLoopBuildOperator(OperatorContext operatorContext, NestedLoopJoinBridge nestedLoopJoinBridge)
     {
         this.operatorContext = requireNonNull(operatorContext, "operatorContext is null");
         this.nestedLoopJoinBridge = requireNonNull(nestedLoopJoinBridge, "nestedLoopJoinBridge is null");
         this.nestedLoopJoinPagesBuilder = new NestedLoopJoinPagesBuilder(operatorContext);
         this.localUserMemoryContext = operatorContext.localUserMemoryContext();
-        this.snapshotState = operatorContext.isSnapshotEnabled() ? SingleInputSnapshotState.forOperator(this, operatorContext) : null;
     }
 
     @Override
@@ -135,12 +127,6 @@ public class NestedLoopBuildOperator
         requireNonNull(page, "page is null");
         checkState(!isFinished(), "Operator is already finished");
 
-        if (snapshotState != null) {
-            if (snapshotState.processPage(page)) {
-                return;
-            }
-        }
-
         if (page.getPositionCount() == 0) {
             return;
         }
@@ -154,37 +140,8 @@ public class NestedLoopBuildOperator
     }
 
     @Override
-    public void close()
+    public Page getOutput()
     {
-        if (snapshotState != null) {
-            snapshotState.close();
-        }
-    }
-
-    @Override
-    public Object capture(BlockEncodingSerdeProvider serdeProvider)
-    {
-        NestedLoopBuildOperatorState myState = new NestedLoopBuildOperatorState();
-        myState.operatorContext = operatorContext.capture(serdeProvider);
-        myState.localUserMemoryContext = localUserMemoryContext.getBytes();
-        myState.nestedLoopJoinPagesBuilder = nestedLoopJoinPagesBuilder.capture(serdeProvider);
-        return myState;
-    }
-
-    @Override
-    public void restore(Object state, BlockEncodingSerdeProvider serdeProvider)
-    {
-        NestedLoopBuildOperatorState myState = (NestedLoopBuildOperatorState) state;
-        this.operatorContext.restore(myState.operatorContext, serdeProvider);
-        this.localUserMemoryContext.setBytes(myState.localUserMemoryContext);
-        this.nestedLoopJoinPagesBuilder.restore(myState.nestedLoopJoinPagesBuilder, serdeProvider);
-    }
-
-    private static class NestedLoopBuildOperatorState
-            implements Serializable
-    {
-        private Object operatorContext;
-        private Object nestedLoopJoinPagesBuilder;
-        private long localUserMemoryContext;
+        return null;
     }
 }

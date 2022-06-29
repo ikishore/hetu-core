@@ -14,17 +14,10 @@
 package io.prestosql.plugin.geospatial.aggregation;
 
 import com.esri.core.geometry.ogc.OGCGeometry;
-import io.airlift.slice.Slices;
 import io.prestosql.array.ObjectBigArray;
-import io.prestosql.geospatial.serde.GeometrySerde;
 import io.prestosql.spi.function.AccumulatorStateFactory;
 import io.prestosql.spi.function.GroupedAccumulatorState;
-import io.prestosql.spi.snapshot.BlockEncodingSerdeProvider;
-import io.prestosql.spi.snapshot.Restorable;
 import org.openjdk.jol.info.ClassLayout;
-
-import java.io.Serializable;
-import java.util.function.Function;
 
 public class GeometryStateFactory
         implements AccumulatorStateFactory<GeometryState>
@@ -56,10 +49,10 @@ public class GeometryStateFactory
     }
 
     public static class GroupedGeometryState
-            implements GeometryState, GroupedAccumulatorState, Restorable
+            implements GeometryState, GroupedAccumulatorState
     {
         private long groupId;
-        private final ObjectBigArray<OGCGeometry> geometries = new ObjectBigArray<>();
+        private ObjectBigArray<OGCGeometry> geometries = new ObjectBigArray<>();
         private long size;
 
         @Override
@@ -94,35 +87,6 @@ public class GeometryStateFactory
         {
             this.groupId = groupId;
         }
-
-        @Override
-        public Object capture(BlockEncodingSerdeProvider serdeProvider)
-        {
-            GroupedGeometryStateState myState = new GroupedGeometryStateState();
-            myState.groupId = groupId;
-            Function<Object, Object> geometriesCapture = content -> GeometrySerde.serialize((OGCGeometry) content).getBytes();
-            myState.geometries = geometries.capture(geometriesCapture);
-            myState.size = size;
-            return myState;
-        }
-
-        @Override
-        public void restore(Object state, BlockEncodingSerdeProvider serdeProvider)
-        {
-            GroupedGeometryStateState myState = (GroupedGeometryStateState) state;
-            this.groupId = myState.groupId;
-            Function<Object, Object> geometriesRestore = content -> GeometrySerde.deserialize(Slices.wrappedBuffer((byte[]) content));
-            this.geometries.restore(geometriesRestore, myState.geometries);
-            this.size = myState.size;
-        }
-
-        private static class GroupedGeometryStateState
-                implements Serializable
-        {
-            private long groupId;
-            private Object geometries;
-            private long size;
-        }
     }
 
     // Do a best-effort attempt to estimate the memory size
@@ -142,7 +106,7 @@ public class GeometryStateFactory
     }
 
     public static class SingleGeometryState
-            implements GeometryState, Restorable
+            implements GeometryState
     {
         private OGCGeometry geometry;
 
@@ -162,26 +126,6 @@ public class GeometryStateFactory
         public long getEstimatedSize()
         {
             return getGeometryMemorySize(geometry);
-        }
-
-        @Override
-        public Object capture(BlockEncodingSerdeProvider serdeProvider)
-        {
-            if (this.geometry != null) {
-                return GeometrySerde.serialize(geometry).getBytes();
-            }
-            return null;
-        }
-
-        @Override
-        public void restore(Object state, BlockEncodingSerdeProvider serdeProvider)
-        {
-            if (state != null) {
-                this.geometry = GeometrySerde.deserialize(Slices.wrappedBuffer((byte[]) state));
-            }
-            else {
-                this.geometry = null;
-            }
         }
     }
 }

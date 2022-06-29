@@ -23,7 +23,6 @@ import java.io.ByteArrayInputStream;
 import java.io.IOException;
 import java.io.InputStreamReader;
 import java.io.UncheckedIOException;
-import java.nio.charset.StandardCharsets;
 
 import static io.prestosql.plugin.ml.type.ClassifierType.BIGINT_CLASSIFIER;
 import static java.util.Objects.requireNonNull;
@@ -51,7 +50,7 @@ public class SvmClassifier
     {
         // TODO do something with the hyperparameters
         try {
-            svm_model model = svm.svm_load_model(new BufferedReader(new InputStreamReader(new ByteArrayInputStream(modelData), StandardCharsets.UTF_8)));
+            svm_model model = svm.svm_load_model(new BufferedReader(new InputStreamReader(new ByteArrayInputStream(modelData))));
             return new SvmClassifier(model);
         }
         catch (IOException e) {

@@ -23,7 +23,7 @@ public interface LocalExchanger
     LocalExchanger FINISHED = new LocalExchanger()
     {
         @Override
-        public void accept(Page page, String origin) {}
+        public void accept(Page page) {}
 
         @Override
         public ListenableFuture<?> waitForWriting()
@@ -32,7 +32,7 @@ public interface LocalExchanger
         }
     };
 
-    void accept(Page page, String origin);
+    void accept(Page page);
 
     ListenableFuture<?> waitForWriting();
 

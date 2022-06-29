@@ -89,10 +89,10 @@ public final class PrestoThriftRangeValueSet
 
     public static PrestoThriftRangeValueSet fromSortedRangeSet(SortedRangeSet valueSet)
     {
-        List<PrestoThriftRange> prestoThriftRanges = valueSet.getOrderedRanges().stream()
+        List<PrestoThriftRange> ranges = valueSet.getOrderedRanges().stream()
                 .map(PrestoThriftRange::fromRange)
                 .collect(toImmutableList());
-        return new PrestoThriftRangeValueSet(prestoThriftRanges);
+        return new PrestoThriftRangeValueSet(ranges);
     }
 
     @ThriftEnum
@@ -192,8 +192,8 @@ public final class PrestoThriftRangeValueSet
 
         public static PrestoThriftMarker fromMarker(Marker marker)
         {
-            PrestoThriftBlock prestoThriftBlock = marker.getValueBlock().isPresent() ? fromBlock(marker.getValueBlock().get(), marker.getType()) : null;
-            return new PrestoThriftMarker(prestoThriftBlock, fromBound(marker.getBound()));
+            PrestoThriftBlock value = marker.getValueBlock().isPresent() ? fromBlock(marker.getValueBlock().get(), marker.getType()) : null;
+            return new PrestoThriftMarker(value, fromBound(marker.getBound()));
         }
     }
 

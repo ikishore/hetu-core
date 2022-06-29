@@ -21,6 +21,7 @@ import io.prestosql.spi.heuristicindex.SplitMetadata;
 import io.prestosql.spi.predicate.TupleDomain;
 import org.apache.hadoop.conf.Configuration;
 import org.apache.hadoop.fs.Path;
+import org.joda.time.DateTimeZone;
 
 import java.util.List;
 import java.util.Optional;
@@ -38,11 +39,11 @@ public interface HivePageSourceFactory
             Properties schema,
             List<HiveColumnHandle> columns,
             TupleDomain<HiveColumnHandle> effectivePredicate,
+            DateTimeZone hiveStorageTimeZone,
             Optional<DynamicFilterSupplier> dynamicFilterSupplier,
             Optional<DeleteDeltaLocations> deleteDeltaLocations,
             Optional<Long> startRowOffsetOfFile,
             Optional<List<IndexMetadata>> indexes,
             SplitMetadata splitMetadata,
-            boolean splitCacheable,
-            long dataSourceLastModifiedTime);
+            boolean splitCacheable);
 }

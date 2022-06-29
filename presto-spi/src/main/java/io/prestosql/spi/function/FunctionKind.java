@@ -17,6 +17,5 @@ public enum FunctionKind
 {
     SCALAR,
     AGGREGATE,
-    WINDOW,
-    EXTERNAL
+    WINDOW
 }

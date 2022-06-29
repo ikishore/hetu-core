@@ -17,11 +17,9 @@ import io.prestosql.operator.GroupByIdBlock;
 import io.prestosql.spi.Page;
 import io.prestosql.spi.block.Block;
 import io.prestosql.spi.block.BlockBuilder;
-import io.prestosql.spi.snapshot.Restorable;
 import io.prestosql.spi.type.Type;
 
 public interface GroupedAccumulator
-        extends Restorable
 {
     long getEstimatedSize();
 

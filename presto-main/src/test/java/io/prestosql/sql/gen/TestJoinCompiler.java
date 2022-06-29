@@ -139,7 +139,7 @@ public class TestJoinCompiler
     public void testMultiChannel(boolean hashEnabled)
     {
         // compile a single channel hash strategy
-        JoinCompiler tmpJoinCompiler = new JoinCompiler(metadata);
+        JoinCompiler joinCompiler = new JoinCompiler(metadata);
         List<Type> types = ImmutableList.of(VARCHAR, VARCHAR, BIGINT, DOUBLE, BOOLEAN, VARCHAR);
         List<Type> joinTypes = ImmutableList.of(VARCHAR, BIGINT, DOUBLE, BOOLEAN);
         List<Type> outputTypes = ImmutableList.of(VARCHAR, BIGINT, DOUBLE, BOOLEAN, VARCHAR);
@@ -188,10 +188,10 @@ public class TestJoinCompiler
             outputChannels = Ints.asList(1, 2, 3, 4, 0, 6);
         }
 
-        PagesHashStrategyFactory pagesHashStrategyFactory = tmpJoinCompiler.compilePagesHashStrategyFactory(types, joinChannels, Optional.of(outputChannels));
+        PagesHashStrategyFactory pagesHashStrategyFactory = joinCompiler.compilePagesHashStrategyFactory(types, joinChannels, Optional.of(outputChannels));
         PagesHashStrategy hashStrategy = pagesHashStrategyFactory.createPagesHashStrategy(channels, hashChannel);
         // todo add tests for filter function
-        PagesHashStrategy expectedHashStrategy = new SimplePagesHashStrategy(types, outputChannels, channels, joinChannels, hashChannel, Optional.empty(), metadata);
+        PagesHashStrategy expectedHashStrategy = new SimplePagesHashStrategy(types, outputChannels, channels, joinChannels, hashChannel, Optional.empty(), -1, metadata);
 
         // verify channel count
         assertEquals(hashStrategy.getChannelCount(), outputChannels.size());

@@ -14,12 +14,11 @@
 package io.prestosql.sql;
 
 import com.google.common.base.Defaults;
-import io.prestosql.metadata.FunctionAndTypeManager;
+import io.prestosql.metadata.Metadata;
 import io.prestosql.spi.connector.ConnectorSession;
-import io.prestosql.spi.function.BuiltInScalarFunctionImplementation;
-import io.prestosql.spi.function.BuiltInScalarFunctionImplementation.ArgumentProperty;
-import io.prestosql.spi.function.FunctionHandle;
 import io.prestosql.spi.function.ScalarFunctionImplementation;
+import io.prestosql.spi.function.ScalarFunctionImplementation.ArgumentProperty;
+import io.prestosql.spi.function.Signature;
 
 import java.lang.invoke.MethodHandle;
 import java.util.ArrayList;
@@ -27,30 +26,23 @@ import java.util.Arrays;
 import java.util.List;
 
 import static com.google.common.base.Throwables.throwIfUnchecked;
-import static io.prestosql.spi.function.BuiltInScalarFunctionImplementation.ArgumentType.VALUE_TYPE;
-import static io.prestosql.spi.function.BuiltInScalarFunctionImplementation.NullConvention.RETURN_NULL_ON_NULL;
-import static io.prestosql.spi.function.BuiltInScalarFunctionImplementation.NullConvention.USE_NULL_FLAG;
-import static io.prestosql.sql.gen.BytecodeUtils.getAllScalarFunctionImplementationChoices;
+import static io.prestosql.spi.function.ScalarFunctionImplementation.ArgumentType.VALUE_TYPE;
+import static io.prestosql.spi.function.ScalarFunctionImplementation.NullConvention.USE_NULL_FLAG;
 import static java.lang.invoke.MethodHandleProxies.asInterfaceInstance;
 import static java.util.Objects.requireNonNull;
 
 public class InterpretedFunctionInvoker
 {
-    private final FunctionAndTypeManager functionAndTypeManager;
+    private final Metadata metadata;
 
-    public InterpretedFunctionInvoker(FunctionAndTypeManager functionAndTypeManager)
+    public InterpretedFunctionInvoker(Metadata metadata)
     {
-        this.functionAndTypeManager = requireNonNull(functionAndTypeManager, "registry is null");
+        this.metadata = requireNonNull(metadata, "metadata is null");
     }
 
-    public Object invoke(FunctionHandle functionHandle, ConnectorSession session, Object... arguments)
+    public Object invoke(Signature function, ConnectorSession session, Object... arguments)
     {
-        return invoke(functionHandle, session, Arrays.asList(arguments));
-    }
-
-    public Object invoke(FunctionHandle functionHandle, ConnectorSession session, List<Object> arguments)
-    {
-        return invoke(functionAndTypeManager.getScalarFunctionImplementation(functionHandle), session, arguments);
+        return invoke(function, session, Arrays.asList(arguments));
     }
 
     /**
@@ -58,13 +50,13 @@ public class InterpretedFunctionInvoker
      * <p>
      * Returns a value in the native container type corresponding to the declared SQL return type
      */
-    private Object invoke(ScalarFunctionImplementation function, ConnectorSession session, List<Object> arguments)
+    public Object invoke(Signature function, ConnectorSession session, List<Object> arguments)
     {
-        BuiltInScalarFunctionImplementation.ScalarImplementationChoice choice = getAllScalarFunctionImplementationChoices(function).get(0);
-        MethodHandle method = function.getMethodHandle();
+        ScalarFunctionImplementation implementation = metadata.getScalarFunctionImplementation(function);
+        MethodHandle method = implementation.getMethodHandle();
 
         // handle function on instance method, to allow use of fields
-        method = bindInstanceFactory(method, function);
+        method = bindInstanceFactory(method, implementation);
 
         if (method.type().parameterCount() > 0 && method.type().parameterType(0) == ConnectorSession.class) {
             method = method.bindTo(session);
@@ -72,15 +64,9 @@ public class InterpretedFunctionInvoker
         List<Object> actualArguments = new ArrayList<>();
         for (int i = 0; i < arguments.size(); i++) {
             Object argument = arguments.get(i);
-            ArgumentProperty argumentProperty = choice.getArgumentProperty(i);
+            ArgumentProperty argumentProperty = implementation.getArgumentProperty(i);
             if (argumentProperty.getArgumentType() == VALUE_TYPE) {
-                if (choice.getArgumentProperty(i).getNullConvention() == RETURN_NULL_ON_NULL) {
-                    if (argument == null) {
-                        return null;
-                    }
-                    actualArguments.add(argument);
-                }
-                else if (choice.getArgumentProperty(i).getNullConvention() == USE_NULL_FLAG) {
+                if (implementation.getArgumentProperty(i).getNullConvention() == USE_NULL_FLAG) {
                     boolean isNull = argument == null;
                     if (isNull) {
                         argument = Defaults.defaultValue(method.type().parameterType(actualArguments.size()));
@@ -108,17 +94,12 @@ public class InterpretedFunctionInvoker
 
     private static MethodHandle bindInstanceFactory(MethodHandle method, ScalarFunctionImplementation implementation)
     {
-        if (!(implementation instanceof BuiltInScalarFunctionImplementation)) {
-            return method;
-        }
-
-        BuiltInScalarFunctionImplementation builtInImplementation = (BuiltInScalarFunctionImplementation) implementation;
-        if (!builtInImplementation.getInstanceFactory().isPresent()) {
+        if (!implementation.getInstanceFactory().isPresent()) {
             return method;
         }
 
         try {
-            return method.bindTo(builtInImplementation.getInstanceFactory().get().invoke());
+            return method.bindTo(implementation.getInstanceFactory().get().invoke());
         }
         catch (Throwable throwable) {
             throw propagate(throwable);

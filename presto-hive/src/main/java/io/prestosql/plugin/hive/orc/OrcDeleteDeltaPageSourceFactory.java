@@ -61,7 +61,7 @@ public class OrcDeleteDeltaPageSourceFactory
         this.orcBloomFiltersEnabled = requireNonNull(orcBloomFiltersEnabled, "orcBloomFiltersEnabled is null");
     }
 
-    public OrcDeleteDeltaPageSource createPageSource(Path path, long fileSize, long lastModifiedTime)
+    public OrcDeleteDeltaPageSource createPageSource(Path path, long fileSize)
     {
         return new OrcDeleteDeltaPageSource(
                 path,
@@ -76,7 +76,6 @@ public class OrcDeleteDeltaPageSourceFactory
                 tinyStripeThreshold,
                 lazyReadSmallRanges,
                 orcBloomFiltersEnabled,
-                stats,
-                lastModifiedTime);
+                stats);
     }
 }

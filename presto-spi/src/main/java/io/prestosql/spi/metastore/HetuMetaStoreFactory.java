@@ -1,5 +1,5 @@
 /*
- * Copyright (C) 2018-2021. Huawei Technologies Co., Ltd. All rights reserved.
+ * Copyright (C) 2018-2020. Huawei Technologies Co., Ltd. All rights reserved.
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
  * You may obtain a copy of the License at
@@ -15,7 +15,6 @@
 package io.prestosql.spi.metastore;
 
 import io.prestosql.spi.filesystem.HetuFileSystemClient;
-import io.prestosql.spi.statestore.StateStore;
 
 import java.util.Map;
 
@@ -31,11 +30,10 @@ public interface HetuMetaStoreFactory
     /**
      * Create new hetu metastore
      *
-     * @param name   name of the hetu metastore
+     * @param name name of the hetu metastore
      * @param config hetu metastore configurations
      * @param client hetu file system client
      * @return created hetu metastore
      */
-    HetuMetastore create(String name, Map<String, String> config, HetuFileSystemClient client, StateStore stateStore,
-                         String type);
+    HetuMetastore create(String name, Map<String, String> config, HetuFileSystemClient client);
 }

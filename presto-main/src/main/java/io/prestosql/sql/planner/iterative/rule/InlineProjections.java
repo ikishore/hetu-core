@@ -19,7 +19,6 @@ import io.prestosql.expressions.DefaultRowExpressionTraversalVisitor;
 import io.prestosql.matching.Capture;
 import io.prestosql.matching.Captures;
 import io.prestosql.matching.Pattern;
-import io.prestosql.metadata.Metadata;
 import io.prestosql.operator.scalar.TryFunction;
 import io.prestosql.spi.plan.Assignments;
 import io.prestosql.spi.plan.ProjectNode;
@@ -32,7 +31,6 @@ import io.prestosql.spi.type.Type;
 import io.prestosql.sql.planner.RowExpressionVariableInliner;
 import io.prestosql.sql.planner.SymbolsExtractor;
 import io.prestosql.sql.planner.iterative.Rule;
-import io.prestosql.sql.relational.FunctionResolution;
 import io.prestosql.sql.relational.OriginalExpressionUtils;
 import io.prestosql.sql.tree.Expression;
 import io.prestosql.sql.tree.Literal;
@@ -69,13 +67,6 @@ public class InlineProjections
 
     private static final Pattern<ProjectNode> PATTERN = project()
             .with(source().matching(project().capturedAs(CHILD)));
-
-    private final FunctionResolution functionResolution;
-
-    public InlineProjections(Metadata metadata)
-    {
-        this.functionResolution = new FunctionResolution(metadata.getFunctionAndTypeManager());
-    }
 
     @Override
     public Pattern<ProjectNode> getPattern()
@@ -216,7 +207,7 @@ public class InlineProjections
             @Override
             public Void visitCall(CallExpression call, ImmutableSet.Builder<Symbol> context)
             {
-                if (functionResolution.isTryFunction(call.getFunctionHandle())) {
+                if (isTryFunction(call.getSignature().getName())) {
                     context.addAll(SymbolsExtractor.extractAll(call));
                 }
                 return super.visitCall(call, context);

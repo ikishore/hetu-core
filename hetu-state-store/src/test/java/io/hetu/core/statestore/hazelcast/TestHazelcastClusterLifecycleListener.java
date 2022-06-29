@@ -1,5 +1,5 @@
 /*
- * Copyright (C) 2018-2021. Huawei Technologies Co., Ltd. All rights reserved.
+ * Copyright (C) 2018-2020. Huawei Technologies Co., Ltd. All rights reserved.
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
  * You may obtain a copy of the License at
@@ -14,7 +14,6 @@
  */
 package io.hetu.core.statestore.hazelcast;
 
-import com.fasterxml.jackson.annotation.JsonProperty;
 import com.google.common.collect.ImmutableSet;
 import io.prestosql.spi.seedstore.Seed;
 import io.prestosql.spi.seedstore.SeedStore;
@@ -107,7 +106,7 @@ public class TestHazelcastClusterLifecycleListener
         private static final long serialVersionUID = 4L;
 
         String location;
-        long timestamp;
+        long timeStamp;
 
         /**
          * Constructor for the mock seed
@@ -117,41 +116,19 @@ public class TestHazelcastClusterLifecycleListener
         MockSeed(String location)
         {
             this.location = location;
-            timestamp = 0L;
+            timeStamp = 0L;
         }
 
         @Override
-        @JsonProperty
         public String getLocation()
         {
             return location;
         }
 
         @Override
-        @JsonProperty
-        public void setLocation(String location)
-        {
-            this.location = location;
-        }
-
-        @Override
-        @JsonProperty
         public long getTimestamp()
         {
             return 0L;
-        }
-
-        @Override
-        @JsonProperty
-        public void setTimestamp(long timestamp)
-        {
-            this.timestamp = timestamp;
-        }
-
-        @Override
-        public String getUniqueInstanceId()
-        {
-            return "none";
         }
 
         @Override
@@ -161,9 +138,9 @@ public class TestHazelcastClusterLifecycleListener
             return "MOCK SEED. SHOULD NOT SERIALIZE.";
         }
 
-        public void setTimeStamp(long timestamp)
+        public void setTimeStamp(long timeStamp)
         {
-            this.timestamp = timestamp;
+            this.timeStamp = timeStamp;
         }
     }
 

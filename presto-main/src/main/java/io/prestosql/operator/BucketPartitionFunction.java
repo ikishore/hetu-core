@@ -29,12 +29,12 @@ public class BucketPartitionFunction
 
     public BucketPartitionFunction(BucketFunction bucketFunction, int[] bucketToPartition)
     {
+        System.out.println("bucketfunction " + bucketFunction.getClass().toString());
         this.bucketFunction = requireNonNull(bucketFunction, "bucketFunction is null");
         this.bucketToPartition = requireNonNull(bucketToPartition, "bucketToPartition is null").clone();
         partitionCount = IntStream.of(bucketToPartition).max().getAsInt() + 1;
     }
 
-    @Override
     public int getPartitionCount()
     {
         return partitionCount;
@@ -43,7 +43,6 @@ public class BucketPartitionFunction
     /**
      * @param functionArguments the arguments to bucketing function in order (no extra columns)
      */
-    @Override
     public int getPartition(Page functionArguments, int position)
     {
         int bucket = bucketFunction.getBucket(functionArguments, position);

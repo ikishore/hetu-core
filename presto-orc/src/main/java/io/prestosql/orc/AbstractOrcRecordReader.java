@@ -44,7 +44,6 @@ import io.prestosql.orc.stream.StreamSourceMeta;
 import io.prestosql.spi.Page;
 import io.prestosql.spi.block.Block;
 import io.prestosql.spi.heuristicindex.Index;
-import io.prestosql.spi.heuristicindex.IndexLookUpException;
 import io.prestosql.spi.heuristicindex.IndexMetadata;
 import io.prestosql.spi.predicate.Domain;
 import io.prestosql.spi.type.FixedWidthType;
@@ -139,13 +138,13 @@ abstract class AbstractOrcRecordReader<T extends AbstractColumnReader>
             List<StripeInformation> fileStripes,
             Optional<ColumnMetadata<ColumnStatistics>> fileStats,
             List<Optional<StripeStatistics>> stripeStats,
-            OrcDataSource inputOrcDataSource,
+            OrcDataSource orcDataSource,
             long splitOffset,
             long splitLength,
             ColumnMetadata<OrcType> orcTypes,
             Optional<OrcDecompressor> decompressor,
             int rowsInRowGroup,
-            DateTimeZone legacyFileTimeZone,
+            DateTimeZone hiveStorageTimeZone,
             HiveWriterVersion hiveWriterVersion,
             MetadataReader metadataReader,
             DataSize maxMergeDistance,
@@ -171,9 +170,10 @@ abstract class AbstractOrcRecordReader<T extends AbstractColumnReader>
         requireNonNull(predicate, "predicate is null");
         requireNonNull(fileStripes, "fileStripes is null");
         requireNonNull(stripeStats, "stripeStats is null");
-        requireNonNull(inputOrcDataSource, "orcDataSource is null");
+        requireNonNull(orcDataSource, "orcDataSource is null");
         requireNonNull(orcTypes, "types is null");
         requireNonNull(decompressor, "decompressor is null");
+        requireNonNull(hiveStorageTimeZone, "hiveStorageTimeZone is null");
         requireNonNull(userMetadata, "userMetadata is null");
         requireNonNull(systemMemoryUsage, "systemMemoryUsage is null");
         requireNonNull(exceptionTransform, "exceptionTransform is null");
@@ -235,11 +235,11 @@ abstract class AbstractOrcRecordReader<T extends AbstractColumnReader>
          *  Additionally, if BITMAP Index is present; the rows within a given rowGroup matching the Conjunct domains
          *  are selected and are guaranteed to match the predicate.
          */
-        long localTotalRowCount = 0;
-        long localFileRowCount = 0;
-        ImmutableList.Builder<StripeInformation> localStripes = ImmutableList.builder();
+        long totalRowCount = 0;
+        long fileRowCount = 0;
+        ImmutableList.Builder<StripeInformation> stripes = ImmutableList.builder();
         Map<StripeInformation, List<IndexMetadata>> stripeIndexes = new HashMap<>();
-        ImmutableList.Builder<Long> localStripeFilePositions = ImmutableList.builder();
+        ImmutableList.Builder<Long> stripeFilePositions = ImmutableList.builder();
         if (!fileStats.isPresent() || predicate.matches(numberOfRows, fileStats.get())) {
             // select stripes that start within the specified split
             for (int i = 0; i < stripeInfos.size(); i++) {
@@ -248,20 +248,19 @@ abstract class AbstractOrcRecordReader<T extends AbstractColumnReader>
                 if (splitContainsStripe(splitOffset, splitLength, stripe)
                         && isStripeIncluded(stripe, info.getStats(), predicate)
                         && !filterStripeUsingIndex(stripe, stripeOffsetToIndex, domains, orDomains)) {
-                    localStripes.add(stripe);
-                    localStripeFilePositions.add(localFileRowCount);
-                    localTotalRowCount += stripe.getNumberOfRows();
+                    stripes.add(stripe);
+                    stripeFilePositions.add(fileRowCount);
+                    totalRowCount += stripe.getNumberOfRows();
                 }
-                localFileRowCount += stripe.getNumberOfRows();
+                fileRowCount += stripe.getNumberOfRows();
             }
         }
-        this.totalRowCount = localTotalRowCount;
-        this.stripes = localStripes.build();
-        this.stripeFilePositions = localStripeFilePositions.build();
+        this.totalRowCount = totalRowCount;
+        this.stripes = stripes.build();
+        this.stripeFilePositions = stripeFilePositions.build();
 
-        OrcDataSource localOrcDataSource = inputOrcDataSource;
-        localOrcDataSource = wrapWithCacheIfTinyStripes(localOrcDataSource, this.stripes, maxMergeDistance, tinyStripeThreshold);
-        this.orcDataSource = localOrcDataSource;
+        orcDataSource = wrapWithCacheIfTinyStripes(orcDataSource, this.stripes, maxMergeDistance, tinyStripeThreshold);
+        this.orcDataSource = orcDataSource;
         this.splitLength = splitLength;
 
         this.fileRowCount = stripeInfos.stream()
@@ -279,8 +278,8 @@ abstract class AbstractOrcRecordReader<T extends AbstractColumnReader>
         // their constructors is confusing.
         AggregatedMemoryContext streamReadersSystemMemoryContext = this.systemMemoryUsage.newAggregatedMemoryContext();
         stripeReader = new StripeReader(
-                localOrcDataSource,
-                legacyFileTimeZone.toTimeZone().toZoneId(),
+                orcDataSource,
+                hiveStorageTimeZone.toTimeZone().toZoneId(),
                 decompressor,
                 orcTypes,
                 ImmutableSet.copyOf(readColumns),
@@ -352,7 +351,7 @@ abstract class AbstractOrcRecordReader<T extends AbstractColumnReader>
                         return true;
                     }
                 }
-                catch (UnsupportedOperationException | IndexLookUpException uoe2) {
+                catch (UnsupportedOperationException uoe2) {
                     return false;
                 }
             }
@@ -377,7 +376,7 @@ abstract class AbstractOrcRecordReader<T extends AbstractColumnReader>
                         return false;
                     }
                 }
-                catch (UnsupportedOperationException | IndexLookUpException uoe2) {
+                catch (UnsupportedOperationException uoe2) {
                     return false;
                 }
             }
@@ -650,7 +649,8 @@ abstract class AbstractOrcRecordReader<T extends AbstractColumnReader>
             for (AbstractColumnReader columnReader : columnReaders) {
                 if (columnReader != null) {
                     ZoneId fileTimeZone = stripe.getFileTimeZone();
-                    columnReader.startStripe(fileTimeZone,
+                    ZoneId storageTimeZone = stripe.getStorageTimeZone();
+                    columnReader.startStripe(fileTimeZone, storageTimeZone,
                             dictionaryStreamSources, columnEncodings);
                 }
             }
@@ -713,17 +713,17 @@ abstract class AbstractOrcRecordReader<T extends AbstractColumnReader>
         }
 
         currentRowGroup++;
-        RowGroup localCurrentRowGroup = rowGroups.next();
-        currentGroupRowCount = localCurrentRowGroup.getRowCount();
-        if (localCurrentRowGroup.getMinAverageRowBytes() > 0) {
-            maxBatchSize = toIntExact(min(maxBatchSize, max(1, maxBlockBytes / localCurrentRowGroup.getMinAverageRowBytes())));
+        RowGroup currentRowGroup = rowGroups.next();
+        currentGroupRowCount = currentRowGroup.getRowCount();
+        if (currentRowGroup.getMinAverageRowBytes() > 0) {
+            maxBatchSize = toIntExact(min(maxBatchSize, max(1, maxBlockBytes / currentRowGroup.getMinAverageRowBytes())));
         }
 
-        currentPosition = currentStripePosition + localCurrentRowGroup.getRowOffset();
-        filePosition = stripeFilePositions.get(currentStripe) + localCurrentRowGroup.getRowOffset();
+        currentPosition = currentStripePosition + currentRowGroup.getRowOffset();
+        filePosition = stripeFilePositions.get(currentStripe) + currentRowGroup.getRowOffset();
 
         // give reader data streams from row group
-        InputStreamSources rowGroupStreamSources = localCurrentRowGroup.getStreamSources();
+        InputStreamSources rowGroupStreamSources = currentRowGroup.getStreamSources();
         for (AbstractColumnReader columnReader : columnReaders) {
             if (columnReader != null) {
                 if (columnReader instanceof CachingColumnReader
@@ -731,10 +731,9 @@ abstract class AbstractOrcRecordReader<T extends AbstractColumnReader>
                         || columnReader instanceof DataCachingSelectiveColumnReader) {
                     StreamSourceMeta streamSourceMeta = new StreamSourceMeta();
                     streamSourceMeta.setDataSourceId(orcDataSource.getId());
-                    streamSourceMeta.setLastModifiedTime(orcDataSource.getLastModifiedTime());
                     streamSourceMeta.setStripeOffset(stripes.get(currentStripe).getOffset());
-                    streamSourceMeta.setRowGroupOffset(localCurrentRowGroup.getRowOffset());
-                    streamSourceMeta.setRowCount(localCurrentRowGroup.getRowCount());
+                    streamSourceMeta.setRowGroupOffset(currentRowGroup.getRowOffset());
+                    streamSourceMeta.setRowCount(currentRowGroup.getRowCount());
                     rowGroupStreamSources.setStreamSourceMeta(streamSourceMeta);
                 }
                 columnReader.startRowGroup(rowGroupStreamSources);
@@ -845,9 +844,9 @@ abstract class AbstractOrcRecordReader<T extends AbstractColumnReader>
             List<DiskRange> scratchDiskRanges = stripes.stream()
                     .map(stripe -> new DiskRange(stripe.getOffset(), toIntExact(stripe.getTotalLength())))
                     .collect(Collectors.toList());
-            List<DiskRange> localDiskRanges = mergeAdjacentDiskRanges(scratchDiskRanges, maxMergeDistance, tinyStripeThreshold);
+            List<DiskRange> diskRanges = mergeAdjacentDiskRanges(scratchDiskRanges, maxMergeDistance, tinyStripeThreshold);
 
-            return new LinearProbeRangeFinder(localDiskRanges);
+            return new LinearProbeRangeFinder(diskRanges);
         }
     }
 }

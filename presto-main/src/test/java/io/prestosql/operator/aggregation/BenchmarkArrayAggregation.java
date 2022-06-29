@@ -19,7 +19,6 @@ import io.prestosql.metadata.Metadata;
 import io.prestosql.spi.Page;
 import io.prestosql.spi.block.Block;
 import io.prestosql.spi.block.BlockBuilder;
-import io.prestosql.spi.connector.QualifiedObjectName;
 import io.prestosql.spi.function.Signature;
 import io.prestosql.spi.type.ArrayType;
 import io.prestosql.spi.type.Type;
@@ -106,8 +105,8 @@ public class BenchmarkArrayAggregation
                     throw new UnsupportedOperationException();
             }
             ArrayType arrayType = new ArrayType(elementType);
-            Signature signature = new Signature(QualifiedObjectName.valueOfDefaultFunction(name), AGGREGATE, arrayType.getTypeSignature(), elementType.getTypeSignature());
-            InternalAggregationFunction function = metadata.getFunctionAndTypeManager().getAggregateFunctionImplementation(signature);
+            Signature signature = new Signature(name, AGGREGATE, arrayType.getTypeSignature(), elementType.getTypeSignature());
+            InternalAggregationFunction function = metadata.getAggregateFunctionImplementation(signature);
             accumulator = function.bind(ImmutableList.of(0), Optional.empty()).createAccumulator();
 
             block = createChannel(ARRAY_SIZE, elementType);

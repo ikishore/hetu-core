@@ -18,7 +18,6 @@ import com.google.common.collect.ImmutableMap;
 import io.prestosql.Session;
 import io.prestosql.execution.warnings.WarningCollector;
 import io.prestosql.metadata.Metadata;
-import io.prestosql.spi.function.StandardFunctionResolution;
 import io.prestosql.spi.plan.AggregationNode;
 import io.prestosql.spi.plan.AggregationNode.Aggregation;
 import io.prestosql.spi.plan.Assignments;
@@ -26,7 +25,7 @@ import io.prestosql.spi.plan.PlanNode;
 import io.prestosql.spi.plan.PlanNodeIdAllocator;
 import io.prestosql.spi.plan.ProjectNode;
 import io.prestosql.spi.plan.Symbol;
-import io.prestosql.spi.relation.CallExpression;
+import io.prestosql.spi.type.BigintType;
 import io.prestosql.spi.type.BooleanType;
 import io.prestosql.spi.type.Type;
 import io.prestosql.spi.type.TypeSignature;
@@ -37,7 +36,6 @@ import io.prestosql.sql.planner.plan.ApplyNode;
 import io.prestosql.sql.planner.plan.AssignmentUtils;
 import io.prestosql.sql.planner.plan.LateralJoinNode;
 import io.prestosql.sql.planner.plan.SimplePlanRewriter;
-import io.prestosql.sql.relational.FunctionResolution;
 import io.prestosql.sql.relational.OriginalExpressionUtils;
 import io.prestosql.sql.tree.BooleanLiteral;
 import io.prestosql.sql.tree.Cast;
@@ -60,8 +58,8 @@ import static com.google.common.base.Preconditions.checkState;
 import static com.google.common.collect.ImmutableList.toImmutableList;
 import static com.google.common.collect.Iterables.getOnlyElement;
 import static io.prestosql.spi.plan.AggregationNode.globalAggregation;
-import static io.prestosql.spi.type.BigintType.BIGINT;
 import static io.prestosql.sql.ExpressionUtils.combineConjuncts;
+import static io.prestosql.sql.analyzer.TypeSignatureProvider.fromTypeSignatures;
 import static io.prestosql.sql.planner.SymbolUtils.toSymbolReference;
 import static io.prestosql.sql.planner.plan.SimplePlanRewriter.rewriteWith;
 import static io.prestosql.sql.relational.OriginalExpressionUtils.castToExpression;
@@ -81,18 +79,17 @@ import static java.util.Objects.requireNonNull;
 public class TransformQuantifiedComparisonApplyToLateralJoin
         implements PlanOptimizer
 {
-    private final StandardFunctionResolution functionResolution;
+    private final Metadata metadata;
 
     public TransformQuantifiedComparisonApplyToLateralJoin(Metadata metadata)
     {
-        requireNonNull(metadata, "metadata is null");
-        this.functionResolution = new FunctionResolution(metadata.getFunctionAndTypeManager());
+        this.metadata = requireNonNull(metadata, "metadata is null");
     }
 
     @Override
     public PlanNode optimize(PlanNode plan, Session session, TypeProvider types, PlanSymbolAllocator planSymbolAllocator, PlanNodeIdAllocator idAllocator, WarningCollector warningCollector)
     {
-        return rewriteWith(new Rewriter(idAllocator, types, planSymbolAllocator, functionResolution), plan, null);
+        return rewriteWith(new Rewriter(idAllocator, types, planSymbolAllocator, metadata), plan, null);
     }
 
     private static class Rewriter
@@ -105,14 +102,14 @@ public class TransformQuantifiedComparisonApplyToLateralJoin
         private final PlanNodeIdAllocator idAllocator;
         private final TypeProvider types;
         private final PlanSymbolAllocator planSymbolAllocator;
-        private final StandardFunctionResolution functionResolution;
+        private final Metadata metadata;
 
-        public Rewriter(PlanNodeIdAllocator idAllocator, TypeProvider types, PlanSymbolAllocator planSymbolAllocator, StandardFunctionResolution functionResolution)
+        public Rewriter(PlanNodeIdAllocator idAllocator, TypeProvider types, PlanSymbolAllocator planSymbolAllocator, Metadata metadata)
         {
             this.idAllocator = requireNonNull(idAllocator, "idAllocator is null");
             this.types = requireNonNull(types, "types is null");
             this.planSymbolAllocator = requireNonNull(planSymbolAllocator, "symbolAllocator is null");
-            this.functionResolution = requireNonNull(functionResolution, "functionResolution is null");
+            this.metadata = requireNonNull(metadata, "metadata is null");
         }
 
         @Override
@@ -142,8 +139,8 @@ public class TransformQuantifiedComparisonApplyToLateralJoin
 
             Symbol minValue = planSymbolAllocator.newSymbol(MIN.toString(), outputColumnType);
             Symbol maxValue = planSymbolAllocator.newSymbol(MAX.toString(), outputColumnType);
-            Symbol countAllValue = planSymbolAllocator.newSymbol("count_all", BIGINT);
-            Symbol countNonNullValue = planSymbolAllocator.newSymbol("count_non_null", BIGINT);
+            Symbol countAllValue = planSymbolAllocator.newSymbol("count_all", BigintType.BIGINT);
+            Symbol countNonNullValue = planSymbolAllocator.newSymbol("count_non_null", BigintType.BIGINT);
 
             List<Expression> outputColumnReferences = ImmutableList.of(toSymbolReference(outputColumn));
             List<TypeSignature> outputColumnTypeSignature = ImmutableList.of(outputColumnType.getTypeSignature());
@@ -153,44 +150,28 @@ public class TransformQuantifiedComparisonApplyToLateralJoin
                     subqueryPlan,
                     ImmutableMap.of(
                             minValue, new Aggregation(
-                                    new CallExpression(
-                                            "min",
-                                            functionResolution.minFunction(outputColumnType),
-                                            outputColumnType,
-                                            outputColumnReferences.stream().map(OriginalExpressionUtils::castToRowExpression).collect(toImmutableList())),
+                                    metadata.resolveFunction(MIN, fromTypeSignatures(outputColumnTypeSignature)),
                                     outputColumnReferences.stream().map(OriginalExpressionUtils::castToRowExpression).collect(toImmutableList()),
                                     false,
                                     Optional.empty(),
                                     Optional.empty(),
                                     Optional.empty()),
                             maxValue, new Aggregation(
-                                    new CallExpression(
-                                            "max",
-                                            functionResolution.maxFunction(outputColumnType),
-                                            outputColumnType,
-                                            outputColumnReferences.stream().map(OriginalExpressionUtils::castToRowExpression).collect(toImmutableList())),
+                                    metadata.resolveFunction(MAX, fromTypeSignatures(outputColumnTypeSignature)),
                                     outputColumnReferences.stream().map(OriginalExpressionUtils::castToRowExpression).collect(toImmutableList()),
                                     false,
                                     Optional.empty(),
                                     Optional.empty(),
                                     Optional.empty()),
                             countAllValue, new Aggregation(
-                                    new CallExpression(
-                                            "count",
-                                            functionResolution.countFunction(),
-                                            BIGINT,
-                                            emptyList()),
+                                    metadata.resolveFunction(COUNT, emptyList()),
                                     ImmutableList.of(),
                                     false,
                                     Optional.empty(),
                                     Optional.empty(),
                                     Optional.empty()),
                             countNonNullValue, new Aggregation(
-                                    new CallExpression(
-                                            "count",
-                                            functionResolution.countFunction(outputColumnType),
-                                            BIGINT,
-                                            outputColumnReferences.stream().map(OriginalExpressionUtils::castToRowExpression).collect(toImmutableList())),
+                                    metadata.resolveFunction(COUNT, fromTypeSignatures(outputColumnTypeSignature)),
                                     outputColumnReferences.stream().map(OriginalExpressionUtils::castToRowExpression).collect(toImmutableList()),
                                     false,
                                     Optional.empty(),
@@ -200,8 +181,6 @@ public class TransformQuantifiedComparisonApplyToLateralJoin
                     ImmutableList.of(),
                     AggregationNode.Step.SINGLE,
                     Optional.empty(),
-                    Optional.empty(),
-                    AggregationNode.AggregationType.HASH,
                     Optional.empty());
 
             PlanNode lateralJoinNode = new LateralJoinNode(

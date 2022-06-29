@@ -69,11 +69,6 @@ public class Patterns
         return typeOf(DeleteNode.class);
     }
 
-    public static Pattern<UpdateNode> update()
-    {
-        return typeOf(UpdateNode.class);
-    }
-
     public static Pattern<ExchangeNode> exchange()
     {
         return typeOf(ExchangeNode.class);

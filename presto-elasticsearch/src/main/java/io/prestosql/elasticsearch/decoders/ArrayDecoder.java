@@ -13,19 +13,26 @@
  */
 package io.prestosql.elasticsearch.decoders;
 
+import io.prestosql.spi.PrestoException;
 import io.prestosql.spi.block.BlockBuilder;
 import org.elasticsearch.search.SearchHit;
 
 import java.util.List;
 import java.util.function.Supplier;
 
+import static io.prestosql.spi.StandardErrorCode.TYPE_MISMATCH;
+import static java.lang.String.format;
+import static java.util.Objects.requireNonNull;
+
 public class ArrayDecoder
         implements Decoder
 {
+    private final String path;
     private final Decoder elementDecoder;
 
-    public ArrayDecoder(Decoder elementDecoder)
+    public ArrayDecoder(String path, Decoder elementDecoder)
     {
+        this.path = requireNonNull(path, "path is null");
         this.elementDecoder = elementDecoder;
     }
 
@@ -43,9 +50,7 @@ public class ArrayDecoder
             output.closeEntry();
         }
         else {
-            BlockBuilder array = output.beginBlockEntry();
-            elementDecoder.decode(hit, () -> data, array);
-            output.closeEntry();
+            throw new PrestoException(TYPE_MISMATCH, format("Expected list of elements for field '%s' of type ARRAY: %s [%s]", path, data, data.getClass().getSimpleName()));
         }
     }
 }

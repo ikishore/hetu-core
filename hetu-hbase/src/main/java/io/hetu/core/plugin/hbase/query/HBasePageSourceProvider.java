@@ -1,5 +1,5 @@
 /*
- * Copyright (C) 2018-2021. Huawei Technologies Co., Ltd. All rights reserved.
+ * Copyright (C) 2018-2020. Huawei Technologies Co., Ltd. All rights reserved.
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
  * You may obtain a copy of the License at
@@ -15,9 +15,7 @@
 package io.hetu.core.plugin.hbase.query;
 
 import io.hetu.core.plugin.hbase.connector.HBaseColumnHandle;
-import io.hetu.core.plugin.hbase.connector.HBaseConnection;
 import io.hetu.core.plugin.hbase.connector.HBaseTableHandle;
-import io.hetu.core.plugin.hbase.utils.Constants;
 import io.prestosql.spi.connector.ColumnHandle;
 import io.prestosql.spi.connector.ConnectorPageSource;
 import io.prestosql.spi.connector.ConnectorPageSourceProvider;
@@ -30,7 +28,6 @@ import io.prestosql.spi.connector.RecordSet;
 
 import javax.inject.Inject;
 
-import java.util.ArrayList;
 import java.util.List;
 
 import static java.util.Objects.requireNonNull;
@@ -44,13 +41,11 @@ public class HBasePageSourceProvider
         implements ConnectorPageSourceProvider
 {
     private HBaseRecordSetProvider recordSetProvider;
-    private HBaseConnection hbaseConnection;
 
     @Inject
-    public HBasePageSourceProvider(HBaseRecordSetProvider recordSetProvider, HBaseConnection hbaseConnection)
+    public HBasePageSourceProvider(HBaseRecordSetProvider recordSetProvider)
     {
         this.recordSetProvider = requireNonNull(recordSetProvider, "recordSetProvider is null");
-        this.hbaseConnection = hbaseConnection;
     }
 
     @Override
@@ -61,39 +56,18 @@ public class HBasePageSourceProvider
             ConnectorTableHandle table,
             List<ColumnHandle> columns)
     {
-        // if delete rows, we should replace $rowId -> real rowkey name
-        List<ColumnHandle> columnsReplaceRowKey = new ArrayList<>();
-        columns.forEach(ch -> {
-            if (Constants.HBASE_ROWID_NAME.equals(ch.getColumnName())) {
-                if (ch instanceof HBaseColumnHandle && table instanceof HBaseTableHandle) {
-                    HBaseColumnHandle rowColumnHandle = (HBaseColumnHandle) ch;
-                    columnsReplaceRowKey.add(new HBaseColumnHandle(
-                            ((HBaseTableHandle) table).getRowId(),
-                            rowColumnHandle.getFamily(),
-                            rowColumnHandle.getQualifier(),
-                            rowColumnHandle.getType(),
-                            rowColumnHandle.getOrdinal(),
-                            rowColumnHandle.getComment(),
-                            rowColumnHandle.isIndexed()));
-                }
-            }
-            else {
-                columnsReplaceRowKey.add(ch);
-            }
-        });
-
-        RecordSet recordSet = recordSetProvider.getRecordSet(transactionHandle, session, split, table, columnsReplaceRowKey);
+        RecordSet recordSet = recordSetProvider.getRecordSet(transactionHandle, session, split, table, columns);
         HBaseRecordSet hbaseRecordSet = null;
         if (recordSet instanceof HBaseRecordSet) {
             hbaseRecordSet = (HBaseRecordSet) recordSet;
         }
-        if (columnsReplaceRowKey.stream()
+        if (columns.stream()
                 .anyMatch(
                         ch -> (ch instanceof HBaseColumnHandle)
                                 && (table instanceof HBaseTableHandle)
                                 && ((HBaseColumnHandle) ch).getOrdinal()
                                 == ((HBaseTableHandle) table).getRowIdOrdinal())) {
-            return new HBaseUpdatablePageSource(hbaseRecordSet, hbaseConnection);
+            return new HBaseUpdatablePageSource(hbaseRecordSet);
         }
         else {
             return new RecordPageSource(recordSet);

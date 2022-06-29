@@ -25,7 +25,6 @@ import java.io.File;
 import java.io.FileOutputStream;
 import java.io.IOException;
 import java.io.OutputStreamWriter;
-import java.nio.charset.StandardCharsets;
 import java.util.List;
 import java.util.UUID;
 import java.util.zip.GZIPOutputStream;
@@ -61,10 +60,10 @@ public class CsvOutputBuilder
         this.countingOutputStream = new CountingOutputStream(new FileOutputStream(this.outputFile));
         OutputStreamWriter writer;
         if (compressedOutput) {
-            writer = new OutputStreamWriter(new GZIPOutputStream(this.countingOutputStream), StandardCharsets.UTF_8);
+            writer = new OutputStreamWriter(new GZIPOutputStream(this.countingOutputStream));
         }
         else {
-            writer = new OutputStreamWriter(this.countingOutputStream, StandardCharsets.UTF_8);
+            writer = new OutputStreamWriter(this.countingOutputStream);
         }
         this.csvWriter = new CSVWriter(writer);
     }
@@ -75,23 +74,8 @@ public class CsvOutputBuilder
     {
         final String[] values = new String[row.size()];
         for (int i = 0; i < values.length; i++) {
-            // Display byte array as Hexadecimal in order to keep consistent with OpenLooKeng client
-            if (row.get(i) instanceof byte[]) {
-                byte[] bytes = (byte[]) row.get(i);
-                StringBuilder sb = new StringBuilder();
-                for (byte b : bytes) {
-                    String hex = Integer.toHexString(b & 0xFF);
-                    if (hex.length() < 2) {
-                        sb.append(0);
-                    }
-                    sb.append(hex);
-                }
-                values[i] = sb.toString();
-            }
-            else {
-                final Object value = row.get(i);
-                values[i] = (value == null) ? "" : value.toString();
-            }
+            final Object value = row.get(i);
+            values[i] = (value == null) ? "" : value.toString();
         }
         writeCsvRow(values);
     }
@@ -138,7 +122,7 @@ public class CsvOutputBuilder
             csvWriter.close();
         }
         catch (IOException e) {
-            LOG.debug("Error message: " + e.getStackTrace());
+            e.printStackTrace();
         }
 
         return outputFile;

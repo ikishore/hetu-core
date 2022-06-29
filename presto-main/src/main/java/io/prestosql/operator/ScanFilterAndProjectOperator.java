@@ -44,7 +44,6 @@ import io.prestosql.spi.operator.ReuseExchangeOperator;
 import io.prestosql.spi.plan.PlanNode;
 import io.prestosql.spi.plan.PlanNodeId;
 import io.prestosql.spi.plan.TableScanNode;
-import io.prestosql.spi.snapshot.RestorableConfig;
 import io.prestosql.spi.type.Type;
 import io.prestosql.spi.util.BloomFilter;
 import io.prestosql.spiller.SpillerFactory;
@@ -195,8 +194,6 @@ public class ScanFilterAndProjectOperator
         }
     }
 
-    // Table scan operators do not participate in snapshotting
-    @RestorableConfig(unsupported = true)
     private class SplitToPages
             implements WorkProcessor.Transformation<Split, WorkProcessor<Page>>
     {
@@ -313,8 +310,6 @@ public class ScanFilterAndProjectOperator
         }
     }
 
-    // Table scan operators do not participate in snapshotting
-    @RestorableConfig(unsupported = true)
     private class RecordCursorToPages
             implements WorkProcessor.Process<Page>
     {
@@ -398,7 +393,6 @@ public class ScanFilterAndProjectOperator
                     }
                     catch (Throwable e) {
                         // ignore
-                        log.error("Filter page error: %s", e.getMessage());
                     }
                 }
                 pageBuilder.reset();
@@ -417,19 +411,16 @@ public class ScanFilterAndProjectOperator
 
         private Page filter(Page page)
         {
-            Page input = page;
             if (bloomFilters.isEmpty()) {
                 BloomFilterUtils.updateBloomFilter(queryIdOptional, isDcTable, stateStoreProviderOptional, tableScanNodeOptional, dynamicFilterCacheManagerOptional, bloomFiltersBackup, bloomFilters);
             }
             if (!bloomFilters.isEmpty()) {
-                input = BloomFilterUtils.filter(input, bloomFilters);
+                page = BloomFilterUtils.filter(page, bloomFilters);
             }
-            return input;
+            return page;
         }
     }
 
-    // Table scan operators do not participate in snapshotting
-    @RestorableConfig(unsupported = true)
     private class ConnectorPageSourceToPages
             implements WorkProcessor.Process<Page>
     {
@@ -445,11 +436,11 @@ public class ScanFilterAndProjectOperator
         boolean isDcTable;
 
         ConnectorPageSourceToPages(LocalMemoryContext pageSourceMemoryContext,
-                Optional<TableScanNode> tableScanNodeOptional,
-                Optional<StateStoreProvider> stateStoreProviderOptional,
-                Optional<QueryId> queryIdOptional,
-                Optional<Metadata> metadataOptional,
-                Optional<DynamicFilterCacheManager> dynamicFilterCacheManagerOptional)
+                                   Optional<TableScanNode> tableScanNodeOptional,
+                                   Optional<StateStoreProvider> stateStoreProviderOptional,
+                                   Optional<QueryId> queryIdOptional,
+                                   Optional<Metadata> metadataOptional,
+                                   Optional<DynamicFilterCacheManager> dynamicFilterCacheManagerOptional)
         {
             this.pageSourceMemoryContext = pageSourceMemoryContext;
             this.stateStoreProviderOptional = stateStoreProviderOptional;
@@ -493,12 +484,7 @@ public class ScanFilterAndProjectOperator
             page = recordMaterializedBytes(page, sizeInBytes -> processedBytes += sizeInBytes);
 
             // update operator stats
-            if (pageSource.getCompletedPositionCount().isPresent()) {
-                processedPositions = pageSource.getCompletedPositionCount().getAsLong();
-            }
-            else {
-                processedPositions += page.getPositionCount();
-            }
+            processedPositions += page.getPositionCount();
             physicalBytes = pageSource.getCompletedBytes();
             readTimeNanos = pageSource.getReadTimeNanos();
 
@@ -509,7 +495,6 @@ public class ScanFilterAndProjectOperator
                 }
                 catch (Throwable e) {
                     // ignore
-                    log.error("Filter page error: %s", e.getMessage());
                 }
             }
 
@@ -518,14 +503,13 @@ public class ScanFilterAndProjectOperator
 
         private Page filter(Page page)
         {
-            Page input = page;
             if (bloomFilters.isEmpty()) {
                 BloomFilterUtils.updateBloomFilter(queryIdOptional, isDcTable, stateStoreProviderOptional, tableScanNodeOptional, dynamicFilterCacheManagerOptional, bloomFiltersBackup, bloomFilters);
             }
             if (!bloomFilters.isEmpty()) {
-                input = BloomFilterUtils.filter(input, bloomFilters);
+                page = BloomFilterUtils.filter(page, bloomFilters);
             }
-            return input;
+            return page;
         }
     }
 
@@ -550,12 +534,12 @@ public class ScanFilterAndProjectOperator
         private Optional<QueryId> queryIdOptional = Optional.empty();
         private Optional<Metadata> metadataOptional = Optional.empty();
         private Optional<DynamicFilterCacheManager> dynamicFilterCacheManagerOptional = Optional.empty();
-        private final ReuseExchangeOperator.STRATEGY strategy;
-        private final UUID reuseTableScanMappingId;
-        private final boolean spillEnabled;
+        private ReuseExchangeOperator.STRATEGY strategy;
+        private UUID reuseTableScanMappingId;
+        private boolean spillEnabled;
         private final Optional<SpillerFactory> spillerFactory;
-        private final Integer spillerThreshold;
-        private final Integer consumerTableScanNodeCount;
+        private Integer spillerThreshold;
+        private Integer consumerTableScanNodeCount;
 
         public ScanFilterAndProjectOperatorFactory(
                 Session session,

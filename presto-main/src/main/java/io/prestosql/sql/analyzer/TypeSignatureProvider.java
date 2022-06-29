@@ -73,11 +73,6 @@ public class TypeSignatureProvider
                 .collect(toImmutableList());
     }
 
-    public static List<TypeSignatureProvider> fromTypeSignatures(TypeSignature... typeSignatures)
-    {
-        return fromTypeSignatures(ImmutableList.copyOf(typeSignatures));
-    }
-
     public static List<TypeSignatureProvider> fromTypeSignatures(List<? extends TypeSignature> typeSignatures)
     {
         return typeSignatures.stream()

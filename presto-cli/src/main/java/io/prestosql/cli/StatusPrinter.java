@@ -19,7 +19,6 @@ import io.airlift.log.Logger;
 import io.airlift.units.DataSize;
 import io.airlift.units.Duration;
 import io.prestosql.client.QueryStatusInfo;
-import io.prestosql.client.SnapshotStats;
 import io.prestosql.client.StageStats;
 import io.prestosql.client.StatementClient;
 import io.prestosql.client.StatementStats;
@@ -31,7 +30,6 @@ import java.io.IOException;
 import java.io.InputStream;
 import java.io.PrintStream;
 import java.util.List;
-import java.util.Locale;
 import java.util.OptionalInt;
 import java.util.concurrent.atomic.AtomicInteger;
 
@@ -61,7 +59,6 @@ public class StatusPrinter
     private final ConsolePrinter console;
 
     private boolean debug;
-    private boolean timeInMilliseconds;
 
     public StatusPrinter(StatementClient client, PrintStream out, boolean debug)
     {
@@ -69,7 +66,6 @@ public class StatusPrinter
         this.out = out;
         this.console = new ConsolePrinter(out);
         this.debug = debug;
-        this.timeInMilliseconds = client.isTimeInMilliseconds();
     }
 
 /*
@@ -186,7 +182,7 @@ Spilled: 20GB
         if (debug) {
             // CPU Time: 565.2s total,   26K rows/s, 3.85MB/s
             Duration cpuTime = millis(stats.getCpuTimeMillis());
-            String cpuTimeSummary = String.format(Locale.ROOT, "CPU Time: %.1fs total, %5s rows/s, %8s, %d%% active",
+            String cpuTimeSummary = String.format("CPU Time: %.1fs total, %5s rows/s, %8s, %d%% active",
                     cpuTime.getValue(SECONDS),
                     FormatUtils.formatCountRate(stats.getProcessedRows(), cpuTime, false),
                     FormatUtils.formatDataRate(bytes(stats.getProcessedBytes()), cpuTime, true),
@@ -208,22 +204,15 @@ Spilled: 20GB
             // Peak Memory: 1.97GB
             reprintLine("Peak Memory: " + FormatUtils.formatDataSize(bytes(stats.getPeakMemoryBytes()), true));
 
-            // Spilled Data: 20GB, Writing Time Per Node: 22s, Reading Time Per Node: 1.2s
+            // Spilled Data: 20GB
             if (stats.getSpilledBytes() > 0) {
-                Duration readTime = millis(stats.getElapsedSpillReadTimeMillis() / stats.getSpilledNodes());
-                Duration writeTime = millis(stats.getElapsedSpillWriteTimeMillis() / stats.getSpilledNodes());
-                String summary = String.format("Spilled: %s, Writing Time Per Node: %.1fs, Reading Time Per Node: %.1fs",
-                        FormatUtils.formatDataSize(bytes(stats.getSpilledBytes()), true),
-                        writeTime.getValue(SECONDS),
-                        readTime.getValue(SECONDS));
-                reprintLine(summary);
+                reprintLine("Spilled: " + FormatUtils.formatDataSize(bytes(stats.getSpilledBytes()), true));
             }
-            printSnapshotStats(stats, true);
         }
 
         // 0:32 [2.12GB, 15M rows] [67MB/s, 463K rows/s]
         String statsLine = String.format("%s [%s rows, %s] [%s rows/s, %s]",
-                FormatUtils.formatTime(wallTime, timeInMilliseconds),
+                FormatUtils.formatTime(wallTime),
                 FormatUtils.formatCount(stats.getProcessedRows()),
                 FormatUtils.formatDataSize(bytes(stats.getProcessedBytes()), true),
                 FormatUtils.formatCountRate(stats.getProcessedRows(), wallTime, false),
@@ -233,54 +222,6 @@ Spilled: 20GB
 
         // blank line
         out.println();
-    }
-
-    private void printSnapshotStats(StatementStats stats, boolean isFinal)
-    {
-        SnapshotStats snapshotStats = stats.getSnapshotStats();
-        // snapshotStats should be null in case snapshot feature is disabled
-        if (snapshotStats != null) {
-            List<Long> capturedList = snapshotStats.getCapturedSnapshotList();
-            int capturedListSize = capturedList != null ? capturedList.size() : 0;
-            long restoreCount = snapshotStats.getSuccessRestoreCount();
-            String snapshotSummary = null;
-
-            // Display captured snapshot stats if we have any captured snapshots already
-            if (capturedListSize > 0) {
-                Duration allCaptureCPUTime = millis(snapshotStats.getTotalCaptureCpuTime());
-                Duration allCaptureWallTime = millis(snapshotStats.getTotalCaptureWallTime());
-                Duration lastCaptureCPUTime = millis(snapshotStats.getLastCaptureCpuTime());
-                Duration lastCaptureWallTime = millis(snapshotStats.getLastCaptureWallTime());
-                String allSnapshotsSize = FormatUtils.formatDataSize(bytes(snapshotStats.getAllCaptureSize()), true);
-                String lastSnapshotSize = FormatUtils.formatDataSize(bytes(snapshotStats.getLastCaptureSize()), true);
-
-                snapshotSummary = String.format(Locale.ROOT, "Snapshots Captured: %d [All: %s/%.1fs/%.1fs, Last: %s/%.1fs/%.1fs]",
-                        capturedListSize,
-                        allSnapshotsSize, allCaptureCPUTime.getValue(SECONDS), allCaptureWallTime.getValue(SECONDS),
-                        lastSnapshotSize, lastCaptureCPUTime.getValue(SECONDS), lastCaptureWallTime.getValue(SECONDS));
-                reprintLine(snapshotSummary);
-            }
-
-            // Display restored snapshot stats if we have any captured snapshots already
-            if (restoreCount > 0) {
-                Duration allRestoreCPUTime = millis(snapshotStats.getTotalRestoreCpuTime());
-                Duration allRestoreWallTime = millis(snapshotStats.getTotalRestoreWallTime());
-                String allRestoreSize = FormatUtils.formatDataSize(bytes(snapshotStats.getTotalRestoreSize()), true);
-                snapshotSummary = String.format(Locale.ROOT, "Snapshots Restored: %d/%s/%.1fs/%.1fs",
-                        restoreCount, allRestoreSize, allRestoreCPUTime.getValue(SECONDS), allRestoreWallTime.getValue(SECONDS));
-                reprintLine(snapshotSummary);
-            }
-
-            List<Long> inProgressCaptureList = snapshotStats.getCapturingSnapshotIds();
-            long inProgressRestoreSnapshot = snapshotStats.getRestoringSnapshotId();
-            // Snapshots in progress: Capture: 4,5, Restore: 3
-            if (!isFinal && ((inProgressCaptureList != null && inProgressCaptureList.size() > 0) || inProgressRestoreSnapshot != 0)) {
-                String restoreId = inProgressRestoreSnapshot == 0 ? "None" : String.valueOf(inProgressRestoreSnapshot);
-                int captureCount = (inProgressCaptureList != null) ? inProgressCaptureList.size() : 0;
-                String inProgressMsg = String.format(Locale.ROOT, "Snapshots in progress: Capture count: %d  Restoring id: %s", captureCount, restoreId);
-                reprintLine(inProgressMsg);
-            }
-        }
     }
 
     private void printQueryInfo(QueryStatusInfo results, WarningsPrinter warningsPrinter)
@@ -303,14 +244,14 @@ Spilled: 20GB
                 reprintLine("80 characters wide");
                 reprintLine("");
                 reprintLine(stats.getState());
-                reprintLine(String.format(Locale.ROOT, "%s %d%%", FormatUtils.formatTime(wallTime, timeInMilliseconds), progressPercentage));
+                reprintLine(String.format("%s %d%%", FormatUtils.formatTime(wallTime), progressPercentage));
                 return;
             }
 
             int nodes = stats.getNodes();
 
             // Query 10, RUNNING, 1 node, 778 splits
-            String querySummary = String.format(Locale.ROOT, "Query %s, %s, %,d %s, %,d splits",
+            String querySummary = String.format("Query %s, %s, %,d %s, %,d splits",
                     results.getId(),
                     stats.getState(),
                     nodes,
@@ -337,7 +278,7 @@ Spilled: 20GB
 
                 // CPU Time: 56.5s total, 36.4K rows/s, 4.44MB/s, 60% active
                 Duration cpuTime = millis(stats.getCpuTimeMillis());
-                String cpuTimeSummary = String.format(Locale.ROOT, "CPU Time: %.1fs total, %5s rows/s, %8s, %d%% active",
+                String cpuTimeSummary = String.format("CPU Time: %.1fs total, %5s rows/s, %8s, %d%% active",
                         cpuTime.getValue(SECONDS),
                         FormatUtils.formatCountRate(stats.getProcessedRows(), cpuTime, false),
                         FormatUtils.formatDataRate(bytes(stats.getProcessedBytes()), cpuTime, true),
@@ -359,17 +300,10 @@ Spilled: 20GB
                 // Peak Memory: 1.97GB
                 reprintLine("Peak Memory: " + FormatUtils.formatDataSize(bytes(stats.getPeakMemoryBytes()), true));
 
-                // Spilled Data: 20GB, Writing Time: 25s, Reading Time: 8s
+                // Spilled Data: 20GB
                 if (stats.getSpilledBytes() > 0) {
-                    Duration readTime = millis(stats.getElapsedSpillReadTimeMillis() / stats.getSpilledNodes());
-                    Duration writeTime = millis(stats.getElapsedSpillWriteTimeMillis() / stats.getSpilledNodes());
-                    String summary = String.format("Spilled: %s, Writing Time: %.1fs, Reading Time: %.1fs",
-                            FormatUtils.formatDataSize(bytes(stats.getSpilledBytes()), true),
-                            writeTime.getValue(SECONDS),
-                            readTime.getValue(SECONDS));
-                    reprintLine(summary);
+                    reprintLine("Spilled: " + FormatUtils.formatDataSize(bytes(stats.getSpilledBytes()), true));
                 }
-                printSnapshotStats(stats, false);
             }
 
             verify(terminalWidth >= 75); // otherwise handled above
@@ -382,8 +316,8 @@ Spilled: 20GB
                         stats.getTotalSplits());
 
                 // 0:17 [ 103MB,  802K rows] [5.74MB/s, 44.9K rows/s] [=====>>                                   ] 10%
-                String progressLine = String.format(Locale.ROOT, "%s [%5s rows, %6s] [%5s rows/s, %8s] [%s] %d%%",
-                        FormatUtils.formatTime(wallTime, timeInMilliseconds),
+                String progressLine = String.format("%s [%5s rows, %6s] [%5s rows/s, %8s] [%s] %d%%",
+                        FormatUtils.formatTime(wallTime),
                         FormatUtils.formatCount(stats.getProcessedRows()),
                         FormatUtils.formatDataSize(bytes(stats.getProcessedBytes()), true),
                         FormatUtils.formatCountRate(stats.getProcessedRows(), wallTime, false),
@@ -397,8 +331,8 @@ Spilled: 20GB
                 String progressBar = FormatUtils.formatProgressBar(progressWidth, Ints.saturatedCast(nanosSince(start).roundTo(SECONDS)));
 
                 // 0:17 [ 103MB,  802K rows] [5.74MB/s, 44.9K rows/s] [    <=>                                  ]
-                String progressLine = String.format(Locale.ROOT, "%s [%5s rows, %6s] [%5s rows/s, %8s] [%s]",
-                        FormatUtils.formatTime(wallTime, timeInMilliseconds),
+                String progressLine = String.format("%s [%5s rows, %6s] [%5s rows/s, %8s] [%s]",
+                        FormatUtils.formatTime(wallTime),
                         FormatUtils.formatCount(stats.getProcessedRows()),
                         FormatUtils.formatDataSize(bytes(stats.getProcessedBytes()), true),
                         FormatUtils.formatCountRate(stats.getProcessedRows(), wallTime, false),
@@ -410,37 +344,21 @@ Spilled: 20GB
 
             // blank line
             reprintLine("");
-            String stagesHeader = null;
-            if (!debug || stats.getSnapshotStats() == null) {
-                // STAGE  S    ROWS    RPS  BYTES    BPS   QUEUED    RUN   DONE
-                stagesHeader = format("%10s%1s  %5s  %6s  %5s  %7s  %6s  %5s  %5s",
-                        "STAGE",
-                        "S",
-                        "ROWS",
-                        "ROWS/s",
-                        "BYTES",
-                        "BYTES/s",
-                        "QUEUED",
-                        "RUN",
-                        "DONE");
-            }
-            else {
-                // STAGE  SS    ROWS    RPS  BYTES    BPS   QUEUED    RUN   DONE  SNAPSHOT
-                stagesHeader = format("%10s%2s  %5s  %6s  %5s  %7s  %6s  %5s  %5s  %8s",
-                        "STAGE",
-                        "SS",
-                        "ROWS",
-                        "ROWS/s",
-                        "BYTES",
-                        "BYTES/s",
-                        "QUEUED",
-                        "RUN",
-                        "DONE",
-                        "SNAPSHOT");
-            }
+
+            // STAGE  S    ROWS    RPS  BYTES    BPS   QUEUED    RUN   DONE
+            String stagesHeader = format("%10s%1s  %5s  %6s  %5s  %7s  %6s  %5s  %5s",
+                    "STAGE",
+                    "S",
+                    "ROWS",
+                    "ROWS/s",
+                    "BYTES",
+                    "BYTES/s",
+                    "QUEUED",
+                    "RUN",
+                    "DONE");
             reprintLine(stagesHeader);
 
-            printStageTree(stats.getRootStage(), "", new AtomicInteger(), stats.getSnapshotStats());
+            printStageTree(stats.getRootStage(), "", new AtomicInteger());
         }
         else {
             // Query 31 [S] i[2.7M 67.3MB 62.7MBps] o[35 6.1KB 1KBps] splits[252/16/380]
@@ -464,9 +382,16 @@ Spilled: 20GB
         warningsPrinter.print(results.getWarnings(), false, false);
     }
 
-    private void printStageTree(StageStats stage, String indent, AtomicInteger stageNumberCounter, SnapshotStats snapshotStats)
+    private void printStageTree(StageStats stage, String indent, AtomicInteger stageNumberCounter)
     {
         Duration elapsedTime = nanosSince(start);
+
+        // STAGE  S    ROWS  ROWS/s  BYTES  BYTES/s  QUEUED    RUN   DONE
+        // 0......Q     26M   9077M  9993G    9077M   9077M  9077M  9077M
+        //   2....R     17K    627M   673M     627M    627M   627M   627M
+        //     3..C     999    627M   673M     627M    627M   627M   627M
+        //   4....R     26M    627M   673T     627M    627M   627M   627M
+        //     5..F     29T    627M   673M     627M    627M   627M   627M
 
         String id = String.valueOf(stageNumberCounter.getAndIncrement());
         String name = indent + id;
@@ -483,55 +408,23 @@ Spilled: 20GB
             rowsPerSecond = FormatUtils.formatCountRate(stage.getProcessedRows(), elapsedTime, false);
         }
 
-        String stageSummary = null;
-        if (!debug || snapshotStats == null) {
-            // STAGE  S    ROWS  ROWS/s  BYTES  BYTES/s  QUEUED    RUN   DONE
-            // 0......Q     26M   9077M  9993G    9077M   9077M  9077M  9077M
-            //   2....R     17K    627M   673M     627M    627M   627M   627M
-            //     3..C     999    627M   673M     627M    627M   627M   627M
-            //   4....R     26M    627M   673T     627M    627M   627M   627M
-            //     5..F     29T    627M   673M     627M    627M   627M   627M
-            stageSummary = String.format("%10s%1s  %5s  %6s  %5s  %7s  %6s  %5s  %5s",
-                    name,
-                    stageStateCharacter(stage.getState()),
+        String stageSummary = String.format("%10s%1s  %5s  %6s  %5s  %7s  %6s  %5s  %5s",
+                name,
+                stageStateCharacter(stage.getState()),
 
-                    FormatUtils.formatCount(stage.getProcessedRows()),
-                    rowsPerSecond,
+                FormatUtils.formatCount(stage.getProcessedRows()),
+                rowsPerSecond,
 
-                    FormatUtils.formatDataSize(bytes(stage.getProcessedBytes()), false),
-                    bytesPerSecond,
+                FormatUtils.formatDataSize(bytes(stage.getProcessedBytes()), false),
+                bytesPerSecond,
 
-                    stage.getQueuedSplits(),
-                    stage.getRunningSplits(),
-                    stage.getCompletedSplits());
-        }
-        else {
-            // STAGE  SS    ROWS  ROWS/s  BYTES  BYTES/s  QUEUED    RUN   DONE  SNAPSHOT
-            // 0.......Q     26M   9077M  9993G    9077M   9077M  9077M  9077M      1
-            //   2.....R     17K    627M   673M     627M    627M   627M   627M      4
-            //     3...C     999    627M   673M     627M    627M   627M   627M      3
-            //   4....#R     26M    627M   673T     627M    627M   627M   627M     12
-            //     5..#F     29T    627M   673M     627M    627M   627M   627M     11
-            stageSummary = String.format("%10s%1s%1s  %5s  %6s  %5s  %7s  %6s  %5s  %5s  %8d",
-                    name,
-                    stage.isRestoring() ? "#" : ".",
-                    stageStateCharacter(stage.getState()),
-
-                    FormatUtils.formatCount(stage.getProcessedRows()),
-                    rowsPerSecond,
-
-                    FormatUtils.formatDataSize(bytes(stage.getProcessedBytes()), false),
-                    bytesPerSecond,
-
-                    stage.getQueuedSplits(),
-                    stage.getRunningSplits(),
-                    stage.getCompletedSplits(),
-                    stage.getSnapshotId());
-        }
+                stage.getQueuedSplits(),
+                stage.getRunningSplits(),
+                stage.getCompletedSplits());
         reprintLine(stageSummary);
 
         for (StageStats subStage : stage.getSubStages()) {
-            printStageTree(subStage, indent + "  ", stageNumberCounter, snapshotStats);
+            printStageTree(subStage, indent + "  ", stageNumberCounter);
         }
     }
 
@@ -573,7 +466,6 @@ Spilled: 20GB
         }
         catch (IOException e) {
             // ignore errors reading keyboard input
-            log.warn(e.toString());
         }
         return -1;
     }

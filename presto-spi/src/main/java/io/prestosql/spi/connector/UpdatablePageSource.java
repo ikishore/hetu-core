@@ -14,25 +14,15 @@
 package io.prestosql.spi.connector;
 
 import io.airlift.slice.Slice;
-import io.prestosql.spi.Page;
 import io.prestosql.spi.block.Block;
 
 import java.util.Collection;
-import java.util.List;
 import java.util.concurrent.CompletableFuture;
 
 public interface UpdatablePageSource
         extends ConnectorPageSource
 {
-    default void deleteRows(Block rowIds)
-    {
-        throw new UnsupportedOperationException("This connector does not support row-level delete");
-    }
-
-    default void updateRows(Page page, List<Integer> columnValueAndRowIdChannels, List<String> updatedColumns)
-    {
-        throw new UnsupportedOperationException("This connector does not support row update");
-    }
+    void deleteRows(Block rowIds);
 
     CompletableFuture<Collection<Slice>> finish();
 

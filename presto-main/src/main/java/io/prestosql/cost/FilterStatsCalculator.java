@@ -17,10 +17,7 @@ import com.google.common.base.VerifyException;
 import com.google.common.collect.ImmutableList;
 import io.prestosql.Session;
 import io.prestosql.execution.warnings.WarningCollector;
-import io.prestosql.expressions.LogicalRowExpressions;
 import io.prestosql.metadata.Metadata;
-import io.prestosql.spi.connector.ConnectorSession;
-import io.prestosql.spi.function.FunctionMetadata;
 import io.prestosql.spi.function.OperatorType;
 import io.prestosql.spi.plan.Symbol;
 import io.prestosql.spi.relation.CallExpression;
@@ -31,8 +28,8 @@ import io.prestosql.spi.relation.RowExpression;
 import io.prestosql.spi.relation.RowExpressionVisitor;
 import io.prestosql.spi.relation.SpecialForm;
 import io.prestosql.spi.relation.VariableReferenceExpression;
+import io.prestosql.spi.sql.RowExpressionUtils;
 import io.prestosql.spi.type.Type;
-import io.prestosql.spi.type.VarcharType;
 import io.prestosql.sql.analyzer.ExpressionAnalyzer;
 import io.prestosql.sql.analyzer.Scope;
 import io.prestosql.sql.planner.ExpressionInterpreter;
@@ -41,7 +38,7 @@ import io.prestosql.sql.planner.LiteralInterpreter;
 import io.prestosql.sql.planner.NoOpSymbolResolver;
 import io.prestosql.sql.planner.RowExpressionInterpreter;
 import io.prestosql.sql.planner.TypeProvider;
-import io.prestosql.sql.relational.FunctionResolution;
+import io.prestosql.sql.relational.Signatures;
 import io.prestosql.sql.tree.AstVisitor;
 import io.prestosql.sql.tree.BetweenPredicate;
 import io.prestosql.sql.tree.BooleanLiteral;
@@ -60,7 +57,6 @@ import io.prestosql.sql.tree.NotExpression;
 import io.prestosql.sql.tree.SymbolReference;
 
 import javax.annotation.Nullable;
-import javax.inject.Inject;
 
 import java.util.List;
 import java.util.Map;
@@ -75,12 +71,12 @@ import static io.prestosql.cost.PlanNodeStatsEstimateMath.addStatsAndSumDistinct
 import static io.prestosql.cost.PlanNodeStatsEstimateMath.capStats;
 import static io.prestosql.cost.PlanNodeStatsEstimateMath.subtractSubsetStats;
 import static io.prestosql.cost.StatsUtil.toStatsRepresentation;
-import static io.prestosql.expressions.LogicalRowExpressions.TRUE_CONSTANT;
+import static io.prestosql.spi.function.Signature.internalOperator;
 import static io.prestosql.spi.relation.SpecialForm.Form.IS_NULL;
+import static io.prestosql.spi.sql.RowExpressionUtils.TRUE_CONSTANT;
 import static io.prestosql.spi.type.BooleanType.BOOLEAN;
 import static io.prestosql.sql.DynamicFilters.isDynamicFilter;
 import static io.prestosql.sql.ExpressionUtils.and;
-import static io.prestosql.sql.analyzer.TypeSignatureProvider.fromTypes;
 import static io.prestosql.sql.planner.RowExpressionInterpreter.Level.OPTIMIZED;
 import static io.prestosql.sql.planner.SymbolUtils.from;
 import static io.prestosql.sql.relational.Expressions.call;
@@ -108,16 +104,13 @@ public class FilterStatsCalculator
     private final ScalarStatsCalculator scalarStatsCalculator;
     private final StatsNormalizer normalizer;
     private final LiteralEncoder literalEncoder;
-    private final FunctionResolution functionResolution;
 
-    @Inject
     public FilterStatsCalculator(Metadata metadata, ScalarStatsCalculator scalarStatsCalculator, StatsNormalizer normalizer)
     {
         this.metadata = requireNonNull(metadata, "metadata is null");
         this.scalarStatsCalculator = requireNonNull(scalarStatsCalculator, "scalarStatsCalculator is null");
         this.normalizer = requireNonNull(normalizer, "normalizer is null");
         this.literalEncoder = new LiteralEncoder(metadata);
-        this.functionResolution = new FunctionResolution(metadata.getFunctionAndTypeManager());
     }
 
     public PlanNodeStatsEstimate filterStats(
@@ -134,22 +127,12 @@ public class FilterStatsCalculator
     public PlanNodeStatsEstimate filterStats(
             PlanNodeStatsEstimate statsEstimate,
             RowExpression predicate,
-            ConnectorSession session,
+            Session session,
             TypeProvider types,
             Map<Integer, Symbol> layout)
     {
         RowExpression simplifiedExpression = simplifyExpression(session, predicate);
         return new FilterRowExpressionStatsCalculatingVisitor(statsEstimate, session, types, layout).process(simplifiedExpression);
-    }
-
-    public PlanNodeStatsEstimate filterStats(
-            PlanNodeStatsEstimate statsEstimate,
-            RowExpression predicate,
-            Session session,
-            TypeProvider types,
-            Map<Integer, Symbol> layout)
-    {
-        return filterStats(statsEstimate, predicate, session.toConnectorSession(), types, layout);
     }
 
     private Expression simplifyExpression(Session session, Expression predicate, TypeProvider types)
@@ -167,9 +150,9 @@ public class FilterStatsCalculator
         return literalEncoder.toExpression(value, BOOLEAN);
     }
 
-    private RowExpression simplifyExpression(ConnectorSession session, RowExpression predicate)
+    private RowExpression simplifyExpression(Session session, RowExpression predicate)
     {
-        RowExpressionInterpreter interpreter = new RowExpressionInterpreter(predicate, metadata, session, OPTIMIZED);
+        RowExpressionInterpreter interpreter = new RowExpressionInterpreter(predicate, metadata, session.toConnectorSession(), OPTIMIZED);
         Object value = interpreter.optimize();
 
         if (value == null) {
@@ -493,7 +476,7 @@ public class FilterStatsCalculator
         private OptionalDouble doubleValueFromLiteral(Type type, Literal literal)
         {
             Object literalValue = LiteralInterpreter.evaluate(metadata, session.toConnectorSession(), literal);
-            return toStatsRepresentation(metadata, session.toConnectorSession(), type, literalValue);
+            return toStatsRepresentation(metadata, session, type, literalValue);
         }
     }
 
@@ -501,11 +484,11 @@ public class FilterStatsCalculator
             implements RowExpressionVisitor<PlanNodeStatsEstimate, Void>
     {
         private final PlanNodeStatsEstimate input;
-        private final ConnectorSession session;
+        private final Session session;
         private final TypeProvider types;
         private final Map<Integer, Symbol> layout;
 
-        FilterRowExpressionStatsCalculatingVisitor(PlanNodeStatsEstimate input, ConnectorSession session, TypeProvider types, Map<Integer, Symbol> layout)
+        FilterRowExpressionStatsCalculatingVisitor(PlanNodeStatsEstimate input, Session session, TypeProvider types, Map<Integer, Symbol> layout)
         {
             this.input = requireNonNull(input, "input is null");
             this.session = requireNonNull(session, "session is null");
@@ -567,10 +550,10 @@ public class FilterStatsCalculator
         @Override
         public PlanNodeStatsEstimate visitCall(CallExpression node, Void context)
         {
-            FunctionMetadata functionMetadata = metadata.getFunctionAndTypeManager().getFunctionMetadata(node.getFunctionHandle());
             // comparison case
-            if (functionMetadata.getOperatorType().map(OperatorType::isComparisonOperator).orElse(false)) {
-                OperatorType operatorType = functionMetadata.getOperatorType().get();
+            String operator = node.getSignature().getName();
+            if (operator.contains("$operator$") && node.getSignature().unmangleOperator(operator).isComparisonOperator()) {
+                OperatorType operatorType = node.getSignature().unmangleOperator(operator);
                 RowExpression left = node.getArguments().get(0);
                 RowExpression right = node.getArguments().get(1);
 
@@ -579,17 +562,21 @@ public class FilterStatsCalculator
                 if (!(left instanceof VariableReferenceExpression) && right instanceof VariableReferenceExpression) {
                     // normalize so that variable is on the left
                     OperatorType flippedOperator = flip(operatorType);
-                    return process(call(flippedOperator.name(),
-                            metadata.getFunctionAndTypeManager().resolveOperatorFunctionHandle(flippedOperator, fromTypes(right.getType(), left.getType())),
-                            BOOLEAN, right, left));
+                    return process(call(internalOperator(flippedOperator,
+                                            node.getSignature().getReturnType(),
+                                            right.getType().getTypeSignature(),
+                                            left.getType().getTypeSignature()),
+                                        BOOLEAN, right, left));
                 }
 
                 if (left instanceof ConstantExpression) {
                     // normalize so that literal is on the right
                     OperatorType flippedOperator = flip(operatorType);
-                    return process(call(flippedOperator.name(),
-                            metadata.getFunctionAndTypeManager().resolveOperatorFunctionHandle(flippedOperator, fromTypes(right.getType(), left.getType())),
-                            BOOLEAN, right, left));
+                    return process(call(internalOperator(flippedOperator,
+                                            node.getSignature().getReturnType(),
+                                            right.getType().getTypeSignature(),
+                                            left.getType().getTypeSignature()),
+                                        BOOLEAN, right, left));
                 }
 
                 if (left instanceof VariableReferenceExpression && left.equals(right)) {
@@ -607,7 +594,7 @@ public class FilterStatsCalculator
                 else {
                     leftSymbol = Optional.empty();
                 }
-                if (right instanceof ConstantExpression && !right.getType().equals(VarcharType.VARCHAR)) {
+                if (right instanceof ConstantExpression) {
                     Object rightValue = ((ConstantExpression) right).getValue();
                     if (rightValue == null) {
                         return visitConstant(constantNull(BOOLEAN), null);
@@ -636,12 +623,12 @@ public class FilterStatsCalculator
             }
 
             //BETWEEN case
-            if (functionResolution.isBetweenFunction(node.getFunctionHandle())) {
+            if (operator.contains("$operator$") && node.getSignature().unmangleOperator(operator).equals(OperatorType.BETWEEN)) {
                 return handleBetween(node.getArguments().get(0), node.getArguments().get(1), node.getArguments().get(2));
             }
 
             // NOT case
-            if (functionResolution.isNotFunction(node.getFunctionHandle())) {
+            if (node.getSignature().getName().equals("not")) {
                 RowExpression arguemnt = node.getArguments().get(0);
                 if (arguemnt instanceof SpecialForm && ((SpecialForm) arguemnt).getForm().equals(IS_NULL)) {
                     // IS NOT NULL case
@@ -695,14 +682,18 @@ public class FilterStatsCalculator
                 valueStats = input.getSymbolStatistics(layout.get(((InputReferenceExpression) value).getField()));
             }
             RowExpression lowerBound = call(
-                    OperatorType.GREATER_THAN_OR_EQUAL.name(),
-                    metadata.getFunctionAndTypeManager().resolveOperatorFunctionHandle(OperatorType.GREATER_THAN_OR_EQUAL, fromTypes(value.getType(), min.getType())),
+                    internalOperator(OperatorType.GREATER_THAN_OR_EQUAL,
+                            BOOLEAN.getTypeSignature(),
+                            value.getType().getTypeSignature(),
+                            min.getType().getTypeSignature()),
                     BOOLEAN,
                     value,
                     min);
             RowExpression upperBound = call(
-                    OperatorType.LESS_THAN_OR_EQUAL.name(),
-                    metadata.getFunctionAndTypeManager().resolveOperatorFunctionHandle(OperatorType.LESS_THAN_OR_EQUAL, fromTypes(value.getType(), max.getType())),
+                    internalOperator(OperatorType.LESS_THAN_OR_EQUAL,
+                            BOOLEAN.getTypeSignature(),
+                            value.getType().getTypeSignature(),
+                            max.getType().getTypeSignature()),
                     BOOLEAN,
                     value,
                     max);
@@ -711,10 +702,10 @@ public class FilterStatsCalculator
             if (isInfinite(valueStats.getLowValue())) {
                 // We want to do heuristic cut (infinite range to finite range) ASAP and then do filtering on finite range.
                 // We rely on 'and()' being processed left to right
-                transformed = LogicalRowExpressions.and(lowerBound, upperBound);
+                transformed = RowExpressionUtils.and(lowerBound, upperBound);
             }
             else {
-                transformed = LogicalRowExpressions.and(upperBound, lowerBound);
+                transformed = RowExpressionUtils.and(upperBound, lowerBound);
             }
             return process(transformed);
         }
@@ -793,8 +784,7 @@ public class FilterStatsCalculator
         {
             ImmutableList<PlanNodeStatsEstimate> equalityEstimates = candidates.stream()
                     .map(inValue -> process(call(
-                            OperatorType.EQUAL.name(),
-                            metadata.getFunctionAndTypeManager().resolveOperatorFunctionHandle(OperatorType.EQUAL, fromTypes(value.getType(), inValue.getType())),
+                            internalOperator(OperatorType.EQUAL, BOOLEAN.getTypeSignature(), value.getType().getTypeSignature(), inValue.getType().getTypeSignature()),
                             BOOLEAN, value, inValue)))
                     .collect(toImmutableList());
 
@@ -874,7 +864,7 @@ public class FilterStatsCalculator
 
         private RowExpression not(RowExpression expression)
         {
-            return call("not", functionResolution.notFunction(), expression.getType(), expression);
+            return call(Signatures.notSignature(), expression.getType(), expression);
         }
 
         private ComparisonExpression.Operator getComparisonOperator(OperatorType operator)

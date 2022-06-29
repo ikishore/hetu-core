@@ -23,7 +23,6 @@ import io.prestosql.orc.metadata.ColumnEncoding;
 import io.prestosql.orc.metadata.ColumnEncoding.ColumnEncodingKind;
 import io.prestosql.orc.metadata.ColumnMetadata;
 import io.prestosql.orc.stream.InputStreamSources;
-import io.prestosql.spi.PrestoException;
 import io.prestosql.spi.block.Block;
 import io.prestosql.spi.type.CharType;
 import io.prestosql.spi.type.Type;
@@ -41,7 +40,6 @@ import static io.prestosql.orc.metadata.ColumnEncoding.ColumnEncodingKind.DICTIO
 import static io.prestosql.orc.metadata.ColumnEncoding.ColumnEncodingKind.DIRECT;
 import static io.prestosql.orc.metadata.ColumnEncoding.ColumnEncodingKind.DIRECT_V2;
 import static io.prestosql.orc.reader.ReaderUtils.verifyStreamType;
-import static io.prestosql.spi.StandardErrorCode.NOT_SUPPORTED;
 import static io.prestosql.spi.type.Chars.byteCountWithoutTrailingSpace;
 import static io.prestosql.spi.type.Chars.isCharType;
 import static io.prestosql.spi.type.VarbinaryType.isVarbinaryType;
@@ -60,12 +58,9 @@ public class SliceColumnReader
     private ColumnReader currentReader;
 
     public SliceColumnReader(Type type, OrcColumn column, AggregatedMemoryContext systemMemoryContext)
-            throws OrcCorruptionException, PrestoException
+            throws OrcCorruptionException
     {
         requireNonNull(type, "type is null");
-        if (!(type instanceof VarcharType || type instanceof CharType || type instanceof VarbinaryType)) {
-            throw new PrestoException(NOT_SUPPORTED, String.format("Type %s can't be converted into type %s", type, column.getColumnType()));
-        }
         verifyStreamType(column, type, t -> t instanceof VarcharType || t instanceof CharType || t instanceof VarbinaryType);
 
         this.column = requireNonNull(column, "column is null");
@@ -90,7 +85,7 @@ public class SliceColumnReader
     }
 
     @Override
-    public void startStripe(ZoneId fileTimeZone, InputStreamSources dictionaryStreamSources, ColumnMetadata<ColumnEncoding> encoding)
+    public void startStripe(ZoneId fileTimeZone, ZoneId storageTimeZone, InputStreamSources dictionaryStreamSources, ColumnMetadata<ColumnEncoding> encoding)
             throws IOException
     {
         ColumnEncodingKind columnEncodingKind = encoding.get(column.getColumnId()).getColumnEncodingKind();
@@ -104,7 +99,7 @@ public class SliceColumnReader
             throw new IllegalArgumentException("Unsupported encoding " + columnEncodingKind);
         }
 
-        currentReader.startStripe(fileTimeZone, dictionaryStreamSources, encoding);
+        currentReader.startStripe(fileTimeZone, storageTimeZone, dictionaryStreamSources, encoding);
     }
 
     @Override

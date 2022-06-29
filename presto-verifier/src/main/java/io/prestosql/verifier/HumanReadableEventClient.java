@@ -199,9 +199,8 @@ public class HumanReadableEventClient
      */
     private static double sortableLongToDouble(long value)
     {
-        long val = value;
-        val = val ^ (val >> 63) & Long.MAX_VALUE;
-        return Double.longBitsToDouble(val);
+        value = value ^ (value >> 63) & Long.MAX_VALUE;
+        return Double.longBitsToDouble(value);
     }
 
     /**

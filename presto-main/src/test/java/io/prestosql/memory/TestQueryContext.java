@@ -40,8 +40,6 @@ import static io.airlift.units.DataSize.Unit.BYTE;
 import static io.prestosql.SessionTestUtils.TEST_SESSION;
 import static io.prestosql.memory.LocalMemoryManager.GENERAL_POOL;
 import static io.prestosql.memory.LocalMemoryManager.RESERVED_POOL;
-import static io.prestosql.testing.TestingPagesSerdeFactory.TESTING_SERDE_FACTORY;
-import static io.prestosql.testing.TestingRecoveryUtils.NOOP_RECOVERY_UTILS;
 import static java.util.concurrent.Executors.newScheduledThreadPool;
 import static org.testng.Assert.assertEquals;
 import static org.testng.Assert.assertNull;
@@ -86,8 +84,7 @@ public class TestQueryContext
                     localQueryRunner.getExecutor(),
                     localQueryRunner.getScheduler(),
                     new DataSize(0, BYTE),
-                    new SpillSpaceTracker(new DataSize(0, BYTE)),
-                    NOOP_RECOVERY_UTILS);
+                    new SpillSpaceTracker(new DataSize(0, BYTE)));
 
             // Use memory
             queryContext.getQueryMemoryContext().initializeLocalMemoryContexts("test");
@@ -116,9 +113,7 @@ public class TestQueryContext
         QueryId queryId = new QueryId("query");
         QueryContext queryContext = createQueryContext(queryId, generalPool);
         TaskStateMachine taskStateMachine = new TaskStateMachine(TaskId.valueOf("task-id"), TEST_EXECUTOR);
-        TaskContext taskContext = queryContext.addTaskContext(
-                taskStateMachine, TEST_SESSION, false, false, OptionalInt.empty(),
-                Optional.empty(), TESTING_SERDE_FACTORY);
+        TaskContext taskContext = queryContext.addTaskContext(taskStateMachine, TEST_SESSION, false, false, OptionalInt.empty(), Optional.empty());
         DriverContext driverContext = taskContext.addPipelineContext(0, false, false, false).addDriverContext();
         OperatorContext operatorContext = driverContext.addOperatorContext(0, new PlanNodeId("test"), "test");
 
@@ -154,7 +149,6 @@ public class TestQueryContext
                 TEST_EXECUTOR,
                 TEST_EXECUTOR,
                 new DataSize(0, BYTE),
-                new SpillSpaceTracker(new DataSize(0, BYTE)),
-                NOOP_RECOVERY_UTILS);
+                new SpillSpaceTracker(new DataSize(0, BYTE)));
     }
 }

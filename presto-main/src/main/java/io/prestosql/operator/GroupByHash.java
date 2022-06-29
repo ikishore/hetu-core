@@ -13,7 +13,10 @@
  */
 package io.prestosql.operator;
 
+import com.google.common.annotations.VisibleForTesting;
 import io.prestosql.Session;
+import io.prestosql.spi.Page;
+import io.prestosql.spi.PageBuilder;
 import io.prestosql.spi.type.Type;
 import io.prestosql.sql.gen.JoinCompiler;
 
@@ -25,7 +28,6 @@ import static io.prestosql.operator.UpdateMemory.NOOP;
 import static io.prestosql.spi.type.BigintType.BIGINT;
 
 public interface GroupByHash
-        extends GroupBy
 {
     static GroupByHash createGroupByHash(
             Session session,
@@ -52,4 +54,32 @@ public interface GroupByHash
         }
         return new MultiChannelGroupByHash(hashTypes, hashChannels, inputHashChannel, expectedSize, processDictionary, joinCompiler, updateMemory);
     }
+
+    long getEstimatedSize();
+
+    long getHashCollisions();
+
+    double getExpectedHashCollisions();
+
+    List<Type> getTypes();
+
+    int getGroupCount();
+
+    void appendValuesTo(int groupId, PageBuilder pageBuilder, int outputChannelOffset);
+
+    Work<?> addPage(Page page);
+
+    Work<GroupByIdBlock> getGroupIds(Page page);
+
+    boolean contains(int position, Page page, int[] hashChannels);
+
+    default boolean contains(int position, Page page, int[] hashChannels, long rawHash)
+    {
+        return contains(position, page, hashChannels);
+    }
+
+    long getRawHash(int groupyId);
+
+    @VisibleForTesting
+    int getCapacity();
 }

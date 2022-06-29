@@ -58,9 +58,8 @@ public class IntegerStreamReader
     @Override
     public void putInts(int rowId, int count, int value)
     {
-        int id = rowId;
         for (int i = 0; i < count; i++) {
-            putInt(id++, value);
+            putInt(rowId++, value);
         }
     }
 

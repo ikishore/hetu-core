@@ -1,5 +1,5 @@
 /*
- * Copyright (C) 2018-2021. Huawei Technologies Co., Ltd. All rights reserved.
+ * Copyright (C) 2018-2020. Huawei Technologies Co., Ltd. All rights reserved.
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
  * You may obtain a copy of the License at
@@ -14,14 +14,11 @@
  */
 package io.prestosql.seedstore;
 
-import com.fasterxml.jackson.annotation.JsonProperty;
-import com.google.common.collect.ImmutableSet;
 import io.prestosql.filesystem.FileSystemClientManager;
 import io.prestosql.spi.filesystem.HetuFileSystemClient;
 import io.prestosql.spi.seedstore.Seed;
 import io.prestosql.spi.seedstore.SeedStore;
 import io.prestosql.spi.seedstore.SeedStoreFactory;
-import io.prestosql.spi.seedstore.SeedStoreSubType;
 import io.prestosql.testing.assertions.Assert;
 import org.testng.annotations.BeforeMethod;
 import org.testng.annotations.BeforeTest;
@@ -62,7 +59,7 @@ public class TestSeedStoreManager
         // prepare seed store configs
         Map<String, String> seedStoreConfigs = new HashMap<String, String>(){{
                 put("seed-store.type", "filebased");
-                put("seed-store.filesystem.profile", "hdfs-config-default");
+                put("seed-store.filesystem.profile", "etc/filesystem/hdfs-config-default.properties");
                 put("seed-store.seed.heartbeat", "1000");
                 put("seed-store.seed.heartbeat.timeout", "3000");
             }};
@@ -92,7 +89,6 @@ public class TestSeedStoreManager
         SeedStoreFactory mockSeedStoreFactory = mock(SeedStoreFactory.class);
         when(mockSeedStoreFactory.getName()).thenReturn("filebased");
         when(mockSeedStoreFactory.create(any(String.class),
-                any(SeedStoreSubType.class),
                 any(HetuFileSystemClient.class),
                 any(Map.class))).thenReturn(mockSeedStore);
         seedStoreManager.addSeedStoreFactory(mockSeedStoreFactory);
@@ -103,7 +99,7 @@ public class TestSeedStoreManager
             throws IOException
     {
         seedStoreManager.loadSeedStore();
-        SeedStore returned = seedStoreManager.getSeedStore(SeedStoreSubType.HAZELCAST);
+        SeedStore returned = seedStoreManager.getSeedStore();
     }
 
     @Test
@@ -113,18 +109,18 @@ public class TestSeedStoreManager
         String location1 = "location1";
         String location2 = "location2";
         seedStoreManager.loadSeedStore();
-        seedStoreManager.addSeed(SeedStoreSubType.HAZELCAST, location1, false);
-        seedStoreManager.addSeed(SeedStoreSubType.HAZELCAST, location2, true);
-        Collection<Seed> result = seedStoreManager.getAllSeeds(SeedStoreSubType.HAZELCAST);
+        seedStoreManager.addSeed(location1, false);
+        seedStoreManager.addSeed(location2, true);
+        Collection<Seed> result = seedStoreManager.getAllSeeds();
         Assert.assertEquals(result.size(), 2);
-        Assert.assertTrue(result.stream().anyMatch(s -> s.getLocation().equals(location1)));
-        Assert.assertTrue(result.stream().anyMatch(s -> s.getLocation().equals(location2)));
+        Assert.assertTrue(result.stream().filter(s -> s.getLocation().equals(location1)).findAny().isPresent());
+        Assert.assertTrue(result.stream().filter(s -> s.getLocation().equals(location2)).findAny().isPresent());
 
         long timestamp1Old = result.stream().filter(s -> s.getLocation().equals(location1)).findAny().get().getTimestamp();
         long timestamp2Old = result.stream().filter(s -> s.getLocation().equals(location2)).findAny().get().getTimestamp();
         //wait 2 seconds, seed2 will be updated with new timestamp
         Thread.sleep(2000);
-        result = seedStoreManager.getAllSeeds(SeedStoreSubType.HAZELCAST);
+        result = seedStoreManager.getAllSeeds();
         long timestamp1New = result.stream().filter(s -> s.getLocation().equals(location1)).findAny().get().getTimestamp();
         long timestamp2New = result.stream().filter(s -> s.getLocation().equals(location2)).findAny().get().getTimestamp();
         Assert.assertTrue(timestamp1Old == timestamp1New);
@@ -139,12 +135,12 @@ public class TestSeedStoreManager
         String location2 = "location2";
         String location3 = "location3";
         seedStoreManager.loadSeedStore();
-        seedStoreManager.addSeed(SeedStoreSubType.HAZELCAST, location1, false);
-        seedStoreManager.addSeed(SeedStoreSubType.HAZELCAST, location2, true);
-        Assert.assertEquals(seedStoreManager.getAllSeeds(SeedStoreSubType.HAZELCAST).size(), 2);
-        seedStoreManager.removeSeed(SeedStoreSubType.HAZELCAST, location1);
-        seedStoreManager.removeSeed(SeedStoreSubType.HAZELCAST, location3);
-        Collection<Seed> result = seedStoreManager.getAllSeeds(SeedStoreSubType.HAZELCAST);
+        seedStoreManager.addSeed(location1, false);
+        seedStoreManager.addSeed(location2, true);
+        Assert.assertEquals(seedStoreManager.getAllSeeds().size(), 2);
+        seedStoreManager.removeSeed(location1);
+        seedStoreManager.removeSeed(location3);
+        Collection<Seed> result = seedStoreManager.getAllSeeds();
         Assert.assertEquals(result.size(), 1);
         Assert.assertFalse(result.stream().filter(s -> s.getLocation().equals(location1)).findAny().isPresent());
     }
@@ -156,13 +152,13 @@ public class TestSeedStoreManager
         String location1 = "location1";
         String location2 = "location2";
         seedStoreManager.loadSeedStore();
-        seedStoreManager.addSeed(SeedStoreSubType.HAZELCAST, location1, false);
-        seedStoreManager.addSeed(SeedStoreSubType.HAZELCAST, location2, true);
-        Assert.assertEquals(seedStoreManager.getAllSeeds(SeedStoreSubType.HAZELCAST).size(), 2);
+        seedStoreManager.addSeed(location1, false);
+        seedStoreManager.addSeed(location2, true);
+        Assert.assertEquals(seedStoreManager.getAllSeeds().size(), 2);
         //wait 5 seconds, location1 expired since refreshable is not enabled
         Thread.sleep(5000);
-        seedStoreManager.clearExpiredSeeds(SeedStoreSubType.HAZELCAST);
-        Collection<Seed> result = seedStoreManager.getAllSeeds(SeedStoreSubType.HAZELCAST);
+        seedStoreManager.clearExpiredSeeds();
+        Collection<Seed> result = seedStoreManager.getAllSeeds();
         Assert.assertEquals(result.size(), 1);
         Assert.assertFalse(result.stream().filter(s -> s.getLocation().equals(location1)).findAny().isPresent());
     }
@@ -191,7 +187,7 @@ public class TestSeedStoreManager
             }};
         createConfigFile("etc/state-store.properties", stateStoreConfigs);
         seedStoreManager.loadSeedStore();
-        Assert.assertNull(seedStoreManager.getSeedStore(SeedStoreSubType.HAZELCAST));
+        Assert.assertNull(seedStoreManager.getSeedStore());
         // reset config files
         prepareConfigFiles();
     }
@@ -234,37 +230,15 @@ public class TestSeedStoreManager
         }
 
         @Override
-        @JsonProperty
         public String getLocation()
         {
             return location;
         }
 
         @Override
-        @JsonProperty
-        public void setLocation(String location)
-        {
-            this.location = location;
-        }
-
-        @Override
-        @JsonProperty
         public long getTimestamp()
         {
             return timestamp;
-        }
-
-        @Override
-        @JsonProperty
-        public void setTimestamp(long timestamp)
-        {
-            this.timestamp = timestamp;
-        }
-
-        @Override
-        public String getUniqueInstanceId()
-        {
-            return "none";
         }
 
         @Override
@@ -272,6 +246,11 @@ public class TestSeedStoreManager
                 throws IOException
         {
             return "MOCK SEED. SHOULD NOT SERIALIZE.";
+        }
+
+        public void setTimestamp(long timestamp)
+        {
+            this.timestamp = timestamp;
         }
 
         @Override
@@ -306,7 +285,7 @@ public class TestSeedStoreManager
             implements SeedStore
     {
         private static final int INITIAL_SIZE = 0;
-        private final Set<Seed> seeds;
+        private Set<Seed> seeds;
 
         /**
          * Constructor for the mock seed store
@@ -317,7 +296,7 @@ public class TestSeedStoreManager
         }
 
         @Override
-        public synchronized Collection<Seed> add(Collection<Seed> seedsToAdd)
+        public Collection<Seed> add(Collection<Seed> seedsToAdd)
         {
             // overwrite all seeds
             this.seeds.removeAll(seedsToAdd);
@@ -326,13 +305,13 @@ public class TestSeedStoreManager
         }
 
         @Override
-        public synchronized Collection<Seed> get()
+        public Collection<Seed> get()
         {
-            return ImmutableSet.copyOf(seeds);
+            return seeds;
         }
 
         @Override
-        public synchronized Collection<Seed> remove(Collection<Seed> seedsToRemove)
+        public Collection<Seed> remove(Collection<Seed> seedsToRemove)
         {
             this.seeds.removeAll(seedsToRemove);
             return this.seeds;

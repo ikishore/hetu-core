@@ -14,13 +14,10 @@
 package io.prestosql.spi.block;
 
 import io.airlift.slice.Slice;
-import io.prestosql.spi.snapshot.BlockEncodingSerdeProvider;
 import org.openjdk.jol.info.ClassLayout;
 
-import java.io.Serializable;
 import java.util.function.BiConsumer;
 
-import static com.google.common.base.Preconditions.checkState;
 import static java.lang.String.format;
 
 public class SingleRowBlockWriter<T>
@@ -40,11 +37,11 @@ public class SingleRowBlockWriter<T>
     {
         super(rowIndex);
         this.fieldBlockBuilders = fieldBlockBuilders;
-        long finalInitialBlockBuilderSize = 0;
+        long initialBlockBuilderSize = 0;
         for (BlockBuilder fieldBlockBuilder : fieldBlockBuilders) {
-            finalInitialBlockBuilderSize += fieldBlockBuilder.getSizeInBytes();
+            initialBlockBuilderSize += fieldBlockBuilder.getSizeInBytes();
         }
-        this.initialBlockBuilderSize = finalInitialBlockBuilderSize;
+        this.initialBlockBuilderSize = initialBlockBuilderSize;
     }
 
     /**
@@ -129,14 +126,6 @@ public class SingleRowBlockWriter<T>
     {
         checkFieldIndexToWrite();
         fieldBlockBuilders[currentFieldIndexToWrite].writeLong(value);
-        return this;
-    }
-
-    @Override
-    public BlockBuilder writeDouble(double value)
-    {
-        checkFieldIndexToWrite();
-        fieldBlockBuilders[currentFieldIndexToWrite].writeDouble(value);
         return this;
     }
 
@@ -243,41 +232,5 @@ public class SingleRowBlockWriter<T>
         if (currentFieldIndexToWrite >= fieldBlockBuilders.length) {
             throw new IllegalStateException("currentFieldIndexToWrite is not valid");
         }
-    }
-
-    @Override
-    public Object capture(BlockEncodingSerdeProvider serdeProvider)
-    {
-        SingleRowBlockWriterState myState = new SingleRowBlockWriterState();
-        myState.fieldBlockBuilders = new Object[fieldBlockBuilders.length];
-        for (int i = 0; i < fieldBlockBuilders.length; i++) {
-            myState.fieldBlockBuilders[i] = fieldBlockBuilders[i].capture(serdeProvider);
-        }
-        myState.positionsWritten = positionsWritten;
-        myState.currentFieldIndexToWrite = currentFieldIndexToWrite;
-        myState.fieldBlockBuilderReturned = fieldBlockBuilderReturned;
-        return myState;
-    }
-
-    @Override
-    public void restore(Object state, BlockEncodingSerdeProvider serdeProvider)
-    {
-        SingleRowBlockWriterState myState = (SingleRowBlockWriterState) state;
-        checkState(myState.fieldBlockBuilders.length == this.fieldBlockBuilders.length);
-        for (int i = 0; i < myState.fieldBlockBuilders.length; i++) {
-            this.fieldBlockBuilders[i].restore(myState.fieldBlockBuilders[i], serdeProvider);
-        }
-        this.positionsWritten = myState.positionsWritten;
-        this.currentFieldIndexToWrite = myState.currentFieldIndexToWrite;
-        this.fieldBlockBuilderReturned = myState.fieldBlockBuilderReturned;
-    }
-
-    private static class SingleRowBlockWriterState
-            implements Serializable
-    {
-        private Object[] fieldBlockBuilders;
-        private int positionsWritten;
-        private int currentFieldIndexToWrite;
-        private boolean fieldBlockBuilderReturned;
     }
 }

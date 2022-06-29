@@ -46,9 +46,8 @@ public abstract class AbstractOrcDataSource
     private final boolean lazyReadSmallRanges;
     private long readTimeNanos;
     private long readBytes;
-    private final long lastModifiedTime;
 
-    public AbstractOrcDataSource(OrcDataSourceId id, long size, DataSize maxMergeDistance, DataSize maxBufferSize, DataSize streamBufferSize, boolean lazyReadSmallRanges, long lastModifiedTime)
+    public AbstractOrcDataSource(OrcDataSourceId id, long size, DataSize maxMergeDistance, DataSize maxBufferSize, DataSize streamBufferSize, boolean lazyReadSmallRanges)
     {
         this.id = requireNonNull(id, "id is null");
 
@@ -59,7 +58,6 @@ public abstract class AbstractOrcDataSource
         this.maxBufferSize = requireNonNull(maxBufferSize, "maxBufferSize is null");
         this.streamBufferSize = requireNonNull(streamBufferSize, "streamBufferSize is null");
         this.lazyReadSmallRanges = lazyReadSmallRanges;
-        this.lastModifiedTime = lastModifiedTime;
     }
 
     protected abstract void readInternal(long position, byte[] buffer, int bufferOffset, int bufferLength)
@@ -87,12 +85,6 @@ public abstract class AbstractOrcDataSource
     public final long getSize()
     {
         return size;
-    }
-
-    @Override
-    public final long getLastModifiedTime()
-    {
-        return lastModifiedTime;
     }
 
     @Override

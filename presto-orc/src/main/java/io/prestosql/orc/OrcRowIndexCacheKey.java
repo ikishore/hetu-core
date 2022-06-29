@@ -1,5 +1,5 @@
 /*
- * Copyright (C) 2018-2021. Huawei Technologies Co., Ltd. All rights reserved.
+ * Copyright (C) 2018-2020. Huawei Technologies Co., Ltd. All rights reserved.
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
  * You may obtain a copy of the License at
@@ -18,16 +18,16 @@ import java.util.Objects;
 
 public class OrcRowIndexCacheKey
 {
-    private OrcDataSourceIdWithTimeStamp orcDataSourceId;
+    private OrcDataSourceId orcDataSourceId;
     private long stripeOffset;
     private StreamId streamId;
 
-    public OrcDataSourceIdWithTimeStamp getOrcDataSourceId()
+    public OrcDataSourceId getOrcDataSourceId()
     {
         return orcDataSourceId;
     }
 
-    public void setOrcDataSourceId(OrcDataSourceIdWithTimeStamp orcDataSourceId)
+    public void setOrcDataSourceId(OrcDataSourceId orcDataSourceId)
     {
         this.orcDataSourceId = orcDataSourceId;
     }

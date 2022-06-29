@@ -59,7 +59,7 @@ public class TestFunctionMetadata
     {
         FunctionMetadata funcMetadata = new FunctionMetadata(
                 "isemptyio.hetu.core.hive.dynamicfunctions.examples.udf.IsEmptyUDF");
-        assertEquals(funcMetadata.getFunctionName(), "IsEmptyUDF");
+        funcMetadata.getFunctionName();
     }
 
     @Test
@@ -85,7 +85,7 @@ public class TestFunctionMetadata
     {
         FunctionMetadata funcMetadata = new FunctionMetadata(
                 "isemptyio.hetu.core.hive.dynamicfunctions.examples.udf.IsEmptyUDF");
-        assertEquals(funcMetadata.getClassName(), "isemptyio.hetu.core.hive.dynamicfunctions.examples.udf");
+        funcMetadata.getClassName();
     }
 
     @Test

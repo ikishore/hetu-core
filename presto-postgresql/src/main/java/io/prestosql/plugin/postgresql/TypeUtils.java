@@ -35,6 +35,7 @@ import java.math.BigInteger;
 import java.math.MathContext;
 import java.sql.Date;
 import java.sql.Timestamp;
+import java.time.ZoneId;
 import java.time.ZoneOffset;
 
 import static io.airlift.slice.Slices.utf8Slice;
@@ -190,6 +191,10 @@ public final class TypeUtils
 
         if (TIMESTAMP.equals(prestoType)) {
             Timestamp timestamp = (Timestamp) jdbcObject;
+            if (session.isLegacyTimestamp()) {
+                ZoneId sessionZone = ZoneId.of(session.getTimeZoneKey().getId());
+                return timestamp.toLocalDateTime().atZone(sessionZone).toInstant().toEpochMilli();
+            }
             return timestamp.toLocalDateTime().atZone(ZoneOffset.UTC).toInstant().toEpochMilli();
         }
 

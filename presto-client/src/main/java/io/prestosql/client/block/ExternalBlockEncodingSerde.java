@@ -80,9 +80,8 @@ public final class ExternalBlockEncodingSerde
     }
 
     @Override
-    public void writeBlock(SliceOutput output, Block inputBlock)
+    public void writeBlock(SliceOutput output, Block block)
     {
-        Block block = inputBlock;
         while (true) {
             // get the encoding name
             String encodingName = block.getEncodingName();

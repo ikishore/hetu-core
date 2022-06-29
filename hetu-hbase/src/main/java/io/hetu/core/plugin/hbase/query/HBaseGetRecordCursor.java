@@ -1,5 +1,5 @@
 /*
- * Copyright (C) 2018-2021. Huawei Technologies Co., Ltd. All rights reserved.
+ * Copyright (C) 2018-2020. Huawei Technologies Co., Ltd. All rights reserved.
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
  * You may obtain a copy of the License at
@@ -48,6 +48,8 @@ public class HBaseGetRecordCursor
 {
     private static final Logger LOG = Logger.get(HBaseGetRecordCursor.class);
 
+    private Connection conn;
+
     private Result[] results;
 
     private int currentRecordIndex;
@@ -62,12 +64,15 @@ public class HBaseGetRecordCursor
             String[] fieldToColumnName,
             String defaultValue)
     {
-        super(columnHandles, columnTypes, serializer, fieldToColumnName, rowIdName, defaultValue);
+        super(columnHandles, columnTypes, serializer, rowIdName, fieldToColumnName, defaultValue);
         startTime = System.currentTimeMillis();
         this.columnHandles = columnHandles;
+
         this.rowIdName =
                 requireNonNull(hBaseSplit.getRowKeyName(), "RowKeyName cannot be null if you want to query by RowKey");
+
         this.split = hBaseSplit;
+        this.conn = connection;
         try (Table table =
                 connection.getTable(TableName.valueOf(hBaseSplit.getTableHandle().getHbaseTableName().get()))) {
             List<String> rowKeys = new ArrayList<>();
@@ -149,5 +154,13 @@ public class HBaseGetRecordCursor
     @Override
     public void close()
     {
+        try (Connection connection = this.conn) {
+            if (connection != null) {
+                connection.close();
+            }
+        }
+        catch (IOException e) {
+            // ignore exception from close
+        }
     }
 }

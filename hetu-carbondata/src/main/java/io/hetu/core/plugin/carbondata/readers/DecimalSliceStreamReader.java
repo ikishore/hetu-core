@@ -76,9 +76,8 @@ public class DecimalSliceStreamReader
     @Override
     public void putDecimals(int rowId, int count, BigDecimal value, int precision)
     {
-        int id = rowId;
         for (int i = 0; i < count; i++) {
-            putDecimal(id++, value, precision);
+            putDecimal(rowId++, value, precision);
         }
     }
 

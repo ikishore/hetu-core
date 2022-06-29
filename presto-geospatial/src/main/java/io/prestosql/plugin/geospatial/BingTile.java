@@ -83,13 +83,13 @@ public final class BingTile
 
     public static BingTile fromQuadKey(String quadKey)
     {
-        int tmpZoomLevel = quadKey.length();
-        checkArgument(tmpZoomLevel <= MAX_ZOOM_LEVEL);
+        int zoomLevel = quadKey.length();
+        checkArgument(zoomLevel <= MAX_ZOOM_LEVEL);
         int tileX = 0;
         int tileY = 0;
-        for (int i = tmpZoomLevel; i > 0; i--) {
+        for (int i = zoomLevel; i > 0; i--) {
             int mask = 1 << (i - 1);
-            switch (quadKey.charAt(tmpZoomLevel - i)) {
+            switch (quadKey.charAt(zoomLevel - i)) {
                 case '0':
                     break;
                 case '1':
@@ -107,7 +107,7 @@ public final class BingTile
             }
         }
 
-        return new BingTile(tileX, tileY, tmpZoomLevel);
+        return new BingTile(tileX, tileY, zoomLevel);
     }
 
     @JsonProperty
@@ -158,8 +158,8 @@ public final class BingTile
     {
         int tileX = (int) (tile >> 28);
         int tileY = (int) ((tile % (1 << 28)) >> 5);
-        int tmpZoomLevel = (int) (tile % (1 << 5));
+        int zoomLevel = (int) (tile % (1 << 5));
 
-        return new BingTile(tileX, tileY, tmpZoomLevel);
+        return new BingTile(tileX, tileY, zoomLevel);
     }
 }

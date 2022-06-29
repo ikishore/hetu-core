@@ -56,11 +56,11 @@ public class RowType
 
     public static RowType anonymous(List<Type> types)
     {
-        List<Field> localFields = types.stream()
+        List<Field> fields = types.stream()
                 .map(type -> new Field(Optional.empty(), type))
                 .collect(Collectors.toList());
 
-        return new RowType(makeSignature(localFields), localFields);
+        return new RowType(makeSignature(fields), fields);
     }
 
     // Only RowParametricType.createType should call this method
@@ -212,7 +212,6 @@ public class RowType
         return fields.stream().allMatch(field -> field.getType().isOrderable());
     }
 
-    @Override
     public <T> boolean equalTo(Block<T> leftBlock, int leftPosition, Block<T> rightBlock, int rightPosition)
     {
         //FIXME: KEN: Generic should be used

@@ -38,7 +38,7 @@ public class ColumnarArray
         }
 
         AbstractArrayBlock arrayBlock = (AbstractArrayBlock) block;
-        Block rawElementsBlock = arrayBlock.getRawElementBlock();
+        Block elementsBlock = arrayBlock.getRawElementBlock();
 
         // trim elements to just visible region
         int elementsOffset = 0;
@@ -47,9 +47,9 @@ public class ColumnarArray
             elementsOffset = arrayBlock.getOffset(0);
             elementsLength = arrayBlock.getOffset(arrayBlock.getPositionCount()) - elementsOffset;
         }
-        rawElementsBlock = rawElementsBlock.getRegion(elementsOffset, elementsLength);
+        elementsBlock = elementsBlock.getRegion(elementsOffset, elementsLength);
 
-        return new ColumnarArray(block, arrayBlock.getOffsetBase(), arrayBlock.getOffsets(), rawElementsBlock);
+        return new ColumnarArray(block, arrayBlock.getOffsetBase(), arrayBlock.getOffsets(), elementsBlock);
     }
 
     private static ColumnarArray toColumnarArray(DictionaryBlock dictionaryBlock)
@@ -57,14 +57,14 @@ public class ColumnarArray
         ColumnarArray columnarArray = toColumnarArray(dictionaryBlock.getDictionary());
 
         // build new offsets
-        int[] finalOffsets = new int[dictionaryBlock.getPositionCount() + 1];
+        int[] offsets = new int[dictionaryBlock.getPositionCount() + 1];
         for (int position = 0; position < dictionaryBlock.getPositionCount(); position++) {
             int dictionaryId = dictionaryBlock.getId(position);
-            finalOffsets[position + 1] = finalOffsets[position] + columnarArray.getLength(dictionaryId);
+            offsets[position + 1] = offsets[position] + columnarArray.getLength(dictionaryId);
         }
 
         // reindex dictionary
-        int[] dictionaryIds = new int[finalOffsets[dictionaryBlock.getPositionCount()]];
+        int[] dictionaryIds = new int[offsets[dictionaryBlock.getPositionCount()]];
         int nextDictionaryIndex = 0;
         for (int position = 0; position < dictionaryBlock.getPositionCount(); position++) {
             int dictionaryId = dictionaryBlock.getId(position);
@@ -80,7 +80,7 @@ public class ColumnarArray
         return new ColumnarArray(
                 dictionaryBlock,
                 0,
-                finalOffsets,
+                offsets,
                 new DictionaryBlock(dictionaryIds.length, columnarArray.getElementsBlock(), dictionaryIds));
     }
 
@@ -89,10 +89,10 @@ public class ColumnarArray
         ColumnarArray columnarArray = toColumnarArray(rleBlock.getValue());
 
         // build new offsets block
-        int[] finalOffsets = new int[rleBlock.getPositionCount() + 1];
+        int[] offsets = new int[rleBlock.getPositionCount() + 1];
         int valueLength = columnarArray.getLength(0);
-        for (int i = 0; i < finalOffsets.length; i++) {
-            finalOffsets[i] = i * valueLength;
+        for (int i = 0; i < offsets.length; i++) {
+            offsets[i] = i * valueLength;
         }
 
         // create indexes for a dictionary block of the elements
@@ -108,7 +108,7 @@ public class ColumnarArray
         return new ColumnarArray(
                 rleBlock,
                 0,
-                finalOffsets,
+                offsets,
                 new DictionaryBlock(dictionaryIds.length, columnarArray.getElementsBlock(), dictionaryIds));
     }
 

@@ -16,7 +16,6 @@ package io.hetu.core.common.util;
 
 import java.io.File;
 import java.io.IOException;
-import java.nio.file.Path;
 import java.util.Arrays;
 import java.util.HashSet;
 import java.util.Set;
@@ -37,7 +36,6 @@ public class SecurePathWhiteList
 
     /**
      * Due to security concerns, all data must be read from one of the whitelisted paths
-     *
      * @return
      * @throws IOException
      */
@@ -53,11 +51,6 @@ public class SecurePathWhiteList
         // the white list includes the {INSTALL_DIR}
         securePathwhiteList.add(new File("..").getCanonicalPath());
         return securePathwhiteList;
-    }
-
-    public static boolean isSecurePath(Path absolutePath) throws IOException
-    {
-        return isSecurePath(absolutePath.toString());
     }
 
     public static boolean isSecurePath(String absolutePath) throws IOException

@@ -1,5 +1,5 @@
 /*
- * Copyright (C) 2018-2021. Huawei Technologies Co., Ltd. All rights reserved.
+ * Copyright (C) 2018-2020. Huawei Technologies Co., Ltd. All rights reserved.
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
  * You may obtain a copy of the License at
@@ -26,14 +26,10 @@ import io.hetu.core.cube.startree.tree.StarTreeMetadataBuilder;
 import io.hetu.core.spi.cube.CubeMetadata;
 import io.hetu.core.spi.cube.CubeStatus;
 import io.hetu.core.spi.cube.io.CubeMetaStore;
-import io.prestosql.spi.favorite.FavoriteEntity;
-import io.prestosql.spi.favorite.FavoriteResult;
 import io.prestosql.spi.metastore.HetuMetastore;
 import io.prestosql.spi.metastore.model.CatalogEntity;
 import io.prestosql.spi.metastore.model.DatabaseEntity;
 import io.prestosql.spi.metastore.model.TableEntity;
-import io.prestosql.spi.queryhistory.QueryHistoryEntity;
-import io.prestosql.spi.queryhistory.QueryHistoryResult;
 import io.prestosql.sql.analyzer.FeaturesConfig;
 import org.testng.annotations.BeforeClass;
 import org.testng.annotations.Test;
@@ -72,22 +68,20 @@ public class TestStarTreeMetaStore
         cubeMetadataService = new StarTreeProvider().getCubeMetaStore(metaStore, properties);
         cubeMetadata1 = new StarTreeMetadata("star1",
                 "a",
-                1000,
                 ImmutableList.of(
                         new AggregateColumn("sum_cost", "SUM", "cost", false),
                         new DimensionColumn("value", "value")),
                 ImmutableList.of(ImmutableSet.of("value")),
-                null,
+                "",
                 10000,
                 CubeStatus.READY);
         cubeMetadata2 = new StarTreeMetadata("star2",
                 "a",
-                1000,
                 ImmutableList.of(
                         new AggregateColumn("sum_cost", "SUM", "cost", false),
                         new DimensionColumn("value", "value")),
                 ImmutableList.of(ImmutableSet.of("value")),
-                null,
+                "",
                 10000,
                 CubeStatus.READY);
     }
@@ -99,7 +93,7 @@ public class TestStarTreeMetaStore
 
         assertFalse(metaStore.getCatalogs().isEmpty());
         assertFalse(metaStore.getAllDatabases(CUBE_CATALOG).isEmpty());
-        assertTrue(metaStore.getTable(CUBE_CATALOG, CUBE_DATABASE, cubeMetadata1.getCubeName()).isPresent());
+        assertTrue(metaStore.getTable(CUBE_CATALOG, CUBE_DATABASE, cubeMetadata1.getCubeTableName()).isPresent());
     }
 
     @Test
@@ -109,8 +103,8 @@ public class TestStarTreeMetaStore
         cubeMetadataService.persist(cubeMetadata2);
         assertFalse(metaStore.getCatalogs().isEmpty());
         assertFalse(metaStore.getAllDatabases(CUBE_CATALOG).isEmpty());
-        assertTrue(metaStore.getTable(CUBE_CATALOG, CUBE_DATABASE, cubeMetadata1.getCubeName()).isPresent());
-        assertTrue(metaStore.getTable(CUBE_CATALOG, CUBE_DATABASE, cubeMetadata2.getCubeName()).isPresent());
+        assertTrue(metaStore.getTable(CUBE_CATALOG, CUBE_DATABASE, cubeMetadata1.getCubeTableName()).isPresent());
+        assertTrue(metaStore.getTable(CUBE_CATALOG, CUBE_DATABASE, cubeMetadata2.getCubeTableName()).isPresent());
     }
 
     @Test
@@ -123,8 +117,8 @@ public class TestStarTreeMetaStore
 
         assertFalse(metaStore.getCatalogs().isEmpty());
         assertFalse(metaStore.getAllDatabases(CUBE_CATALOG).isEmpty());
-        assertTrue(metaStore.getTable(CUBE_CATALOG, CUBE_DATABASE, cubeMetadata1.getCubeName()).isPresent());
-        assertFalse(metaStore.getTable(CUBE_CATALOG, CUBE_DATABASE, cubeMetadata2.getCubeName()).isPresent());
+        assertTrue(metaStore.getTable(CUBE_CATALOG, CUBE_DATABASE, cubeMetadata1.getCubeTableName()).isPresent());
+        assertFalse(metaStore.getTable(CUBE_CATALOG, CUBE_DATABASE, cubeMetadata2.getCubeTableName()).isPresent());
     }
 
     @Test
@@ -141,7 +135,7 @@ public class TestStarTreeMetaStore
 
         assertFalse(cubeMetadataService.getMetadataList("a").isEmpty());
         cubeMetadataService.getMetadataList("a").forEach(cube -> {
-            assertEquals(cube.getSourceTableName(), "a");
+            assertEquals(cube.getOriginalTableName(), "a");
             assertEquals(cube.getDimensions(), Collections.singleton("value"));
         });
         assertEquals(cubeMetadataService.getMetadataList("a").size(), 2);
@@ -159,23 +153,12 @@ public class TestStarTreeMetaStore
     }
 
     @Test
-    public void testGetAllCubes()
-    {
-        cubeMetadataService.persist(cubeMetadata1);
-        cubeMetadataService.persist(cubeMetadata2);
-        List<CubeMetadata> result = cubeMetadataService.getAllCubes();
-        assertEquals(result.size(), 2);
-        assertTrue(result.containsAll(ImmutableList.of(cubeMetadata1, cubeMetadata2)));
-    }
-
-    @Test
     public void testUpdateMetadata()
     {
         cubeMetadataService.persist(cubeMetadata1);
         StarTreeMetadata starTreeMetadata = (StarTreeMetadata) cubeMetadata1;
         StarTreeMetadataBuilder builder = new StarTreeMetadataBuilder(starTreeMetadata);
-        builder.setCubeLastUpdatedTime(System.currentTimeMillis());
-        CubeMetadata updated = builder.build();
+        CubeMetadata updated = builder.build(System.currentTimeMillis());
         assertNotEquals(cubeMetadata1, updated);
     }
 
@@ -299,63 +282,6 @@ public class TestStarTreeMetaStore
         public List<TableEntity> getAllTables(String catalogName, String databaseName)
         {
             return tables;
-        }
-
-        @Override
-        public void alterCatalogParameter(String catalogName, String key, String value) {}
-
-        @Override
-        public void alterDatabaseParameter(String catalogName, String databaseName, String key, String value) {}
-
-        @Override
-        public void alterTableParameter(String catalogName, String databaseName, String tableName, String key, String value) {}
-
-        @Override
-        public void insertQueryHistory(QueryHistoryEntity queryHistoryEntity, String jsonString)
-        {
-        }
-
-        @Override
-        public void deleteQueryHistoryBatch()
-        {
-        }
-
-        @Override
-        public long getAllQueryHistoryNum()
-        {
-            return 0;
-        }
-
-        @Override
-        public String getQueryDetail(String queryId)
-        {
-            return null;
-        }
-
-        @Override
-        public QueryHistoryResult getQueryHistory(int startNum, int pageSize,
-                                                  String user, String startTime, String endTime,
-                                                  String queryId, String query, String resourceGroup,
-                                                  String resource, List<String> state, List<String> failed,
-                                                  String sort, String sortOrder)
-        {
-            return null;
-        }
-
-        @Override
-        public void insertFavorite(FavoriteEntity favoriteEntity)
-        {
-        }
-
-        @Override
-        public void deleteFavorite(FavoriteEntity favoriteEntity)
-        {
-        }
-
-        @Override
-        public FavoriteResult getFavorite(int startNum, int pageSize, String user)
-        {
-            return null;
         }
     }
 }

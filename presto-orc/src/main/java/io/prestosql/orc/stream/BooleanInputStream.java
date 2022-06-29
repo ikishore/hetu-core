@@ -75,10 +75,9 @@ public class BooleanInputStream
     }
 
     @Override
-    public void skip(long inputItems)
+    public void skip(long items)
             throws IOException
     {
-        long items = inputItems;
         if (bitsInData >= items) {
             data <<= items;
             bitsInData -= items;
@@ -98,11 +97,10 @@ public class BooleanInputStream
         }
     }
 
-    public int countBitsSet(int inputItems)
+    public int countBitsSet(int items)
             throws IOException
     {
         int count = 0;
-        int items = inputItems;
 
         // count buffered data
         if (items > bitsInData && bitsInData > 0) {
@@ -152,27 +150,18 @@ public class BooleanInputStream
             switch (count) {
                 case 7:
                     vector[offset++] = (byte) ((value & 64) >>> 6);
-                    // $FALL-THROUGH$
                 case 6:
                     vector[offset++] = (byte) ((value & 32) >>> 5);
-                    // $FALL-THROUGH$
                 case 5:
                     vector[offset++] = (byte) ((value & 16) >>> 4);
-                    // $FALL-THROUGH$
                 case 4:
                     vector[offset++] = (byte) ((value & 8) >>> 3);
-                    // $FALL-THROUGH$
                 case 3:
                     vector[offset++] = (byte) ((value & 4) >>> 2);
-                    // $FALL-THROUGH$
                 case 2:
                     vector[offset++] = (byte) ((value & 2) >>> 1);
-                    // $FALL-THROUGH$
                 case 1:
                     vector[offset++] = (byte) ((value & 1) >>> 0);
-                    break;
-                default:
-                    break;
             }
             data <<= count;
             bitsInData -= count;
@@ -199,34 +188,25 @@ public class BooleanInputStream
         // the tail
         int remaining = batchSize - offset;
         if (remaining > 0) {
-            byte localData = byteStream.next();
-            int value = localData >>> (8 - remaining);
+            byte data = byteStream.next();
+            int value = data >>> (8 - remaining);
             switch (remaining) {
                 case 7:
                     vector[offset++] = (byte) ((value & 64) >>> 6);
-                    // $FALL-THROUGH$
                 case 6:
                     vector[offset++] = (byte) ((value & 32) >>> 5);
-                    // $FALL-THROUGH$
                 case 5:
                     vector[offset++] = (byte) ((value & 16) >>> 4);
-                    // $FALL-THROUGH$
                 case 4:
                     vector[offset++] = (byte) ((value & 8) >>> 3);
-                    // $FALL-THROUGH$
                 case 3:
                     vector[offset++] = (byte) ((value & 4) >>> 2);
-                    // $FALL-THROUGH$
                 case 2:
                     vector[offset++] = (byte) ((value & 2) >>> 1);
-                    // $FALL-THROUGH$
                 case 1:
                     vector[offset++] = (byte) ((value & 1) >>> 0);
-                    break;
-                default:
-                    break;
             }
-            this.data = (byte) (localData << remaining);
+            this.data = (byte) (data << remaining);
             bitsInData = 8 - remaining;
         }
     }
@@ -249,27 +229,18 @@ public class BooleanInputStream
             switch (count) {
                 case 7:
                     vector[offset++] = (value & 64) == 0;
-                    // $FALL-THROUGH$
                 case 6:
                     vector[offset++] = (value & 32) == 0;
-                    // $FALL-THROUGH$
                 case 5:
                     vector[offset++] = (value & 16) == 0;
-                    // $FALL-THROUGH$
                 case 4:
                     vector[offset++] = (value & 8) == 0;
-                    // $FALL-THROUGH$
                 case 3:
                     vector[offset++] = (value & 4) == 0;
-                    // $FALL-THROUGH$
                 case 2:
                     vector[offset++] = (value & 2) == 0;
-                    // $FALL-THROUGH$
                 case 1:
                     vector[offset++] = (value & 1) == 0;
-                    break;
-                default:
-                    break;
             }
             data <<= count;
             bitsInData -= count;
@@ -297,35 +268,26 @@ public class BooleanInputStream
         // the tail
         int remaining = batchSize - offset;
         if (remaining > 0) {
-            byte localData = byteStream.next();
-            int value = (localData & 0xff) >> (8 - remaining);
+            byte data = byteStream.next();
+            int value = (data & 0xff) >> (8 - remaining);
             unsetCount += (remaining - Integer.bitCount(value));
             switch (remaining) {
                 case 7:
                     vector[offset++] = (value & 64) == 0;
-                    // $FALL-THROUGH$
                 case 6:
                     vector[offset++] = (value & 32) == 0;
-                    // $FALL-THROUGH$
                 case 5:
                     vector[offset++] = (value & 16) == 0;
-                    // $FALL-THROUGH$
                 case 4:
                     vector[offset++] = (value & 8) == 0;
-                    // $FALL-THROUGH$
                 case 3:
                     vector[offset++] = (value & 4) == 0;
-                    // $FALL-THROUGH$
                 case 2:
                     vector[offset++] = (value & 2) == 0;
-                    // $FALL-THROUGH$
                 case 1:
                     vector[offset++] = (value & 1) == 0;
-                    break;
-                default:
-                    break;
             }
-            this.data = (byte) (localData << remaining);
+            this.data = (byte) (data << remaining);
             bitsInData = 8 - remaining;
         }
 

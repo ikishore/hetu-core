@@ -45,7 +45,6 @@ import io.prestosql.spi.connector.ConnectorSession;
 import io.prestosql.spi.connector.ConnectorSplit;
 import io.prestosql.spi.connector.ConnectorTableHandle;
 import io.prestosql.spi.connector.ConnectorTransactionHandle;
-import io.prestosql.spi.snapshot.BlockEncodingSerdeProvider;
 import io.prestosql.spi.type.Type;
 import io.prestosql.spi.type.TypeManager;
 import it.unimi.dsi.fastutil.objects.Object2IntMap;
@@ -56,7 +55,6 @@ import org.apache.hadoop.hive.ql.io.AcidUtils;
 import org.apache.hadoop.hive.ql.io.AcidUtils.ParsedDelta;
 
 import java.io.IOException;
-import java.io.Serializable;
 import java.io.UncheckedIOException;
 import java.util.ArrayList;
 import java.util.Collection;
@@ -66,7 +64,6 @@ import java.util.HashSet;
 import java.util.Iterator;
 import java.util.List;
 import java.util.Map;
-import java.util.Objects;
 import java.util.Optional;
 import java.util.OptionalInt;
 import java.util.Set;
@@ -76,7 +73,6 @@ import java.util.concurrent.Executors;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicInteger;
 
-import static com.google.common.base.Preconditions.checkState;
 import static com.google.common.base.Verify.verify;
 import static com.google.common.collect.Iterables.getOnlyElement;
 import static com.google.common.util.concurrent.MoreExecutors.directExecutor;
@@ -115,9 +111,6 @@ public class HivePageSink
     private final JsonCodec<PartitionUpdate> partitionUpdateCodec;
 
     private final List<HiveWriter> writers = new ArrayList<>();
-
-    // Snapshot: parameters used to construct writer instances
-    private final List<WriterParam> writerParams = new ArrayList<>();
 
     protected final ConnectorSession session;
     private final List<Block> nullBlocks;
@@ -224,13 +217,13 @@ public class HivePageSink
 
         if (acidWriteType == HiveACIDWriteType.DELETE) {
             //Null blocks will be used in case of delete
-            ImmutableList.Builder<Block> localNullBlocks = ImmutableList.builder();
+            ImmutableList.Builder<Block> nullBlocks = ImmutableList.builder();
             for (Type dataColumnType : dataColumnTypes.build()) {
                 BlockBuilder blockBuilder = dataColumnType.createBlockBuilder(null, 1, 0);
                 blockBuilder.appendNull();
-                localNullBlocks.add(blockBuilder.build());
+                nullBlocks.add(blockBuilder.build());
             }
-            this.nullBlocks = localNullBlocks.build();
+            this.nullBlocks = nullBlocks.build();
         }
         else {
             this.nullBlocks = ImmutableList.of();
@@ -269,15 +262,7 @@ public class HivePageSink
         // Must be wrapped in doAs entirely
         // Implicit FileSystem initializations are possible in HiveRecordWriter#commit -> RecordWriter#close
         ListenableFuture<Collection<Slice>> result = hdfsEnvironment.doAs(session.getUser(), this::doFinish);
-        if (!session.isSnapshotEnabled()) {
-            return MoreFutures.toCompletableFuture(result);
-        }
-
-        // Will merge all sub files and call doFinish again, so clear the total bytes
-        writtenBytes = 0;
-        ListenableFuture<Collection<Slice>> mergedResult = hdfsEnvironment.doAs(session.getUser(), this::mergeFiles);
-        // Use mergedResult as return value (indexed at 1)
-        return MoreFutures.toCompletableFuture(Futures.transform(Futures.allAsList(result, mergedResult), results -> results.get(1), directExecutor()));
+        return MoreFutures.toCompletableFuture(result);
     }
 
     private ListenableFuture<Collection<Slice>> doFinish()
@@ -285,9 +270,6 @@ public class HivePageSink
         ImmutableList.Builder<Slice> partitionUpdates = ImmutableList.builder();
         List<Callable<Object>> verificationTasks = new ArrayList<>();
         for (HiveWriter writer : writers) {
-            if (writer == null) {
-                continue;
-            }
             writer.commit();
             PartitionUpdate partitionUpdate = writer.getPartitionUpdate();
             partitionUpdates.add(wrappedBuffer(partitionUpdateCodec.toJsonBytes(partitionUpdate)));
@@ -297,15 +279,12 @@ public class HivePageSink
         }
         List<Slice> result = partitionUpdates.build();
 
-        writtenBytes += writers.stream()
-                .filter(Objects::nonNull)
+        writtenBytes = writers.stream()
                 .mapToLong(HiveWriter::getWrittenBytes)
                 .sum();
-        validationCpuNanos += writers.stream()
-                .filter(Objects::nonNull)
+        validationCpuNanos = writers.stream()
                 .mapToLong(HiveWriter::getValidationCpuNanos)
                 .sum();
-        writers.clear();
 
         if (vacuumOp != null) {
             vacuumOp.close();
@@ -327,52 +306,22 @@ public class HivePageSink
         }
     }
 
-    private ListenableFuture<Collection<Slice>> mergeFiles()
-    {
-        // When snapshot is enabled, each snapshot produces a sub file, named file.n, for each "writer",
-        // where "file" is what the file would be named without snapshot, and n is a number starting from 0.
-        // Need to merge these sub files to a single one at the end.
-        checkState(writers.isEmpty());
-        try {
-            for (WriterParam param : writerParams) {
-                // Construct writers for the merged files
-                HiveWriter hiveWriter = writerFactory.createWriterForSnapshotMerge(param.partitionValues, param.bucket, Optional.empty());
-                writers.add(hiveWriter);
-            }
-            writerFactory.mergeSubFiles(writers);
-            // Finish up writers for merged files, to get final results and stats
-            return doFinish();
-        }
-        catch (IOException e) {
-            log.debug("exception '%s' while merging subfile", e);
-            throw new RuntimeException(e);
-        }
-    }
-
     @Override
     public void abort()
     {
         // Must be wrapped in doAs entirely
         // Implicit FileSystem initializations are possible in HiveRecordWriter#rollback -> RecordWriter#close
-        hdfsEnvironment.doAs(session.getUser(), () -> doAbort(false));
+        hdfsEnvironment.doAs(session.getUser(), this::doAbort);
     }
 
-    @Override
-    public void cancelToResume()
-    {
-        // Must be wrapped in doAs entirely
-        // Implicit FileSystem initializations are possible in HiveRecordWriter#Cancel -> RecordWriter#close
-        hdfsEnvironment.doAs(session.getUser(), () -> doAbort(true));
-    }
-
-    private void doAbort(boolean isCancel)
+    private void doAbort()
     {
         Optional<Exception> rollbackException = Optional.empty();
         for (HiveWriter writer : writers) {
             // writers can contain nulls if an exception is thrown when doAppend expends the writer list
             if (writer != null) {
                 try {
-                    writer.rollback(isCancel);
+                    writer.rollback();
                 }
                 catch (Exception e) {
                     log.warn("exception '%s' while rollback on %s", e, writer);
@@ -380,8 +329,6 @@ public class HivePageSink
                 }
             }
         }
-        writers.clear();
-
         if (rollbackException.isPresent()) {
             throw new PrestoException(HIVE_WRITER_CLOSE_ERROR, "Error rolling back write to Hive", rollbackException.get());
         }
@@ -433,7 +380,7 @@ public class HivePageSink
                 allBucketList.add(split.getBucketNumber().orElse(0));
             });
 
-            List<ColumnHandle> localInputColumns = new ArrayList<>(HivePageSink.this.inputColumns);
+            List<ColumnHandle> inputColumns = new ArrayList<>(HivePageSink.this.inputColumns);
             if (isInsertOnlyTable() || acidWriteType == HiveACIDWriteType.VACUUM_UNIFY) {
                 //Insert only tables Just need to merge contents together. No processing required.
                 //During vacuum unify, all buckets will be merged to one.
@@ -447,19 +394,19 @@ public class HivePageSink
                 }
                 else if (acidWriteType == HiveACIDWriteType.VACUUM_UNIFY) {
                     HiveColumnHandle rowIdHandle = HiveColumnHandle.updateRowIdHandle();
-                    localInputColumns.add(rowIdHandle);
+                    inputColumns.add(rowIdHandle);
                 }
 
                 pageSources = multiSplits.stream()
                         .map(split -> pageSourceProvider.createPageSource(
-                                transactionHandle, session, split, connectorTableHandle, localInputColumns))
+                                transactionHandle, session, split, connectorTableHandle, inputColumns))
                         .collect(toList());
                 List<Iterator<Page>> pageSourceIterators = HiveUtil.getPageSourceIterators(pageSources);
                 sortedPagesForVacuum = Iterators.concat(pageSourceIterators.iterator());
             }
             else {
                 HiveColumnHandle rowIdHandle = HiveColumnHandle.updateRowIdHandle();
-                localInputColumns.add(rowIdHandle);
+                inputColumns.add(rowIdHandle);
 
                 List<HiveSplitWrapper> multiSplits = hiveSplits.stream()
                         .map(HiveSplitWrapper::wrap)
@@ -467,13 +414,13 @@ public class HivePageSink
 
                 pageSources = multiSplits.stream()
                         .map(split -> pageSourceProvider.createPageSource(
-                                transactionHandle, session, split, connectorTableHandle, localInputColumns))
+                                transactionHandle, session, split, connectorTableHandle, inputColumns))
                         .collect(toList());
-                List<Type> columnTypes = localInputColumns.stream()
+                List<Type> columnTypes = inputColumns.stream()
                         .map(c -> ((HiveColumnHandle) c).getHiveType().getType(typeManager))
                         .collect(toList());
                 //Last index for rowIdHandle
-                List<Integer> sortFields = ImmutableList.of(localInputColumns.size() - 1);
+                List<Integer> sortFields = ImmutableList.of(inputColumns.size() - 1);
                 sortedPagesForVacuum = HiveUtil.getMergeSortedPages(pageSources, columnTypes, sortFields,
                         ImmutableList.of(SortOrder.ASC_NULLS_FIRST));
             }
@@ -524,7 +471,7 @@ public class HivePageSink
                 for (int i = 0; i < partitionKeys.size(); i++) {
                     HivePartitionKey partitionKey = partitionKeys.get(i);
                     Type type = partitionTypes.get(i);
-                    Object partitionColumnValue = HiveUtil.typedPartitionKey(partitionKey.getValue(), type, partitionKey.getName());
+                    Object partitionColumnValue = HiveUtil.typedPartitionKey(partitionKey.getValue(), type, partitionKey.getName(), null);
                     RunLengthEncodedBlock block = RunLengthEncodedBlock.create(type, partitionColumnValue, 1);
                     type.appendTo(block, 0, builder.getBlockBuilder(i));
                 }
@@ -536,10 +483,7 @@ public class HivePageSink
             Page partitionColumns = builder.build();
             String partitionName = writerFactory.getPartitionName(partitionColumns, 0).orElse(HivePartition.UNPARTITIONED_ID);
             bucketNumbers.forEach((bucket) -> {
-                List<String> partitionValues = writerFactory.getPartitionValues(partitionColumns, 0);
-                writers.add(writerFactory.createWriter(partitionValues, OptionalInt.of(bucket), getVacuumOptions(partitionName)));
-                // TODO-cp-I2BZ0A: vacuum is not supported with snapshot
-                writerParams.add(null);
+                writers.add(writerFactory.createWriter(partitionColumns, 0, OptionalInt.of(bucket), getVacuumOptions(partitionName)));
             });
             emptyfileWriten.compareAndSet(false, true);
         }
@@ -552,15 +496,15 @@ public class HivePageSink
         private Map<String, Options> initVacuumOptions(List<HiveSplit> hiveSplits)
         {
             return hdfsEnvironment.doAs(session.getUser(), () -> {
-                Map<String, Options> localVacuumOptionsMap = new HashMap<>();
+                Map<String, Options> vacuumOptionsMap = new HashMap<>();
                 //Findout the minWriteId and maxWriteId for current compaction.
                 HiveVacuumTableHandle vacuumTableHandle = (HiveVacuumTableHandle) writableTableHandle;
                 for (HiveSplit split : hiveSplits) {
                     String partition = split.getPartitionName();
-                    Options options = localVacuumOptionsMap.get(partition);
+                    Options options = vacuumOptionsMap.get(partition);
                     if (options == null) {
                         options = new Options(writerFactory.getConf()).maximumWriteId(-1).minimumWriteId(Long.MAX_VALUE);
-                        localVacuumOptionsMap.put(partition, options);
+                        vacuumOptionsMap.put(partition, options);
                     }
                     if (vacuumTableHandle.isFullVacuum()) {
                         //Major compaction, need to write the base
@@ -626,7 +570,7 @@ public class HivePageSink
                         options.maximumWriteId(suitableRange.getMax());
                     }
                 }
-                return localVacuumOptionsMap;
+                return vacuumOptionsMap;
             });
         }
 
@@ -705,9 +649,8 @@ public class HivePageSink
         return NOT_BLOCKED;
     }
 
-    private void doAppend(Page inputPage)
+    private void doAppend(Page page)
     {
-        Page page = inputPage;
         while (page.getPositionCount() > MAX_PAGE_POSITIONS) {
             Page chunk = page.getRegion(0, MAX_PAGE_POSITIONS);
             page = page.getRegion(MAX_PAGE_POSITIONS, page.getPositionCount() - MAX_PAGE_POSITIONS);
@@ -784,11 +727,6 @@ public class HivePageSink
         while (writers.size() <= pagePartitioner.getMaxIndex()) {
             writers.add(null);
         }
-        // The 2 lists may start with different sizes (e.g. writer is 0 after resume; but writerParams has entries),
-        // They will end up with same size after the loops
-        while (writerParams.size() <= pagePartitioner.getMaxIndex()) {
-            writerParams.add(null);
-        }
 
         // create missing writers
         for (int position = 0; position < page.getPositionCount(); position++) {
@@ -814,15 +752,11 @@ public class HivePageSink
                 //Use the taskId and driverId to get bucketId for ACID table
                 bucketNumber = generateBucketNumber(partitionColumns.getChannelCount() != 0);
             }
-            List<String> partitionValues = writerFactory.getPartitionValues(partitionColumns, position);
-            HiveWriter writer = writerFactory.createWriter(partitionValues, bucketNumber, partitionOptions);
-            // Snapshot: record what parameters were used to construct the writer. Vacuum is not supported currently.
-            writerParams.set(writerIndex, new WriterParam(partitionValues, bucketNumber, writer.getFilePath()));
+            HiveWriter writer = writerFactory.createWriter(partitionColumns, position, bucketNumber, partitionOptions);
             writers.set(writerIndex, writer);
         }
         verify(writers.size() == pagePartitioner.getMaxIndex() + 1);
-        // After snapshots are taken, the writer list is cleared. New pages may skip over certain writer indexes.
-        verify(session.isSnapshotEnabled() || !writers.contains(null));
+        verify(!writers.contains(null));
 
         return writerIndexes;
     }
@@ -968,9 +902,8 @@ public class HivePageSink
             this.pageIndexer = pageIndexerFactory.createPageIndexer(partitionColumnTypes);
         }
 
-        public int[] partitionPage(Page inputPartitionColumns, Block bucketBlock, Block operationIdBlock)
+        public int[] partitionPage(Page partitionColumns, Block bucketBlock, Block operationIdBlock)
         {
-            Page partitionColumns = inputPartitionColumns;
             if (bucketBlock != null) {
                 Block[] blocks = new Block[partitionColumns.getChannelCount() + 1];
                 for (int i = 0; i < partitionColumns.getChannelCount(); i++) {
@@ -993,86 +926,6 @@ public class HivePageSink
         public int getMaxIndex()
         {
             return pageIndexer.getMaxIndex();
-        }
-    }
-
-    @Override
-    public Object capture(BlockEncodingSerdeProvider serdeProvider)
-    {
-        // TODO-cp-I2BZ0A: What to do about this? How to capture its state?
-        checkState(vacuumOp == null);
-
-        try {
-            // Commit current set of sub files. New writers will be created for new sub files.
-            hdfsEnvironment.doAs(session.getUser(), this::doFinish).get();
-        }
-        catch (Exception e) {
-            throw new RuntimeException(e);
-        }
-
-        // TODO-cp-I2BZ0A: ClassNotFoundException when using "State" class, because Hive classes are from a different classloader
-        Map<String, Object> state = new HashMap<>();
-        state.put("pagePartitioner", pagePartitioner.pageIndexer.capture(serdeProvider));
-        state.put("writerFactory", writerFactory.capture());
-        state.put("writerParams", new ArrayList<>(writerParams.stream().map(p -> {
-            Map<String, Object> map = new HashMap<>();
-            map.put("partitionValues", p.partitionValues);
-            map.put("bucket", p.bucket.isPresent() ? p.bucket.getAsInt() : null);
-            map.put("filePath", p.filePath);
-            return map;
-        }).collect(toList())));
-        state.put("rows", rows);
-        state.put("writtenBytes", writtenBytes);
-        state.put("systemMemoryUsage", systemMemoryUsage);
-        state.put("validationCpuNanos", validationCpuNanos);
-        return state;
-    }
-
-    @Override
-    public void restore(Object obj, BlockEncodingSerdeProvider serdeProvider, long resumeCount)
-    {
-        checkState(writers.isEmpty());
-        // TODO-cp-I2BZ0A: ClassNotFoundException when using "State" class, because Hive classes are from a different classloader
-        Map<String, Object> state = (Map<String, Object>) obj;
-        pagePartitioner.pageIndexer.restore(state.get("pagePartitioner"), serdeProvider);
-        writerFactory.restore(state.get("writerFactory"), resumeCount);
-        writerParams.clear();
-        writerParams.addAll(((List<Map<String, Object>>) state.get("writerParams")).stream().map(p -> {
-            return new WriterParam(
-                    (List<String>) p.get("partitionValues"),
-                    p.get("bucket") == null ? OptionalInt.empty() : OptionalInt.of((Integer) p.get("bucket")),
-                    (String) p.get("filePath"));
-        }).collect(toList()));
-        rows = (Long) state.get("rows");
-        writtenBytes = (Long) state.get("writtenBytes");
-        systemMemoryUsage = (Long) state.get("systemMemoryUsage");
-        validationCpuNanos = (Long) state.get("validationCpuNanos");
-    }
-
-    private static class State
-            implements Serializable
-    {
-        private Object pagePartitioner;
-        private Object writerFactory;
-        private List<WriterParam> writerParams;
-        private long rows;
-        private long writtenBytes;
-        private long systemMemoryUsage;
-        private long validationCpuNanos;
-    }
-
-    private static class WriterParam
-            implements Serializable
-    {
-        private final List<String> partitionValues;
-        private final OptionalInt bucket;
-        private final String filePath;
-
-        private WriterParam(List<String> partitionValues, OptionalInt bucket, String filePath)
-        {
-            this.partitionValues = partitionValues;
-            this.bucket = bucket;
-            this.filePath = filePath;
         }
     }
 }

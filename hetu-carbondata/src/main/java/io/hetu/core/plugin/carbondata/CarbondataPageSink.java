@@ -167,9 +167,9 @@ public class CarbondataPageSink
     {
         //set flag here if called and change finish accordingly.
         isCompactionCalled = true;
-        HdfsEnvironment finalHdfsEnvironment = connectorPageSource.getHdfsEnvironment();
+        HdfsEnvironment hdfsEnvironment = connectorPageSource.getHdfsEnvironment();
 
-        finalHdfsEnvironment.doAs(session.getUser(), () -> {
+        hdfsEnvironment.doAs(session.getUser(), () -> {
             try {
                 // Worker part: each thread to run this code
                 boolean mergeStatus = false;

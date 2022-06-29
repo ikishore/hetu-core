@@ -13,6 +13,7 @@
  */
 package io.prestosql.operator;
 
+import io.hetu.core.transport.execution.buffer.PagesSerdeFactory;
 import io.prestosql.spi.Page;
 import io.prestosql.spi.plan.PlanNodeId;
 import io.prestosql.spi.type.Type;
@@ -22,10 +23,5 @@ import java.util.function.Function;
 
 public interface OutputFactory
 {
-    OperatorFactory createOutputOperator(
-            int operatorId,
-            PlanNodeId planNodeId,
-            List<Type> types,
-            Function<Page, Page> pagePreprocessor,
-            TaskContext taskContext);
+    OperatorFactory createOutputOperator(int operatorId, PlanNodeId planNodeId, List<Type> types, Function<Page, Page> pagePreprocessor, PagesSerdeFactory serdeFactory);
 }

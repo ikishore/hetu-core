@@ -56,9 +56,6 @@ import static io.prestosql.execution.TaskTestUtils.createTestingPlanner;
 import static io.prestosql.execution.TaskTestUtils.updateTask;
 import static io.prestosql.execution.buffer.OutputBuffers.BufferType.PARTITIONED;
 import static io.prestosql.execution.buffer.OutputBuffers.createInitialEmptyOutputBuffers;
-import static io.prestosql.metadata.MetadataManager.createTestMetadataManager;
-import static io.prestosql.testing.TestingPagesSerdeFactory.TESTING_SERDE_FACTORY;
-import static io.prestosql.testing.TestingRecoveryUtils.NOOP_RECOVERY_UTILS;
 import static io.prestosql.testing.TestingSession.testSessionBuilder;
 import static java.util.concurrent.Executors.newScheduledThreadPool;
 import static java.util.concurrent.TimeUnit.SECONDS;
@@ -95,8 +92,7 @@ public class TestSqlTask
                 taskExecutor,
                 planner,
                 createTestSplitMonitor(),
-                new TaskManagerConfig(),
-                createTestMetadataManager());
+                new TaskManagerConfig());
     }
 
     @AfterClass(alwaysRun = true)
@@ -119,6 +115,7 @@ public class TestSqlTask
                         .withNoMoreBufferIds(),
                 OptionalInt.empty(),
                 Optional.empty(),
+                null,
                 null);
         assertEquals(taskInfo.getTaskStatus().getState(), TaskState.RUNNING);
 
@@ -132,6 +129,7 @@ public class TestSqlTask
                         .withNoMoreBufferIds(),
                 OptionalInt.empty(),
                 Optional.empty(),
+                null,
                 null);
         assertEquals(taskInfo.getTaskStatus().getState(), TaskState.FINISHED);
 
@@ -151,6 +149,7 @@ public class TestSqlTask
                 createInitialEmptyOutputBuffers(PARTITIONED).withBuffer(OUT, 0).withNoMoreBufferIds(),
                 OptionalInt.empty(),
                 Optional.empty(),
+                null,
                 null);
         assertEquals(taskInfo.getTaskStatus().getState(), TaskState.RUNNING);
 
@@ -191,6 +190,7 @@ public class TestSqlTask
                         .withNoMoreBufferIds(),
                 OptionalInt.empty(),
                 Optional.empty(),
+                null,
                 null);
         assertEquals(taskInfo.getTaskStatus().getState(), TaskState.RUNNING);
         assertNull(taskInfo.getStats().getEndTime());
@@ -199,7 +199,7 @@ public class TestSqlTask
         assertEquals(taskInfo.getTaskStatus().getState(), TaskState.RUNNING);
         assertNull(taskInfo.getStats().getEndTime());
 
-        taskInfo = sqlTask.cancel(TaskState.CANCELED);
+        taskInfo = sqlTask.cancel();
         assertEquals(taskInfo.getTaskStatus().getState(), TaskState.CANCELED);
         assertNotNull(taskInfo.getStats().getEndTime());
 
@@ -220,6 +220,7 @@ public class TestSqlTask
                 createInitialEmptyOutputBuffers(PARTITIONED).withBuffer(OUT, 0).withNoMoreBufferIds(),
                 OptionalInt.empty(),
                 Optional.empty(),
+                null,
                 null);
         assertEquals(taskInfo.getTaskStatus().getState(), TaskState.RUNNING);
 
@@ -227,54 +228,6 @@ public class TestSqlTask
         assertEquals(taskInfo.getTaskStatus().getState(), TaskState.RUNNING);
 
         sqlTask.abortTaskResults(OUT);
-
-        taskInfo = sqlTask.getTaskInfo(taskInfo.getTaskStatus().getState()).get(1, SECONDS);
-        assertEquals(taskInfo.getTaskStatus().getState(), TaskState.FINISHED);
-
-        taskInfo = sqlTask.getTaskInfo();
-        assertEquals(taskInfo.getTaskStatus().getState(), TaskState.FINISHED);
-    }
-
-    @Test
-    public void testSuspend() throws Exception
-    {
-        SqlTask sqlTask = createInitialTask();
-
-        TaskInfo taskInfo = sqlTask.updateTask(TEST_SESSION,
-                Optional.of(PLAN_FRAGMENT),
-                ImmutableList.of(new TaskSource(TABLE_SCAN_NODE_ID, ImmutableSet.of(SPLIT), true)),
-                createInitialEmptyOutputBuffers(PARTITIONED).withBuffer(OUT, 0).withNoMoreBufferIds(),
-                OptionalInt.empty(),
-                Optional.empty(),
-                null);
-        assertEquals(taskInfo.getTaskStatus().getState(), TaskState.RUNNING);
-
-        taskInfo = sqlTask.getTaskInfo();
-        assertEquals(taskInfo.getTaskStatus().getState(), TaskState.RUNNING);
-
-        taskInfo = sqlTask.suspend(TaskState.SUSPENDED);
-        assertEquals(taskInfo.getTaskStatus().getState(), TaskState.SUSPENDED);
-
-        /* Second suspend should be a no-op */
-        taskInfo = sqlTask.suspend(TaskState.SUSPENDED);
-        assertEquals(taskInfo.getTaskStatus().getState(), TaskState.SUSPENDED);
-
-        BufferResult results = sqlTask.getTaskResults(OUT, 0, new DataSize(1, MEGABYTE)).get();
-        assertEquals(results.isBufferComplete(), false);
-        assertEquals(results.getSerializedPages().size(), 1);
-        assertEquals(results.getSerializedPages().get(0).getPositionCount(), 1);
-
-        taskInfo = sqlTask.resume(TaskState.RUNNING);
-        assertEquals(taskInfo.getTaskStatus().getState(), TaskState.RUNNING);
-
-        for (boolean moreResults = true; moreResults; moreResults = !results.isBufferComplete()) {
-            results = sqlTask.getTaskResults(OUT, results.getToken() + results.getSerializedPages().size(), new DataSize(1, MEGABYTE)).get();
-        }
-        assertEquals(results.getSerializedPages().size(), 0);
-
-        // complete the task by calling abort on it
-        TaskInfo info = sqlTask.abortTaskResults(OUT);
-        assertEquals(info.getOutputBuffers().getState(), BufferState.FINISHED);
 
         taskInfo = sqlTask.getTaskInfo(taskInfo.getTaskStatus().getState()).get(1, SECONDS);
         assertEquals(taskInfo.getTaskStatus().getState(), TaskState.FINISHED);
@@ -321,7 +274,7 @@ public class TestSqlTask
         ListenableFuture<BufferResult> bufferResult = sqlTask.getTaskResults(OUT, 0, new DataSize(1, MEGABYTE));
         assertFalse(bufferResult.isDone());
 
-        sqlTask.cancel(TaskState.CANCELED);
+        sqlTask.cancel();
         assertEquals(sqlTask.getTaskInfo().getTaskStatus().getState(), TaskState.CANCELED);
 
         // buffer future will complete.. the event is async so wait a bit for event to propagate
@@ -361,7 +314,6 @@ public class TestSqlTask
     private SqlTask createInitialTask()
     {
         TaskId taskId = new TaskId("query", 0, nextTaskId.incrementAndGet());
-        String instanceId = "0-query_test_instance_id";
         URI location = URI.create("fake://task/" + taskId);
 
         QueryContext queryContext = new QueryContext(new QueryId("query"),
@@ -372,15 +324,13 @@ public class TestSqlTask
                 taskNotificationExecutor,
                 driverYieldExecutor,
                 new DataSize(1, MEGABYTE),
-                new SpillSpaceTracker(new DataSize(1, GIGABYTE)),
-                NOOP_RECOVERY_UTILS);
+                new SpillSpaceTracker(new DataSize(1, GIGABYTE)));
 
         queryContext.addTaskContext(new TaskStateMachine(taskId, taskNotificationExecutor), testSessionBuilder().build(), false, false, OptionalInt.empty(),
-                Optional.empty(), TESTING_SERDE_FACTORY);
+                Optional.empty());
 
         return createSqlTask(
                 taskId,
-                instanceId,
                 location,
                 "fake",
                 queryContext,
@@ -389,6 +339,6 @@ public class TestSqlTask
                 Functions.identity(),
                 new DataSize(32, MEGABYTE),
                 new CounterStat(),
-                createTestMetadataManager());
+                new EmptyMockMetadata());
     }
 }

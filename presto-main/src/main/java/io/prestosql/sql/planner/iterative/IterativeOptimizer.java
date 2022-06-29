@@ -35,7 +35,10 @@ import io.prestosql.sql.planner.PlanSymbolAllocator;
 import io.prestosql.sql.planner.RuleStatsRecorder;
 import io.prestosql.sql.planner.TypeProvider;
 import io.prestosql.sql.planner.optimizations.PlanOptimizer;
+import io.prestosql.sql.planner.plan.CaptureLineage;
 import io.prestosql.utils.OptimizerUtils;
+import io.prestosql.spi.plan.JoinNode;
+import io.prestosql.sql.planner.iterative.rule.ReorderJoins;
 
 import java.util.Iterator;
 import java.util.List;
@@ -88,13 +91,46 @@ public class IterativeOptimizer
     @Override
     public PlanNode optimize(PlanNode plan, Session session, TypeProvider types, PlanSymbolAllocator planSymbolAllocator, PlanNodeIdAllocator idAllocator, WarningCollector warningCollector)
     {
-        PlanNode tmpPlan = plan;
         // only disable new rules if we have legacy rules to fall back to
         if (!SystemSessionProperties.isNewOptimizerEnabled(session) && !legacyRules.isEmpty()) {
             for (PlanOptimizer optimizer : legacyRules) {
-                if (OptimizerUtils.isEnabledLegacy(optimizer, session, tmpPlan)) {
-                    tmpPlan = optimizer.optimize(tmpPlan, session, planSymbolAllocator.getTypes(), planSymbolAllocator, idAllocator,
+                if (OptimizerUtils.isEnabledLegacy(optimizer, session, plan)) {
+                    plan = optimizer.optimize(plan, session, planSymbolAllocator.getTypes(), planSymbolAllocator, idAllocator,
                         warningCollector);
+                }
+            }
+
+            return plan;
+        }
+
+        //System.out.println("Iterative Optimizer: optimizer: ");
+        Memo memo = new Memo(idAllocator, plan);
+        Lookup lookup = Lookup.from(planNode -> Stream.of(memo.resolve(planNode)));
+
+        Duration timeout = SystemSessionProperties.getOptimizerTimeout(session);
+        Context context = new Context(memo, lookup, idAllocator, planSymbolAllocator, System.nanoTime(), timeout.toMillis(), session, warningCollector);
+        exploreGroup(memo.getRootGroup(), context);
+
+        //System.out.println("Iterative Optimizer: optimizer: exit()");
+        return memo.extract();
+    }
+
+    public PlanNode optimize2(PlanNode plan, Session session, TypeProvider types, PlanSymbolAllocator planSymbolAllocator, PlanNodeIdAllocator idAllocator, WarningCollector warningCollector, CaptureLineage captureLineage)
+    {
+        // only disable new rules if we have legacy rules to fall back to
+        IterativeOptimizer ItOpt = null;
+        if (!SystemSessionProperties.isNewOptimizerEnabled(session) && !legacyRules.isEmpty()) {
+            for (PlanOptimizer optimizer : legacyRules) {
+                if (OptimizerUtils.isEnabledLegacy(optimizer, session, plan)) {
+                    if (optimizer instanceof  IterativeOptimizer) {
+                        ItOpt = (IterativeOptimizer) optimizer;
+                        //System.out.println("Iterative Optimizer: Calling Optimizer2 instance");
+                        plan = ItOpt.optimize2(plan, session, planSymbolAllocator.getTypes(), planSymbolAllocator, idAllocator,
+                                warningCollector, captureLineage);
+                    }
+                    else
+                        plan = optimizer.optimize(plan, session, planSymbolAllocator.getTypes(), planSymbolAllocator, idAllocator,
+                                warningCollector);
                 }
             }
 
@@ -106,15 +142,69 @@ public class IterativeOptimizer
 
         Duration timeout = SystemSessionProperties.getOptimizerTimeout(session);
         Context context = new Context(memo, lookup, idAllocator, planSymbolAllocator, System.nanoTime(), timeout.toMillis(), session, warningCollector);
-        exploreGroup(memo.getRootGroup(), context);
+        exploreGroup(memo.getRootGroup(), context, captureLineage);
 
         return memo.extract();
+    }
+
+    private boolean exploreGroup(int group, Context context, CaptureLineage captureLineage)
+    {
+        // tracks whether this group or any children groups change as
+        // this method executes
+        boolean progress = exploreNode(group, context, captureLineage);
+
+        while (exploreChildren(group, context, captureLineage)) {
+            progress = true;
+
+            // if children changed, try current group again
+            // in case we can match additional rules
+            if (!exploreNode(group, context, captureLineage)) {
+                // no additional matches, so bail out
+                break;
+            }
+        }
+
+        return progress;
+    }
+
+    private boolean exploreNode(int group, Context context, CaptureLineage captureLineage)
+    {
+        PlanNode node = context.memo.getNode(group);
+
+        boolean done = false;
+        boolean progress = false;
+
+        while (!done) {
+            context.checkTimeoutNotExhausted();
+
+            done = true;
+            Iterator<Rule<?>> possiblyMatchingRules = ruleIndex.getCandidates(node).iterator();
+            while (possiblyMatchingRules.hasNext()) {
+                Rule<?> rule = possiblyMatchingRules.next();
+
+                if (!rule.isEnabled(context.session)) {
+                    continue;
+                }
+
+                Rule.Result result = transform(node, rule, context, captureLineage);
+
+                if (result.getTransformedPlan().isPresent()) {
+                    node = context.memo.replace(group, result.getTransformedPlan().get(), rule.getClass().getName());
+
+                    done = false;
+                    progress = true;
+                }
+            }
+        }
+
+        return progress;
     }
 
     private boolean exploreGroup(int group, Context context)
     {
         // tracks whether this group or any children groups change as
         // this method executes
+        //System.out.println("Iterative Optimizer Explore Group");
         boolean progress = exploreNode(group, context);
 
         while (exploreChildren(group, context)) {
@@ -128,11 +218,13 @@ public class IterativeOptimizer
             }
         }
 
+        //System.out.println("Iterative Optimizer Explore Group: exit()");
         return progress;
     }
 
     private boolean exploreNode(int group, Context context)
     {
+        //System.out.println("Iterative Optimizer Explore Node");
         PlanNode node = context.memo.getNode(group);
 
         boolean done = false;
@@ -161,11 +253,51 @@ public class IterativeOptimizer
             }
         }
 
+        //System.out.println("Iterative Optimizer Explore Node: exit()");
         return progress;
     }
 
+    private <T> Rule.Result transform(PlanNode node, Rule<T> rule, Context context, CaptureLineage captureLineage)
+    {
+        Capture<T> nodeCapture = newCapture();
+        Pattern<T> pattern = rule.getPattern().capturedAs(nodeCapture);
+        Iterator<Match> matches = pattern.match(node, context.lookup).iterator();
+        ReorderJoins ReorderRule = null;
+        while (matches.hasNext()) {
+            Match match = matches.next();
+            long duration;
+            Rule.Result result;
+            try {
+                long start = System.nanoTime();
+                if (rule instanceof ReorderJoins) {
+                    ReorderRule = (ReorderJoins) rule;
+                    //System.out.println("Calling ReorderJoins apply 2 from Iterative optimizer: capture lineage "+captureLineage.toString());
+                    result = ReorderRule.apply2((JoinNode)match.capture(nodeCapture), match.captures(), ruleContext(context), captureLineage);
+                }
+                else {
+                    //System.out.println("Calling ReorderJoins APPLY from Iterative optimizer: capture lineage "+captureLineage.toString()+" rule "+rule.toString());
+                    result = rule.apply(match.capture(nodeCapture), match.captures(), ruleContext(context));
+                }
+                duration = System.nanoTime() - start;
+            }
+            catch (RuntimeException e) {
+                stats.recordFailure(rule);
+                throw e;
+            }
+            stats.record(rule, duration, !result.isEmpty());
+
+            if (result.getTransformedPlan().isPresent()) {
+                return result;
+            }
+        }
+
+        return Rule.Result.empty();
+    }
+
+
     private <T> Rule.Result transform(PlanNode node, Rule<T> rule, Context context)
     {
+        //System.out.println("Iterative Optimizer transform");
         Capture<T> nodeCapture = newCapture();
         Pattern<T> pattern = rule.getPattern().capturedAs(nodeCapture);
         Iterator<Match> matches = pattern.match(node, context.lookup).iterator();
@@ -189,11 +321,31 @@ public class IterativeOptimizer
             }
         }
 
+        //System.out.println("Iterative Optimizer transform: exit()");
+
         return Rule.Result.empty();
     }
 
+    private boolean exploreChildren(int group, Context context, CaptureLineage captureLineage)
+    {
+        boolean progress = false;
+
+        PlanNode expression = context.memo.getNode(group);
+        for (PlanNode child : expression.getSources()) {
+            checkState(child instanceof GroupReference, "Expected child to be a group reference. Found: " + child.getClass().getName());
+
+            if (exploreGroup(((GroupReference) child).getGroupId(), context, captureLineage)) {
+                progress = true;
+            }
+        }
+
+        return progress;
+    }
+
+
     private boolean exploreChildren(int group, Context context)
     {
+        //System.out.println("Iterative Optimizer Explore Children");
         boolean progress = false;
 
         PlanNode expression = context.memo.getNode(group);

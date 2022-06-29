@@ -248,16 +248,16 @@ public class TestDataCenterHTTPClientV1
     public static DistributedQueryRunner createQueryRunner(Session session)
             throws Exception
     {
-        DistributedQueryRunner distributedQueryRunner = DistributedQueryRunner.builder(session)
+        DistributedQueryRunner queryRunner = DistributedQueryRunner.builder(session)
                 .setNodeCount(2)
                 .build();
         try {
-            distributedQueryRunner.installPlugin(new TpchPlugin());
-            distributedQueryRunner.createCatalog("tpch", "tpch");
-            return distributedQueryRunner;
+            queryRunner.installPlugin(new TpchPlugin());
+            queryRunner.createCatalog("tpch", "tpch");
+            return queryRunner;
         }
         catch (Exception e) {
-            distributedQueryRunner.close();
+            queryRunner.close();
             throw e;
         }
     }

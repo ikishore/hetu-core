@@ -18,7 +18,7 @@ import io.airlift.slice.SliceOutput;
 
 import java.util.Optional;
 
-public final class EncoderUtil
+final class EncoderUtil
 {
     private EncoderUtil()
     {

@@ -17,9 +17,9 @@ import java.io.Closeable;
 import java.io.File;
 import java.io.IOException;
 
+import static com.google.common.io.Files.createTempDir;
 import static com.google.common.io.MoreFiles.deleteRecursively;
 import static com.google.common.io.RecursiveDeleteOption.ALLOW_INSECURE;
-import static java.nio.file.Files.createTempDirectory;
 
 class TempFile
         implements Closeable
@@ -27,9 +27,9 @@ class TempFile
     private final File tempDir;
     private final File file;
 
-    public TempFile() throws IOException
+    public TempFile()
     {
-        tempDir = createTempDirectory(getClass().getName()).toFile();
+        tempDir = createTempDir();
         file = new File(tempDir, "data.orc");
     }
 

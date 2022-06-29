@@ -32,20 +32,11 @@ public class ValuesNode
 {
     private final List<Symbol> outputSymbols;
     private final List<List<RowExpression>> rows;
-    private Long resumeSnapshotId;
-    private long nextSnapshotId;
-
-    public ValuesNode(PlanNodeId id, List<Symbol> outputSymbols, List<List<RowExpression>> rows)
-    {
-        this(id, outputSymbols, rows, null, 0);
-    }
 
     @JsonCreator
     public ValuesNode(@JsonProperty("id") PlanNodeId id,
             @JsonProperty("outputSymbols") List<Symbol> outputSymbols,
-            @JsonProperty("rows") List<List<RowExpression>> rows,
-            @JsonProperty("resumeSnapshotId") Long resumeSnapshotId,
-            @JsonProperty("nextSnapshotId") long nextSnapshotId)
+            @JsonProperty("rows") List<List<RowExpression>> rows)
     {
         super(id);
         this.outputSymbols = ImmutableList.copyOf(outputSymbols);
@@ -55,9 +46,6 @@ public class ValuesNode
             checkArgument(row.size() == outputSymbols.size() || row.size() == 0,
                     "Expected row to have %s values, but row has %s values", outputSymbols.size(), row.size());
         }
-
-        this.resumeSnapshotId = resumeSnapshotId;
-        this.nextSnapshotId = nextSnapshotId;
     }
 
     @Override
@@ -79,18 +67,6 @@ public class ValuesNode
         return ImmutableList.of();
     }
 
-    @JsonProperty
-    public Long getResumeSnapshotId()
-    {
-        return resumeSnapshotId;
-    }
-
-    @JsonProperty
-    public long getNextSnapshotId()
-    {
-        return nextSnapshotId;
-    }
-
     @Override
     public <R, C> R accept(PlanVisitor<R, C> visitor, C context)
     {
@@ -109,11 +85,5 @@ public class ValuesNode
         return requireNonNull(lists, "lists is null").stream()
                 .map(ImmutableList::copyOf)
                 .collect(toImmutableList());
-    }
-
-    public void setupSnapshot(Long resumeSnapshotId, long nextSnapshotId)
-    {
-        this.resumeSnapshotId = resumeSnapshotId;
-        this.nextSnapshotId = nextSnapshotId;
     }
 }

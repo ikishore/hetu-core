@@ -1,5 +1,5 @@
 /*
- * Copyright (C) 2018-2021. Huawei Technologies Co., Ltd. All rights reserved.
+ * Copyright (C) 2018-2020. Huawei Technologies Co., Ltd. All rights reserved.
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
  * You may obtain a copy of the License at
@@ -29,7 +29,6 @@ import io.prestosql.metadata.InternalNode;
 import io.prestosql.metadata.InternalNodeManager;
 import io.prestosql.metadata.Split;
 import io.prestosql.spi.connector.CatalogName;
-import io.prestosql.spi.plan.PlanNodeId;
 
 import java.util.HashMap;
 import java.util.HashSet;
@@ -58,8 +57,7 @@ public class SplitCacheAwareNodeSelector
     private final int minCandidates;
     private final int maxSplitsPerNode;
     private final int maxPendingSplitsPerTask;
-    private final NodeSelector defaultNodeSelector;
-    private final Map<PlanNodeId, FixedNodeScheduleData> feederScheduledNodes;
+    private NodeSelector defaultNodeSelector;
 
     public SplitCacheAwareNodeSelector(
             InternalNodeManager nodeManager,
@@ -69,8 +67,7 @@ public class SplitCacheAwareNodeSelector
             int minCandidates,
             int maxSplitsPerNode,
             int maxPendingSplitsPerTask,
-            NodeSelector defaultNodeSelector,
-            Map<PlanNodeId, FixedNodeScheduleData> feederScheduledNodes)
+            NodeSelector defaultNodeSelector)
     {
         this.nodeManager = requireNonNull(nodeManager, "nodeManager is null");
         this.nodeTaskMap = requireNonNull(nodeTaskMap, "nodeTaskMap is null");
@@ -80,29 +77,18 @@ public class SplitCacheAwareNodeSelector
         this.maxSplitsPerNode = maxSplitsPerNode;
         this.maxPendingSplitsPerTask = maxPendingSplitsPerTask;
         this.defaultNodeSelector = defaultNodeSelector;
-        this.feederScheduledNodes = feederScheduledNodes;
     }
 
     @Override
     public void lockDownNodes()
     {
         nodeMap.set(Suppliers.ofInstance(nodeMap.get().get()));
-        defaultNodeSelector.lockDownNodes();
     }
 
     @Override
     public List<InternalNode> allNodes()
     {
         return ImmutableList.copyOf(nodeMap.get().get().getNodesByHostAndPort().values());
-    }
-
-    @Override
-    public int selectableNodeCount()
-    {
-        NodeMap map = nodeMap.get().get();
-        return (int) map.getNodesByHostAndPort().values().stream()
-                .filter(InternalNode::isWorker)
-                .count();
     }
 
     @Override
@@ -115,16 +101,16 @@ public class SplitCacheAwareNodeSelector
     @Override
     public List<InternalNode> selectRandomNodes(int limit, Set<InternalNode> excludedNodes)
     {
-        return selectNodes(limit, randomizedNodes(nodeMap.get().get(), excludedNodes));
+        return selectNodes(limit, randomizedNodes(nodeMap.get().get(), includeCoordinator, excludedNodes));
     }
 
     @Override
     public SplitPlacementResult computeAssignments(Set<Split> splits, List<RemoteTask> existingTasks, Optional<SqlStageExecution> stage)
     {
         Multimap<InternalNode, Split> assignment = HashMultimap.create();
-        NodeMap nodeMapSlice = this.nodeMap.get().get();
+        NodeMap nodeMap = this.nodeMap.get().get();
         Map<CatalogName, Map<String, InternalNode>> activeNodesByCatalog = new HashMap<>();
-        NodeAssignmentStats assignmentStats = new NodeAssignmentStats(nodeTaskMap, nodeMapSlice, existingTasks);
+        NodeAssignmentStats assignmentStats = new NodeAssignmentStats(nodeTaskMap, nodeMap, existingTasks);
 
         Set<Split> uncacheableSplits = new HashSet<>();
         Set<Split> newCacheableSplits = new HashSet<>();
@@ -180,27 +166,7 @@ public class SplitCacheAwareNodeSelector
         }));
         assignment.putAll(defaultSplitPlacementResult.getAssignments());
 
-        // Check if its CTE node and its feeder
-        if (stage.isPresent() && stage.get().getFragment().getFeederCTEId().isPresent()) {
-            updateFeederNodeAndSplitCount(stage.get(), assignment);
-        }
-
         return new SplitPlacementResult(defaultSplitPlacementResult.getBlocked(), assignment);
-    }
-
-    private void updateFeederNodeAndSplitCount(SqlStageExecution stage, Multimap<InternalNode, Split> assignment)
-    {
-        FixedNodeScheduleData data;
-        if (feederScheduledNodes.containsKey(stage.getFragment().getFeederCTEParentId().get())) {
-            data = feederScheduledNodes.get(stage.getFragment().getFeederCTEParentId().get());
-            data.updateSplitCount(assignment.size());
-            data.updateAssignedNodes(assignment.keys().stream().collect(Collectors.toSet()));
-        }
-        else {
-            data = new FixedNodeScheduleData(assignment.size(), assignment.keys().stream().collect(Collectors.toSet()));
-        }
-
-        feederScheduledNodes.put(stage.getFragment().getFeederCTEParentId().get(), data);
     }
 
     private SplitKey createSplitKey(Split split)

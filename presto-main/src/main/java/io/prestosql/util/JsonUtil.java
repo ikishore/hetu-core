@@ -27,6 +27,7 @@ import io.prestosql.spi.PrestoException;
 import io.prestosql.spi.block.Block;
 import io.prestosql.spi.block.BlockBuilder;
 import io.prestosql.spi.block.SingleRowBlockWriter;
+import io.prestosql.spi.connector.ConnectorSession;
 import io.prestosql.spi.type.ArrayType;
 import io.prestosql.spi.type.DecimalType;
 import io.prestosql.spi.type.Decimals;
@@ -247,7 +248,7 @@ public final class JsonUtil
     public interface JsonGeneratorWriter
     {
         // write a Json value into the JsonGenerator, provided by block and position
-        void writeJsonValue(JsonGenerator jsonGenerator, Block block, int position)
+        void writeJsonValue(JsonGenerator jsonGenerator, Block block, int position, ConnectorSession session)
                 throws IOException;
 
         static JsonGeneratorWriter createJsonGeneratorWriter(Type type)
@@ -310,7 +311,7 @@ public final class JsonUtil
             implements JsonGeneratorWriter
     {
         @Override
-        public void writeJsonValue(JsonGenerator jsonGenerator, Block block, int position)
+        public void writeJsonValue(JsonGenerator jsonGenerator, Block block, int position, ConnectorSession session)
                 throws IOException
         {
             jsonGenerator.writeNull();
@@ -321,7 +322,7 @@ public final class JsonUtil
             implements JsonGeneratorWriter
     {
         @Override
-        public void writeJsonValue(JsonGenerator jsonGenerator, Block block, int position)
+        public void writeJsonValue(JsonGenerator jsonGenerator, Block block, int position, ConnectorSession session)
                 throws IOException
         {
             if (block.isNull(position)) {
@@ -345,7 +346,7 @@ public final class JsonUtil
         }
 
         @Override
-        public void writeJsonValue(JsonGenerator jsonGenerator, Block block, int position)
+        public void writeJsonValue(JsonGenerator jsonGenerator, Block block, int position, ConnectorSession session)
                 throws IOException
         {
             if (block.isNull(position)) {
@@ -362,7 +363,7 @@ public final class JsonUtil
             implements JsonGeneratorWriter
     {
         @Override
-        public void writeJsonValue(JsonGenerator jsonGenerator, Block block, int position)
+        public void writeJsonValue(JsonGenerator jsonGenerator, Block block, int position, ConnectorSession session)
                 throws IOException
         {
             if (block.isNull(position)) {
@@ -379,7 +380,7 @@ public final class JsonUtil
             implements JsonGeneratorWriter
     {
         @Override
-        public void writeJsonValue(JsonGenerator jsonGenerator, Block block, int position)
+        public void writeJsonValue(JsonGenerator jsonGenerator, Block block, int position, ConnectorSession session)
                 throws IOException
         {
             if (block.isNull(position)) {
@@ -403,7 +404,7 @@ public final class JsonUtil
         }
 
         @Override
-        public void writeJsonValue(JsonGenerator jsonGenerator, Block block, int position)
+        public void writeJsonValue(JsonGenerator jsonGenerator, Block block, int position, ConnectorSession session)
                 throws IOException
         {
             if (block.isNull(position)) {
@@ -427,7 +428,7 @@ public final class JsonUtil
         }
 
         @Override
-        public void writeJsonValue(JsonGenerator jsonGenerator, Block block, int position)
+        public void writeJsonValue(JsonGenerator jsonGenerator, Block block, int position, ConnectorSession session)
                 throws IOException
         {
             if (block.isNull(position)) {
@@ -453,7 +454,7 @@ public final class JsonUtil
         }
 
         @Override
-        public void writeJsonValue(JsonGenerator jsonGenerator, Block block, int position)
+        public void writeJsonValue(JsonGenerator jsonGenerator, Block block, int position, ConnectorSession session)
                 throws IOException
         {
             if (block.isNull(position)) {
@@ -470,7 +471,7 @@ public final class JsonUtil
             implements JsonGeneratorWriter
     {
         @Override
-        public void writeJsonValue(JsonGenerator jsonGenerator, Block block, int position)
+        public void writeJsonValue(JsonGenerator jsonGenerator, Block block, int position, ConnectorSession session)
                 throws IOException
         {
             if (block.isNull(position)) {
@@ -487,7 +488,7 @@ public final class JsonUtil
             implements JsonGeneratorWriter
     {
         @Override
-        public void writeJsonValue(JsonGenerator jsonGenerator, Block block, int position)
+        public void writeJsonValue(JsonGenerator jsonGenerator, Block block, int position, ConnectorSession session)
                 throws IOException
         {
             if (block.isNull(position)) {
@@ -495,7 +496,7 @@ public final class JsonUtil
             }
             else {
                 long value = TIMESTAMP.getLong(block, position);
-                jsonGenerator.writeString(printTimestampWithoutTimeZone(value));
+                jsonGenerator.writeString(printTimestampWithoutTimeZone(session.getTimeZoneKey(), value));
             }
         }
     }
@@ -504,7 +505,7 @@ public final class JsonUtil
             implements JsonGeneratorWriter
     {
         @Override
-        public void writeJsonValue(JsonGenerator jsonGenerator, Block block, int position)
+        public void writeJsonValue(JsonGenerator jsonGenerator, Block block, int position, ConnectorSession session)
                 throws IOException
         {
             if (block.isNull(position)) {
@@ -530,7 +531,7 @@ public final class JsonUtil
         }
 
         @Override
-        public void writeJsonValue(JsonGenerator jsonGenerator, Block block, int position)
+        public void writeJsonValue(JsonGenerator jsonGenerator, Block block, int position, ConnectorSession session)
                 throws IOException
         {
             if (block.isNull(position)) {
@@ -540,7 +541,7 @@ public final class JsonUtil
                 Block arrayBlock = type.getObject(block, position);
                 jsonGenerator.writeStartArray();
                 for (int i = 0; i < arrayBlock.getPositionCount(); i++) {
-                    elementWriter.writeJsonValue(jsonGenerator, arrayBlock, i);
+                    elementWriter.writeJsonValue(jsonGenerator, arrayBlock, i, session);
                 }
                 jsonGenerator.writeEndArray();
             }
@@ -562,7 +563,7 @@ public final class JsonUtil
         }
 
         @Override
-        public void writeJsonValue(JsonGenerator jsonGenerator, Block block, int position)
+        public void writeJsonValue(JsonGenerator jsonGenerator, Block block, int position, ConnectorSession session)
                 throws IOException
         {
             if (block.isNull(position)) {
@@ -579,7 +580,7 @@ public final class JsonUtil
                 jsonGenerator.writeStartObject();
                 for (Map.Entry<String, Integer> entry : orderedKeyToValuePosition.entrySet()) {
                     jsonGenerator.writeFieldName(entry.getKey());
-                    valueWriter.writeJsonValue(jsonGenerator, mapBlock, entry.getValue());
+                    valueWriter.writeJsonValue(jsonGenerator, mapBlock, entry.getValue(), session);
                 }
                 jsonGenerator.writeEndObject();
             }
@@ -599,7 +600,7 @@ public final class JsonUtil
         }
 
         @Override
-        public void writeJsonValue(JsonGenerator jsonGenerator, Block block, int position)
+        public void writeJsonValue(JsonGenerator jsonGenerator, Block block, int position, ConnectorSession session)
                 throws IOException
         {
             if (block.isNull(position)) {
@@ -609,7 +610,7 @@ public final class JsonUtil
                 Block rowBlock = type.getObject(block, position);
                 jsonGenerator.writeStartArray();
                 for (int i = 0; i < rowBlock.getPositionCount(); i++) {
-                    fieldWriters.get(i).writeJsonValue(jsonGenerator, rowBlock, i);
+                    fieldWriters.get(i).writeJsonValue(jsonGenerator, rowBlock, i, session);
                 }
                 jsonGenerator.writeEndArray();
             }
@@ -1373,12 +1374,12 @@ public final class JsonUtil
         private static int calculateMaxFill(int hashSize)
         {
             checkArgument(hashSize > 0, "hashSize must be greater than 0");
-            int tmpMaxFill = (int) Math.ceil(hashSize * FILL_RATIO);
-            if (tmpMaxFill == hashSize) {
-                tmpMaxFill--;
+            int maxFill = (int) Math.ceil(hashSize * FILL_RATIO);
+            if (maxFill == hashSize) {
+                maxFill--;
             }
-            checkArgument(hashSize > tmpMaxFill, "hashSize must be larger than maxFill");
-            return tmpMaxFill;
+            checkArgument(hashSize > maxFill, "hashSize must be larger than maxFill");
+            return maxFill;
         }
 
         private int getMaskedHash(long rawHash)

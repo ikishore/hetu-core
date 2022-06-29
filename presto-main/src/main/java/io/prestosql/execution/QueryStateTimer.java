@@ -48,11 +48,6 @@ class QueryStateTimer
 
     private final AtomicReference<Long> beginAnalysisNanos = new AtomicReference<>();
     private final AtomicReference<Duration> analysisTime = new AtomicReference<>();
-    private final AtomicReference<Long> beginSyntaxAnalysisNanos = new AtomicReference<>();
-    private final AtomicReference<Duration> syntaxAnalysisTime = new AtomicReference<>();
-
-    private final AtomicReference<Long> beginLogicalPlanNanos = new AtomicReference<>();
-    private final AtomicReference<Duration> logicalPlanTime = new AtomicReference<>();
 
     private final AtomicReference<Long> beginDistributedPlanningNanos = new AtomicReference<>();
     private final AtomicReference<Duration> distributedPlanningTime = new AtomicReference<>();
@@ -154,16 +149,6 @@ class QueryStateTimer
     //  Additional timings
     //
 
-    public void beginSyntaxAnalysis()
-    {
-        beginSyntaxAnalysisNanos.compareAndSet(null, tickerNanos());
-    }
-
-    public void endSyntaxAnalysis()
-    {
-        syntaxAnalysisTime.compareAndSet(null, nanosSince(beginSyntaxAnalysisNanos, tickerNanos()));
-    }
-
     public void beginAnalyzing()
     {
         beginAnalysisNanos.compareAndSet(null, tickerNanos());
@@ -172,16 +157,6 @@ class QueryStateTimer
     public void endAnalysis()
     {
         analysisTime.compareAndSet(null, nanosSince(beginAnalysisNanos, tickerNanos()));
-    }
-
-    public void beginLogicalPlan()
-    {
-        beginLogicalPlanNanos.compareAndSet(null, tickerNanos());
-    }
-
-    public void endLogicalPlan()
-    {
-        logicalPlanTime.compareAndSet(null, nanosSince(beginLogicalPlanNanos, tickerNanos()));
     }
 
     public void beginDistributedPlanning()
@@ -223,9 +198,9 @@ class QueryStateTimer
 
     public Duration getQueuedTime()
     {
-        Duration localQueuedTime = this.queuedTime.get();
-        if (localQueuedTime != null) {
-            return localQueuedTime;
+        Duration queuedTime = this.queuedTime.get();
+        if (queuedTime != null) {
+            return queuedTime;
         }
 
         // if queue time is not set, the query is still queued
@@ -247,11 +222,6 @@ class QueryStateTimer
         return getDuration(planningTime, beginPlanningNanos);
     }
 
-    public Duration getLogicalPlanningTime()
-    {
-        return getDuration(logicalPlanTime, beginLogicalPlanNanos);
-    }
-
     public Duration getFinishingTime()
     {
         return getDuration(finishingTime, beginFinishingNanos);
@@ -265,11 +235,6 @@ class QueryStateTimer
     public Optional<DateTime> getEndTime()
     {
         return toDateTime(endNanos);
-    }
-
-    public Duration getSyntaxAnalysisTime()
-    {
-        return getDuration(syntaxAnalysisTime, beginSyntaxAnalysisNanos);
     }
 
     public Duration getAnalysisTime()

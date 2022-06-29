@@ -1,5 +1,5 @@
 /*
- * Copyright (C) 2018-2021. Huawei Technologies Co., Ltd. All rights reserved.
+ * Copyright (C) 2018-2020. Huawei Technologies Co., Ltd. All rights reserved.
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
  * You may obtain a copy of the License at
@@ -19,15 +19,12 @@ import io.airlift.configuration.ConfigDescription;
 import io.airlift.units.DataSize;
 import io.airlift.units.Duration;
 import io.airlift.units.MinDuration;
-import io.hetu.core.common.util.SecurePathWhiteList;
 import io.prestosql.spi.HetuConstant;
 
 import javax.validation.constraints.NotNull;
 
-import java.io.IOException;
 import java.util.concurrent.TimeUnit;
 
-import static com.google.common.base.Preconditions.checkArgument;
 import static io.airlift.units.DataSize.Unit.GIGABYTE;
 
 /**
@@ -45,14 +42,13 @@ public class HetuConfig
     private Boolean indexCacheSoftReference = Boolean.TRUE;
     private String indexStoreUri = "/opt/hetu/indices/";
     private String indexStoreFileSystemProfile = "local-config-default";
-    private boolean indexAutoload = true;
     private String indexToPreload = "";
     private Boolean enableEmbeddedStateStore = Boolean.FALSE;
     private Boolean enableMultipleCoordinator = Boolean.FALSE;
     private Duration stateUpdateInterval = new Duration(100, TimeUnit.MILLISECONDS);
     private Duration stateFetchInterval = new Duration(100, TimeUnit.MILLISECONDS);
     private Duration querySubmitTimeout = new Duration(10, TimeUnit.SECONDS);
-    private Duration stateExpireTime = new Duration(60, TimeUnit.SECONDS);
+    private Duration stateExpireTime = new Duration(10, TimeUnit.SECONDS);
     private int dataCenterSplits = 5;
     private Duration dataCenterConsumerTimeout = new Duration(10, TimeUnit.MINUTES);
     private boolean executionPlanCacheEnabled;
@@ -62,51 +58,8 @@ public class HetuConfig
     private Duration splitCacheStateUpdateInterval = new Duration(2, TimeUnit.SECONDS);
     private boolean isTraceStackVisible;
 
-    private String extensionExecutionPlannerJarPath;
-    private String extensionExecutionPlannerClassPath;
-    private boolean extensionExecutionPlannerEnabled;
-
     public HetuConfig()
     {
-    }
-
-    public boolean getExtensionExecutionPlannerEnabled()
-    {
-        return extensionExecutionPlannerEnabled;
-    }
-
-    @Config(HetuConstant.EXTENSION_EXECUTION_PLANNER_ENABLED)
-    @ConfigDescription("extension execution planner enable from config")
-    public HetuConfig setExtensionExecutionPlannerEnabled(boolean extensionExecutionPlannerEnabled)
-    {
-        this.extensionExecutionPlannerEnabled = extensionExecutionPlannerEnabled;
-        return this;
-    }
-
-    public String getExtensionExecutionPlannerJarPath()
-    {
-        return extensionExecutionPlannerJarPath;
-    }
-
-    @Config(HetuConstant.EXTENSION_EXECUTION_PLANNER_JAR_PATH)
-    @ConfigDescription("extension execution planner jar path from config")
-    public HetuConfig setExtensionExecutionPlannerJarPath(String extensionExecutionPlannerJarPath)
-    {
-        this.extensionExecutionPlannerJarPath = extensionExecutionPlannerJarPath;
-        return this;
-    }
-
-    public String getExtensionExecutionPlannerClassPath()
-    {
-        return extensionExecutionPlannerClassPath;
-    }
-
-    @Config(HetuConstant.EXTENSION_EXECUTION_PLANNER_CLASS_PATH)
-    @ConfigDescription("extension execution planner class path from config")
-    public HetuConfig setExtensionExecutionPlannerClassPath(String extensionExecutionPlannerClassPath)
-    {
-        this.extensionExecutionPlannerClassPath = extensionExecutionPlannerClassPath;
-        return this;
     }
 
     @NotNull
@@ -126,18 +79,6 @@ public class HetuConfig
     @NotNull
     public String getIndexStoreUri()
     {
-        // if indexStoreUri is null, let the config manager throw the error, it's more user friendly
-        if (indexStoreUri != null) {
-            try {
-                checkArgument(!indexStoreUri.toString().contains("../"),
-                        HetuConstant.INDEXSTORE_URI + " must be absolute and under one of the following whitelisted directories:  " + SecurePathWhiteList.getSecurePathWhiteList().toString());
-                checkArgument(SecurePathWhiteList.isSecurePath(indexStoreUri),
-                        HetuConstant.INDEXSTORE_URI + " must be under one of the following whitelisted directories: " + SecurePathWhiteList.getSecurePathWhiteList().toString());
-            }
-            catch (IOException e) {
-                throw new IllegalArgumentException("Failed to get secure path list.", e);
-            }
-        }
         return indexStoreUri;
     }
 
@@ -173,19 +114,6 @@ public class HetuConfig
     public HetuConfig setIndexCacheTTL(Duration indexCacheTTL)
     {
         this.indexCacheTTL = indexCacheTTL;
-        return this;
-    }
-
-    public Boolean getIndexAutoload()
-    {
-        return indexAutoload;
-    }
-
-    @Config(HetuConstant.FILTER_CACHE_AUTOLOAD_DEFAULT)
-    @ConfigDescription("The default value for autoload property when creating index. If set to true, all indexes will be automatically loaded to cache after creation or update. See CREATE INDEX docs for details.")
-    public HetuConfig setIndexAutoload(Boolean autoloadEnabled)
-    {
-        this.indexAutoload = autoloadEnabled;
         return this;
     }
 

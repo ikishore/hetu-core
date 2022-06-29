@@ -31,16 +31,15 @@ import io.prestosql.execution.TaskStatus;
 import io.prestosql.execution.buffer.BufferResult;
 import io.prestosql.execution.buffer.OutputBuffers.OutputBufferId;
 import io.prestosql.metadata.SessionPropertyManager;
-import io.prestosql.operator.TaskStats;
 import io.prestosql.server.security.SecurityRequireNonNull;
 import io.prestosql.spi.Page;
-import org.joda.time.DateTime;
 import org.weakref.jmx.Managed;
 import org.weakref.jmx.Nested;
 
 import javax.inject.Inject;
 import javax.ws.rs.Consumes;
 import javax.ws.rs.DELETE;
+import javax.ws.rs.DefaultValue;
 import javax.ws.rs.GET;
 import javax.ws.rs.HeaderParam;
 import javax.ws.rs.POST;
@@ -58,7 +57,6 @@ import javax.ws.rs.core.Response;
 import javax.ws.rs.core.Response.Status;
 import javax.ws.rs.core.UriInfo;
 
-import java.net.URI;
 import java.util.List;
 import java.util.concurrent.Executor;
 import java.util.concurrent.ScheduledExecutorService;
@@ -76,7 +74,6 @@ import static io.prestosql.client.PrestoHeaders.PRESTO_MAX_WAIT;
 import static io.prestosql.client.PrestoHeaders.PRESTO_PAGE_NEXT_TOKEN;
 import static io.prestosql.client.PrestoHeaders.PRESTO_PAGE_TOKEN;
 import static io.prestosql.client.PrestoHeaders.PRESTO_TASK_INSTANCE_ID;
-import static io.prestosql.execution.TaskStatus.initialTaskStatus;
 import static io.prestosql.protocol.SmileHeader.APPLICATION_JACKSON_SMILE;
 import static java.util.Objects.requireNonNull;
 import static java.util.concurrent.TimeUnit.MILLISECONDS;
@@ -126,10 +123,7 @@ public class TaskResource
     @Path("{taskId}")
     @Produces({MediaType.APPLICATION_JSON, APPLICATION_JACKSON_SMILE})
     @Consumes({MediaType.APPLICATION_JSON, APPLICATION_JACKSON_SMILE})
-    public Response createOrUpdateTask(
-            @PathParam("taskId") TaskId taskId,
-            TaskUpdateRequest taskUpdateRequest,
-            @Context UriInfo uriInfo)
+    public Response createOrUpdateTask(@PathParam("taskId") TaskId taskId, TaskUpdateRequest taskUpdateRequest, @Context UriInfo uriInfo)
     {
         try {
             requireNonNull(taskUpdateRequest, "taskUpdateRequest is null");
@@ -144,11 +138,7 @@ public class TaskResource
                 taskUpdateRequest.getSources(),
                 taskUpdateRequest.getOutputIds(),
                 taskUpdateRequest.getTotalPartitions(),
-                taskUpdateRequest.getConsumerId(),
-                taskUpdateRequest.getTaskInstanceId());
-        if (taskInfo == null) {
-            return Response.ok().entity(createAbortedTaskInfo(taskId, uriInfo.getAbsolutePath())).build();
-        }
+                taskUpdateRequest.getConsumerId());
 
         if (shouldSummarize(uriInfo)) {
             taskInfo = taskInfo.summarize();
@@ -164,14 +154,13 @@ public class TaskResource
             @PathParam("taskId") final TaskId taskId,
             @HeaderParam(PRESTO_CURRENT_STATE) TaskState currentState,
             @HeaderParam(PRESTO_MAX_WAIT) Duration maxWait,
-            @HeaderParam(PRESTO_TASK_INSTANCE_ID) String taskInstanceId,
             @Context UriInfo uriInfo,
             @Suspended AsyncResponse asyncResponse)
     {
         SecurityRequireNonNull.requireNonNull(taskId, "taskId is null");
 
         if (currentState == null || maxWait == null) {
-            TaskInfo taskInfo = tryGetTaskInfo(uriInfo, taskId, taskInstanceId);
+            TaskInfo taskInfo = taskManager.getTaskInfo(taskId);
             if (shouldSummarize(uriInfo)) {
                 taskInfo = taskInfo.summarize();
             }
@@ -179,15 +168,10 @@ public class TaskResource
             return;
         }
 
-        ListenableFuture<TaskInfo> futureTaskInfo = taskManager.getTaskInfo(taskId, currentState, taskInstanceId);
-        if (futureTaskInfo == null) {
-            asyncResponse.resume(createAbortedTaskInfo(taskId, uriInfo.getAbsolutePath()));
-            return;
-        }
         Duration waitTime = randomizeWaitTime(maxWait);
-        futureTaskInfo = addTimeout(
-                futureTaskInfo,
-                () -> tryGetTaskInfo(uriInfo, taskId, null),
+        ListenableFuture<TaskInfo> futureTaskInfo = addTimeout(
+                taskManager.getTaskInfo(taskId, currentState),
+                () -> taskManager.getTaskInfo(taskId),
                 waitTime,
                 timeoutExecutor);
 
@@ -201,15 +185,6 @@ public class TaskResource
                 .withTimeout(timeout);
     }
 
-    private TaskInfo tryGetTaskInfo(UriInfo uriInfo, TaskId taskId, String taskInstanceId)
-    {
-        TaskInfo taskInfo = taskManager.getTaskInfo(taskId, taskInstanceId);
-        if (taskInfo == null) {
-            taskInfo = createAbortedTaskInfo(taskId, uriInfo.getAbsolutePath());
-        }
-        return taskInfo;
-    }
-
     @GET
     @Path("{taskId}/status")
     @Produces({MediaType.APPLICATION_JSON, APPLICATION_JACKSON_SMILE})
@@ -217,29 +192,24 @@ public class TaskResource
             @PathParam("taskId") TaskId taskId,
             @HeaderParam(PRESTO_CURRENT_STATE) TaskState currentState,
             @HeaderParam(PRESTO_MAX_WAIT) Duration maxWait,
-            @HeaderParam(PRESTO_TASK_INSTANCE_ID) String taskInstanceId,
             @Context UriInfo uriInfo,
             @Suspended AsyncResponse asyncResponse)
     {
         SecurityRequireNonNull.requireNonNull(taskId, "taskId is null");
 
         if (currentState == null || maxWait == null) {
-            asyncResponse.resume(tryGetTaskStatus(uriInfo, taskId, taskInstanceId));
+            TaskStatus taskStatus = taskManager.getTaskStatus(taskId);
+            asyncResponse.resume(taskStatus);
             return;
         }
 
-        ListenableFuture<TaskStatus> futureTaskStatus = taskManager.getTaskStatus(taskId, currentState, taskInstanceId);
-        if (futureTaskStatus == null) {
-            asyncResponse.resume(createAbortedTaskStatus(taskId, uriInfo.getAbsolutePath()));
-            return;
-        }
         Duration waitTime = randomizeWaitTime(maxWait);
         // TODO: With current implementation, a newly completed driver group won't trigger immediate HTTP response,
         // leading to a slight delay of approx 1 second, which is not a major issue for any query that are heavy weight enough
         // to justify group-by-group execution. In order to fix this, REST endpoint /v1/{task}/status will need change.
-        futureTaskStatus = addTimeout(
-                futureTaskStatus,
-                () -> tryGetTaskStatus(uriInfo, taskId, taskInstanceId),
+        ListenableFuture<TaskStatus> futureTaskStatus = addTimeout(
+                taskManager.getTaskStatus(taskId, currentState),
+                () -> taskManager.getTaskStatus(taskId),
                 waitTime,
                 timeoutExecutor);
 
@@ -249,79 +219,22 @@ public class TaskResource
                 .withTimeout(timeout);
     }
 
-    private TaskStatus tryGetTaskStatus(UriInfo uriInfo, TaskId taskId, String taskInstanceId)
-    {
-        TaskStatus taskStatus = taskManager.getTaskStatus(taskId, taskInstanceId);
-        if (taskStatus == null) {
-            taskStatus = createAbortedTaskStatus(taskId, uriInfo.getAbsolutePath());
-        }
-        return taskStatus;
-    }
-
-    @DELETE
-    @Path("{taskId}/suspend")
-    @Produces({MediaType.APPLICATION_JSON, APPLICATION_JACKSON_SMILE})
-    public TaskInfo suspendTask(
-            @PathParam("taskId") TaskId taskId,
-            @HeaderParam(PRESTO_TASK_INSTANCE_ID) String taskInstanceId,
-            @QueryParam("targetState") String targetStateStr,
-            @Context UriInfo uriInfo)
-    {
-        SecurityRequireNonNull.requireNonNull(taskId, "taskId is null");
-
-        TaskState targetState = targetStateStr == null ? TaskState.ABORTED : TaskState.valueOf(targetStateStr);
-        TaskInfo taskInfo = taskManager.suspendTask(taskId, targetState, taskInstanceId);
-
-        if (taskInfo == null) {
-            taskInfo = createAbortedTaskInfo(taskId, uriInfo.getAbsolutePath());
-        }
-
-        if (shouldSummarize(uriInfo)) {
-            taskInfo = taskInfo.summarize();
-        }
-        return taskInfo;
-    }
-
-    @DELETE
-    @Path("{taskId}/resume")
-    @Produces({MediaType.APPLICATION_JSON, APPLICATION_JACKSON_SMILE})
-    public TaskInfo resumeTask(
-            @PathParam("taskId") TaskId taskId,
-            @HeaderParam(PRESTO_TASK_INSTANCE_ID) String taskInstanceId,
-            @QueryParam("targetState") String targetStateStr,
-            @Context UriInfo uriInfo)
-    {
-        SecurityRequireNonNull.requireNonNull(taskId, "taskId is null");
-
-        TaskState targetState = targetStateStr == null ? TaskState.ABORTED : TaskState.valueOf(targetStateStr);
-        TaskInfo taskInfo = taskManager.resumeTask(taskId, targetState, taskInstanceId);
-
-        if (taskInfo == null) {
-            taskInfo = createAbortedTaskInfo(taskId, uriInfo.getAbsolutePath());
-        }
-
-        if (shouldSummarize(uriInfo)) {
-            taskInfo = taskInfo.summarize();
-        }
-        return taskInfo;
-    }
-
     @DELETE
     @Path("{taskId}")
     @Produces({MediaType.APPLICATION_JSON, APPLICATION_JACKSON_SMILE})
     public TaskInfo deleteTask(
             @PathParam("taskId") TaskId taskId,
-            @HeaderParam(PRESTO_TASK_INSTANCE_ID) String taskInstanceId,
-            @QueryParam("targetState") String targetStateStr,
+            @QueryParam("abort") @DefaultValue("true") boolean abort,
             @Context UriInfo uriInfo)
     {
         SecurityRequireNonNull.requireNonNull(taskId, "taskId is null");
+        TaskInfo taskInfo;
 
-        TaskState targetState = targetStateStr == null ? TaskState.ABORTED : TaskState.valueOf(targetStateStr);
-        TaskInfo taskInfo = taskManager.cancelTask(taskId, targetState, taskInstanceId);
-
-        if (taskInfo == null) {
-            taskInfo = createAbortedTaskInfo(taskId, uriInfo.getAbsolutePath());
+        if (abort) {
+            taskInfo = taskManager.abortTask(taskId);
+        }
+        else {
+            taskInfo = taskManager.cancelTask(taskId);
         }
 
         if (shouldSummarize(uriInfo)) {
@@ -338,29 +251,17 @@ public class TaskResource
             @PathParam("bufferId") OutputBufferId bufferId,
             @PathParam("token") final long token,
             @HeaderParam(PRESTO_MAX_SIZE) DataSize maxSize,
-            @HeaderParam(PRESTO_TASK_INSTANCE_ID) String taskInstanceId,
             @Suspended AsyncResponse asyncResponse)
     {
         SecurityRequireNonNull.requireNonNull(taskId, "taskId is null");
         SecurityRequireNonNull.requireNonNull(bufferId, "bufferId is null");
 
         long start = System.nanoTime();
-        ListenableFuture<BufferResult> bufferResultFuture = taskManager.getTaskResults(taskId, bufferId, token, maxSize, taskInstanceId);
-        if (bufferResultFuture == null) {
-            // Request came from task has been cancelled.
-            asyncResponse.resume(Response
-                    .status(Status.NO_CONTENT)
-                    .header(PRESTO_PAGE_TOKEN, token)
-                    .header(PRESTO_PAGE_NEXT_TOKEN, token)
-                    .header(PRESTO_BUFFER_COMPLETE, false) // keep requesting task running, until they are cancelled (to resume)
-                    .build());
-            return;
-        }
-
+        ListenableFuture<BufferResult> bufferResultFuture = taskManager.getTaskResults(taskId, bufferId, token, maxSize);
         Duration waitTime = randomizeWaitTime(DEFAULT_MAX_WAIT_TIME);
         bufferResultFuture = addTimeout(
                 bufferResultFuture,
-                () -> BufferResult.emptyResults(token, false),
+                () -> BufferResult.emptyResults(taskManager.getTaskInstanceId(taskId), token, false),
                 waitTime,
                 timeoutExecutor);
 
@@ -379,6 +280,7 @@ public class TaskResource
 
             return Response.status(status)
                     .entity(entity)
+                    .header(PRESTO_TASK_INSTANCE_ID, result.getTaskInstanceId())
                     .header(PRESTO_PAGE_TOKEN, result.getToken())
                     .header(PRESTO_PAGE_NEXT_TOKEN, result.getNextToken())
                     .header(PRESTO_BUFFER_COMPLETE, result.isBufferComplete())
@@ -390,6 +292,7 @@ public class TaskResource
         bindAsyncResponse(asyncResponse, responseFuture, responseExecutor)
                 .withTimeout(timeout,
                         Response.status(Status.NO_CONTENT)
+                                .header(PRESTO_TASK_INSTANCE_ID, taskManager.getTaskInstanceId(taskId))
                                 .header(PRESTO_PAGE_TOKEN, token)
                                 .header(PRESTO_PAGE_NEXT_TOKEN, token)
                                 .header(PRESTO_BUFFER_COMPLETE, false)
@@ -402,7 +305,6 @@ public class TaskResource
     @GET
     @Path("{taskId}/results/{bufferId}/{token}/acknowledge")
     public void acknowledgeResults(
-            @HeaderParam(PRESTO_TASK_INSTANCE_ID) String taskInstanceId,
             @PathParam("taskId") TaskId taskId,
             @PathParam("bufferId") OutputBufferId bufferId,
             @PathParam("token") final long token)
@@ -410,22 +312,18 @@ public class TaskResource
         SecurityRequireNonNull.requireNonNull(taskId, "taskId is null");
         SecurityRequireNonNull.requireNonNull(bufferId, "bufferId is null");
 
-        taskManager.acknowledgeTaskResults(taskId, bufferId, token, taskInstanceId);
+        taskManager.acknowledgeTaskResults(taskId, bufferId, token);
     }
 
     @DELETE
     @Path("{taskId}/results/{bufferId}")
     @Produces(MediaType.APPLICATION_JSON)
-    public void abortResults(
-            @HeaderParam(PRESTO_TASK_INSTANCE_ID) String taskInstanceId,
-            @PathParam("taskId") TaskId taskId,
-            @PathParam("bufferId") OutputBufferId bufferId,
-            @Context UriInfo uriInfo)
+    public void abortResults(@PathParam("taskId") TaskId taskId, @PathParam("bufferId") OutputBufferId bufferId, @Context UriInfo uriInfo)
     {
         SecurityRequireNonNull.requireNonNull(taskId, "taskId is null");
         SecurityRequireNonNull.requireNonNull(bufferId, "bufferId is null");
 
-        taskManager.abortTaskResults(taskId, bufferId, taskInstanceId);
+        taskManager.abortTaskResults(taskId, bufferId);
     }
 
     @Managed
@@ -452,17 +350,5 @@ public class TaskResource
         // Randomize in [T/2, T], so wait is not near zero and the client-supplied max wait time is respected
         long halfWaitMillis = waitTime.toMillis() / 2;
         return new Duration(halfWaitMillis + ThreadLocalRandom.current().nextLong(halfWaitMillis), MILLISECONDS);
-    }
-
-    // Snapshot: Request includes an invalid task instance id. Return "aborted" result to indicate the task doesn't exist (anymore).
-    private TaskStatus createAbortedTaskStatus(TaskId taskId, URI uri)
-    {
-        return TaskStatus.failWith(initialTaskStatus(taskId, uri, ""), TaskState.ABORTED, ImmutableList.of());
-    }
-
-    private TaskInfo createAbortedTaskInfo(TaskId taskId, URI uri)
-    {
-        return TaskInfo.createInitialTask(taskId, uri, "", ImmutableList.of(), new TaskStats(DateTime.now(), null))
-                .withTaskStatus(createAbortedTaskStatus(taskId, uri));
     }
 }

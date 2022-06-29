@@ -1,5 +1,5 @@
 /*
- * Copyright (C) 2018-2021. Huawei Technologies Co., Ltd. All rights reserved.
+ * Copyright (C) 2018-2020. Huawei Technologies Co., Ltd. All rights reserved.
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
  * You may obtain a copy of the License at
@@ -15,19 +15,13 @@
 
 package io.prestosql.plugin.hive;
 
-import com.google.common.collect.ImmutableMap;
-import com.google.common.collect.Iterables;
 import io.airlift.testing.mysql.TestingMySqlServer;
-import io.airlift.tpch.TpchTable;
 import io.prestosql.tests.AbstractTestStarTreeQueries;
-import io.prestosql.tests.DistributedQueryRunner;
 import org.testng.annotations.AfterClass;
 import org.testng.annotations.Test;
 
-import java.util.Optional;
-import java.util.Random;
-
 import static io.airlift.tpch.TpchTable.getTables;
+import static io.prestosql.plugin.hive.HiveQueryRunner.createQueryRunnerWithMetaStore;
 
 @Test
 public class TestHiveDistributedStarTreeQueries
@@ -38,25 +32,13 @@ public class TestHiveDistributedStarTreeQueries
     public TestHiveDistributedStarTreeQueries()
             throws Exception
     {
-        this(createTestingMySqlServer());
+        this(new TestingMySqlServer("user", "testpass", "hive"));
     }
 
     public TestHiveDistributedStarTreeQueries(TestingMySqlServer mysqlServer)
     {
         super(() -> createQueryRunnerWithMetaStore(getTables(), mysqlServer));
         this.mysqlServer = mysqlServer;
-    }
-
-    private static TestingMySqlServer createTestingMySqlServer()
-            throws Exception
-    {
-        return new TestingMySqlServer("user", "testpass", "cube_meta_store_" + new Random().nextInt(10000000));
-    }
-
-    public static DistributedQueryRunner createQueryRunnerWithMetaStore(Iterable<TpchTable<?>> tables, TestingMySqlServer mySqlServer)
-            throws Exception
-    {
-        return HiveQueryRunner.createQueryRunner(tables, ImmutableMap.of(), "sql-standard", ImmutableMap.of(), Optional.empty(), false, mySqlServer.getJdbcUrl(Iterables.getOnlyElement(mySqlServer.getDatabases())));
     }
 
     @AfterClass(alwaysRun = true)

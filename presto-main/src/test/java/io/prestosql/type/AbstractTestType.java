@@ -56,7 +56,7 @@ import static org.testng.Assert.fail;
 
 public abstract class AbstractTestType
 {
-    private final BlockEncodingSerde blockEncodingSerde = createTestMetadataManager().getFunctionAndTypeManager().getBlockEncodingSerde();
+    private final BlockEncodingSerde blockEncodingSerde = createTestMetadataManager().getBlockEncodingSerde();
 
     private final Class<?> objectValueType;
     private final Block testBlock;
@@ -157,7 +157,6 @@ public abstract class AbstractTestType
                 fail("Expected UnsupportedOperationException");
             }
             catch (UnsupportedOperationException expected) {
-                // the exception could be ignored
             }
         }
 
@@ -182,7 +181,6 @@ public abstract class AbstractTestType
                 fail("Expected UnsupportedOperationException");
             }
             catch (UnsupportedOperationException expected) {
-                // the exception could be ignored
             }
         }
 
@@ -214,21 +212,18 @@ public abstract class AbstractTestType
                 fail("Expected IllegalStateException or UnsupportedOperationException");
             }
             catch (IllegalStateException | UnsupportedOperationException expected) {
-                // the exception could be ignored
             }
             try {
                 type.getDouble(block, position);
                 fail("Expected IllegalStateException or UnsupportedOperationException");
             }
             catch (IllegalStateException | UnsupportedOperationException expected) {
-                // the exception could be ignored
             }
             try {
                 type.getObject(block, position);
                 fail("Expected IllegalStateException or UnsupportedOperationException");
             }
             catch (IllegalStateException | UnsupportedOperationException expected) {
-                // the exception could be ignored
             }
         }
         else if (type.getJavaType() == long.class) {
@@ -238,21 +233,18 @@ public abstract class AbstractTestType
                 fail("Expected IllegalStateException or UnsupportedOperationException");
             }
             catch (IllegalStateException | UnsupportedOperationException expected) {
-                // the exception could be ignored
             }
             try {
                 type.getDouble(block, position);
                 fail("Expected IllegalStateException or UnsupportedOperationException");
             }
             catch (IllegalStateException | UnsupportedOperationException expected) {
-                // the exception could be ignored
             }
             try {
                 type.getObject(block, position);
                 fail("Expected IllegalStateException or UnsupportedOperationException");
             }
             catch (IllegalStateException | UnsupportedOperationException expected) {
-                // the exception could be ignored
             }
         }
         else if (type.getJavaType() == double.class) {
@@ -262,21 +254,18 @@ public abstract class AbstractTestType
                 fail("Expected IllegalStateException or UnsupportedOperationException");
             }
             catch (IllegalStateException | UnsupportedOperationException expected) {
-                // the exception could be ignored
             }
             try {
                 type.getLong(block, position);
                 fail("Expected IllegalStateException or UnsupportedOperationException");
             }
             catch (IllegalStateException | UnsupportedOperationException expected) {
-                // the exception could be ignored
             }
             try {
                 type.getObject(block, position);
                 fail("Expected IllegalStateException or UnsupportedOperationException");
             }
             catch (IllegalStateException | UnsupportedOperationException expected) {
-                // the exception could be ignored
             }
         }
         else if (type.getJavaType() == Slice.class) {
@@ -286,28 +275,24 @@ public abstract class AbstractTestType
                 fail("Expected IllegalStateException or UnsupportedOperationException");
             }
             catch (IllegalStateException | UnsupportedOperationException expected) {
-                // the exception could be ignored
             }
             try {
                 type.getLong(block, position);
                 fail("Expected IllegalStateException or UnsupportedOperationException");
             }
             catch (IllegalStateException | UnsupportedOperationException expected) {
-                // the exception could be ignored
             }
             try {
                 type.getDouble(block, position);
                 fail("Expected IllegalStateException or UnsupportedOperationException");
             }
             catch (IllegalStateException | UnsupportedOperationException expected) {
-                // the exception could be ignored
             }
             try {
                 type.getObject(block, position);
                 fail("Expected IllegalStateException or UnsupportedOperationException");
             }
             catch (IllegalStateException | UnsupportedOperationException expected) {
-                // the exception could be ignored
             }
         }
         else {
@@ -321,28 +306,24 @@ public abstract class AbstractTestType
                 fail("Expected IllegalStateException or UnsupportedOperationException");
             }
             catch (IllegalStateException | UnsupportedOperationException expected) {
-                // the exception could be ignored
             }
             try {
                 type.getLong(block, position);
                 fail("Expected IllegalStateException or UnsupportedOperationException");
             }
             catch (IllegalStateException | UnsupportedOperationException expected) {
-                // the exception could be ignored
             }
             try {
                 type.getDouble(block, position);
                 fail("Expected IllegalStateException or UnsupportedOperationException");
             }
             catch (IllegalStateException | UnsupportedOperationException expected) {
-                // the exception could be ignored
             }
             try {
                 type.getSlice(block, position);
                 fail("Expected IllegalStateException or UnsupportedOperationException");
             }
             catch (IllegalStateException | UnsupportedOperationException expected) {
-                // the exception could be ignored
             }
         }
     }
@@ -354,14 +335,12 @@ public abstract class AbstractTestType
             fail("expected RuntimeException");
         }
         catch (RuntimeException expected) {
-            // the exception could be ignored
         }
         try {
             type.getObjectValue(SESSION, block, block.getPositionCount());
             fail("expected RuntimeException");
         }
         catch (RuntimeException expected) {
-            // the exception could be ignored
         }
 
         try {
@@ -369,14 +348,12 @@ public abstract class AbstractTestType
             fail("expected RuntimeException");
         }
         catch (RuntimeException expected) {
-            // the exception could be ignored
         }
         try {
             type.hash(block, block.getPositionCount());
             fail("expected RuntimeException");
         }
         catch (RuntimeException expected) {
-            // the exception could be ignored
         }
 
         if (type.isComparable() && !(type instanceof UnknownType)) {
@@ -386,14 +363,12 @@ public abstract class AbstractTestType
                 fail("expected RuntimeException");
             }
             catch (RuntimeException expected) {
-                // the exception could be ignored
             }
             try {
                 type.equalTo(block, block.getPositionCount(), other, 0);
                 fail("expected RuntimeException");
             }
             catch (RuntimeException expected) {
-                // the exception could be ignored
             }
         }
 
@@ -410,7 +385,6 @@ public abstract class AbstractTestType
                 fail("expected RuntimeException");
             }
             catch (RuntimeException expected) {
-                // the exception could be ignored
             }
         }
 
@@ -420,14 +394,12 @@ public abstract class AbstractTestType
                 fail("expected RuntimeException");
             }
             catch (RuntimeException expected) {
-                // the exception could be ignored
             }
             try {
                 type.getBoolean(block, block.getPositionCount());
                 fail("expected RuntimeException");
             }
             catch (RuntimeException expected) {
-                // the exception could be ignored
             }
         }
         else if (type.getJavaType() == long.class) {
@@ -436,14 +408,12 @@ public abstract class AbstractTestType
                 fail("expected RuntimeException");
             }
             catch (RuntimeException expected) {
-                // the exception could be ignored
             }
             try {
                 type.getLong(block, block.getPositionCount());
                 fail("expected RuntimeException");
             }
             catch (RuntimeException expected) {
-                // the exception could be ignored
             }
         }
         else if (type.getJavaType() == double.class) {
@@ -452,14 +422,12 @@ public abstract class AbstractTestType
                 fail("expected RuntimeException");
             }
             catch (RuntimeException expected) {
-                // the exception could be ignored
             }
             try {
                 type.getDouble(block, block.getPositionCount());
                 fail("expected RuntimeException");
             }
             catch (RuntimeException expected) {
-                // the exception could be ignored
             }
         }
         else if (type.getJavaType() == Slice.class) {
@@ -468,14 +436,12 @@ public abstract class AbstractTestType
                 fail("expected RuntimeException");
             }
             catch (RuntimeException expected) {
-                // the exception could be ignored
             }
             try {
                 type.getSlice(block, block.getPositionCount());
                 fail("expected RuntimeException");
             }
             catch (RuntimeException expected) {
-                // the exception could be ignored
             }
         }
     }

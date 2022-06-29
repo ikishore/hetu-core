@@ -16,27 +16,22 @@ package io.prestosql.plugin.memory;
 import com.google.inject.Binder;
 import com.google.inject.Module;
 import com.google.inject.Scopes;
-import io.hetu.core.transport.execution.buffer.PagesSerde;
-import io.prestosql.plugin.memory.data.MemoryTableManager;
 import io.prestosql.spi.NodeManager;
 import io.prestosql.spi.type.TypeManager;
 
 import static io.airlift.configuration.ConfigBinder.configBinder;
 import static java.util.Objects.requireNonNull;
-import static org.weakref.jmx.guice.ExportBinder.newExporter;
 
 public class MemoryModule
         implements Module
 {
     private final TypeManager typeManager;
     private final NodeManager nodeManager;
-    private final PagesSerde pagesSerde;
 
-    public MemoryModule(TypeManager typeManager, NodeManager nodeManager, PagesSerde pagesSerde)
+    public MemoryModule(TypeManager typeManager, NodeManager nodeManager)
     {
         this.typeManager = requireNonNull(typeManager, "typeManager is null");
         this.nodeManager = requireNonNull(nodeManager, "nodeManager is null");
-        this.pagesSerde = requireNonNull(pagesSerde, "pagesSerde is null");
     }
 
     @Override
@@ -44,16 +39,13 @@ public class MemoryModule
     {
         binder.bind(TypeManager.class).toInstance(typeManager);
         binder.bind(NodeManager.class).toInstance(nodeManager);
-        binder.bind(PagesSerde.class).toInstance(pagesSerde);
 
+        binder.bind(MemoryConnector.class).in(Scopes.SINGLETON);
         binder.bind(MemoryMetadata.class).in(Scopes.SINGLETON);
         binder.bind(MemorySplitManager.class).in(Scopes.SINGLETON);
-        binder.bind(MemoryTableManager.class).in(Scopes.SINGLETON);
+        binder.bind(MemoryPagesStore.class).in(Scopes.SINGLETON);
         binder.bind(MemoryPageSourceProvider.class).in(Scopes.SINGLETON);
         binder.bind(MemoryPageSinkProvider.class).in(Scopes.SINGLETON);
-        binder.bind(MemoryTableProperties.class).in(Scopes.SINGLETON);
-        binder.bind(MemoryConnector.class).in(Scopes.SINGLETON);
         configBinder(binder).bindConfig(MemoryConfig.class);
-        newExporter(binder).export(MemoryTableManager.class).withGeneratedName();
     }
 }

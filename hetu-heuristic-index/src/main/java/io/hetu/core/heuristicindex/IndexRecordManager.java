@@ -1,5 +1,5 @@
 /*
- * Copyright (C) 2018-2020. Huawei Technologies Co., Ltd. All rights reserved.
+ * Copyright (C) 2018-2021. Huawei Technologies Co., Ltd. All rights reserved.
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
  * You may obtain a copy of the License at
@@ -14,7 +14,6 @@
  */
 package io.hetu.core.heuristicindex;
 
-import com.google.common.collect.ImmutableList;
 import io.airlift.log.Logger;
 import io.prestosql.spi.heuristicindex.IndexRecord;
 import io.prestosql.spi.metastore.HetuMetastore;
@@ -23,13 +22,16 @@ import io.prestosql.spi.metastore.model.DatabaseEntity;
 import io.prestosql.spi.metastore.model.TableEntity;
 import io.prestosql.spi.metastore.model.TableEntityType;
 
-import java.io.IOException;
+import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
-import java.util.stream.Stream;
 
+/**
+ * Index record is stored in hetu metastore as parameters at table level. For each table entity,
+ * See {@link IndexRecord} for more details.
+ */
 public class IndexRecordManager
 {
     private static final Logger LOG = Logger.get(IndexRecordManager.class);
@@ -41,23 +43,41 @@ public class IndexRecordManager
         this.metastore = metastore;
     }
 
+    /**
+     * List all parameters at table level and filter those with hindex prefix.
+     *
+     * Construct {@code IndexRecord} objects from them.
+     *
+     * @return a list of deserialized {@code IndexRecord} objects.
+     */
     public List<IndexRecord> getIndexRecords()
     {
-        long startTime = System.currentTimeMillis();
-
-        ImmutableList.Builder<IndexRecord> records = ImmutableList.builder();
-        getNewIndexStream().forEach(records::add);
-        LOG.debug("{}ms spent on index record scan from hetu metastore", System.currentTimeMillis() - startTime);
-
-        return records.build();
+        List<IndexRecord> records = new ArrayList<>();
+        for (CatalogEntity catalogEntity : metastore.getCatalogs()) {
+            for (DatabaseEntity databaseEntity : metastore.getAllDatabases(catalogEntity.getName())) {
+                for (TableEntity tableEntity : metastore.getAllTables(catalogEntity.getName(), databaseEntity.getName())) {
+                    for (Map.Entry<String, String> param : tableEntity.getParameters().entrySet()) {
+                        if (param.getKey().startsWith(IndexRecord.INDEX_METASTORE_PREFIX)) {
+                            records.add(new IndexRecord(tableEntity, param));
+                        }
+                    }
+                }
+            }
+        }
+        return records;
     }
 
+    /**
+     * Look up index record according to name.
+     */
     public IndexRecord lookUpIndexRecord(String name)
-            throws IOException
     {
-        return getNewIndexStream().filter(indexRecord -> indexRecord.name.equals(name)).findFirst().orElse(null);
+        return getIndexRecords().stream().filter(indexRecord -> indexRecord.name.equals(name)).findFirst().orElse(null);
     }
 
+    /**
+     * Look up index record according to what it is for (triplet of [table, column, type]).
+     */
     public IndexRecord lookUpIndexRecord(String table, String[] columns, String indexType)
     {
         String[] tableQualified = table.split("\\.");
@@ -80,12 +100,16 @@ public class IndexRecordManager
 
     /**
      * Add IndexRecord into record file. If the method is called with a name that already exists,
-     * it will OVERWRITE the existing entry but combine the partition column
+     *
+     * it will OVERWRITE the existing entry but COMBINE the partition columns (if it previously was partitioned)
      */
-    public synchronized void addIndexRecord(String name, String user, String table, String[] columns, String indexType, List<String> indexProperties, List<String> partitions)
-            throws IOException
+    public synchronized void addIndexRecord(String name, String user, String table, String[] columns, String indexType, long indexSize, List<String> indexProperties, List<String> partitions)
     {
-        IndexRecord record = new IndexRecord(name, user, table, columns, indexType, indexProperties, partitions);
+        IndexRecord record = new IndexRecord(name, user, table, columns, indexType, indexSize, indexProperties, partitions);
+        IndexRecord old = lookUpIndexRecord(name);
+        if (old != null) {
+            record.partitions.addAll(0, old.partitions);
+        }
 
         Optional<CatalogEntity> oldCatalog = metastore.getCatalog(record.catalog);
         if (!oldCatalog.isPresent()) {
@@ -115,46 +139,42 @@ public class IndexRecordManager
             metastore.createTableIfNotExist(newTable);
         }
 
-        Optional<TableEntity> tableEntity = metastore.getTable(record.catalog, record.schema, record.table);
-        if (tableEntity.isPresent()) {
-            TableEntity newTable = tableEntity.get();
-            newTable.getParameters().put(record.serializeKey(), record.serializeValue());
-            metastore.alterTable(record.catalog, record.schema, record.table, newTable);
-        }
-        else {
-            throw new IllegalStateException("Failed to create table entity in hetu metastore");
-        }
+        metastore.alterTableParameter(record.catalog,
+                record.schema,
+                record.table,
+                record.serializeKey(),
+                record.serializeValue());
     }
 
+    /**
+     * Delete index record from metastore according to name. Also allows partial deletion.
+     *
+     * @param name name of index to delete
+     * @param partitionsToRemove the partitions to remove. If this list is empty, remove all.
+     */
     public synchronized void deleteIndexRecord(String name, List<String> partitionsToRemove)
-            throws IOException
     {
-        getNewIndexStream().filter(record -> record.name.equals(name))
+        getIndexRecords().stream().filter(record -> record.name.equals(name))
                 .forEach(record -> {
-                    Optional<TableEntity> tableEntity = metastore.getTable(record.catalog, record.schema, record.table);
-                    if (tableEntity.isPresent()) {
-                        TableEntity newTable = tableEntity.get();
-                        if (partitionsToRemove.isEmpty()) {
-                            tableEntity.get().getParameters().remove(record.serializeKey());
-                        }
-                        else {
-                            record.partitions.removeAll(partitionsToRemove);
-                            IndexRecord newRecord = new IndexRecord(record.name, record.user, record.qualifiedTable, record.columns,
-                                    record.indexType, record.properties, record.partitions);
-                            tableEntity.get().getParameters().put(newRecord.serializeKey(), newRecord.serializeValue());
-                        }
-                        metastore.alterTable(record.catalog, record.schema, record.table, newTable);
+                    if (partitionsToRemove.isEmpty()) {
+                        metastore.alterTableParameter(
+                                record.catalog,
+                                record.schema,
+                                record.table,
+                                record.serializeKey(),
+                                null);
+                    }
+                    else {
+                        record.partitions.removeAll(partitionsToRemove);
+                        IndexRecord newRecord = new IndexRecord(record.name, record.user, record.qualifiedTable, record.columns,
+                                record.indexType, record.indexSize, record.propertiesAsList, record.partitions);
+                        metastore.alterTableParameter(
+                                record.catalog,
+                                record.schema,
+                                record.table,
+                                newRecord.serializeKey(),
+                                newRecord.partitions.isEmpty() ? null : newRecord.serializeValue()); // if the last partition of the index has been dropped, remove the record
                     }
                 });
-    }
-
-    private Stream<IndexRecord> getNewIndexStream()
-    {
-        return metastore.getCatalogs().stream()
-                .flatMap(catalogEntity -> metastore.getAllDatabases(catalogEntity.getName()).stream())
-                .flatMap(databaseEntity -> metastore.getAllTables(databaseEntity.getCatalogName(), databaseEntity.getName()).stream())
-                .flatMap(tableEntity -> tableEntity.getParameters().entrySet().stream()
-                        .filter(e -> e.getKey().startsWith(IndexRecord.INDEX_METASTORE_PREFIX))
-                        .map(e -> new IndexRecord(tableEntity, e)));
     }
 }

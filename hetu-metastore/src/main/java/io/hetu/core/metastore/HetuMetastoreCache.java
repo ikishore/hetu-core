@@ -1,5 +1,5 @@
 /*
- * Copyright (C) 2018-2020. Huawei Technologies Co., Ltd. All rights reserved.
+ * Copyright (C) 2018-2021. Huawei Technologies Co., Ltd. All rights reserved.
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
  * You may obtain a copy of the License at
@@ -14,20 +14,15 @@
  */
 package io.hetu.core.metastore;
 
-import com.google.common.cache.Cache;
-import com.google.common.cache.CacheBuilder;
 import io.airlift.log.Logger;
+import io.prestosql.spi.metastore.HetuCache;
 import io.prestosql.spi.metastore.HetuMetastore;
 import io.prestosql.spi.metastore.model.CatalogEntity;
 import io.prestosql.spi.metastore.model.DatabaseEntity;
 import io.prestosql.spi.metastore.model.TableEntity;
 
-import javax.inject.Inject;
-
-import java.time.Duration;
 import java.util.List;
 import java.util.Optional;
-import java.util.concurrent.ExecutionException;
 
 public class HetuMetastoreCache
         implements HetuMetastore
@@ -36,20 +31,28 @@ public class HetuMetastoreCache
 
     private HetuMetastore delegate;
 
-    private Cache<String, Optional<CatalogEntity>> catalogCache;
-    private Cache<String, List<CatalogEntity>> catalogsCache;
-    private Cache<String, Optional<DatabaseEntity>> databaseCache;
-    private Cache<String, List<DatabaseEntity>> databasesCache;
-    private Cache<String, Optional<TableEntity>> tableCache;
-    private Cache<String, List<TableEntity>> tablesCache;
+    private HetuCache<String, Optional<CatalogEntity>> catalogCache;
+    private HetuCache<String, List<CatalogEntity>> catalogsCache;
+    private HetuCache<String, Optional<DatabaseEntity>> databaseCache;
+    private HetuCache<String, List<DatabaseEntity>> databasesCache;
+    private HetuCache<String, Optional<TableEntity>> tableCache;
+    private HetuCache<String, List<TableEntity>> tablesCache;
 
-    @Inject
-    public HetuMetastoreCache(@ForHetuMetastoreCache HetuMetastore delegate, HetuMetastoreCacheConfig hetuMetastoreCacheConfig)
+    public HetuMetastoreCache(HetuMetastore delegate,
+            HetuCache<String, Optional<CatalogEntity>> catalogCache,
+            HetuCache<String, List<CatalogEntity>> catalogsCache,
+            HetuCache<String, Optional<DatabaseEntity>> databaseCache,
+            HetuCache<String, List<DatabaseEntity>> databasesCache,
+            HetuCache<String, Optional<TableEntity>> tableCache,
+            HetuCache<String, List<TableEntity>> tablesCache)
     {
         this.delegate = delegate;
-
-        buildMetaStoreCache(hetuMetastoreCacheConfig.getMetaStoreCacheMaxSize(),
-                Duration.ofMillis(hetuMetastoreCacheConfig.getMetaStoreCacheTtl().toMillis()));
+        this.catalogCache = catalogCache;
+        this.catalogsCache = catalogsCache;
+        this.databaseCache = databaseCache;
+        this.databasesCache = databasesCache;
+        this.tableCache = tableCache;
+        this.tablesCache = tablesCache;
     }
 
     @Override
@@ -60,6 +63,7 @@ public class HetuMetastoreCache
         }
         finally {
             catalogsCache.invalidateAll();
+            catalogCache.invalidate(catalog.getName());
         }
     }
 
@@ -71,6 +75,7 @@ public class HetuMetastoreCache
         }
         finally {
             catalogsCache.invalidateAll();
+            catalogCache.invalidate(catalog.getName());
         }
     }
 
@@ -82,6 +87,7 @@ public class HetuMetastoreCache
         }
         finally {
             catalogCache.invalidate(catalogName);
+            catalogCache.invalidate(newCatalog.getName());
             catalogsCache.invalidateAll();
         }
     }
@@ -102,11 +108,9 @@ public class HetuMetastoreCache
     public Optional<CatalogEntity> getCatalog(String catalogName)
     {
         try {
-            return catalogCache.get(catalogName, () -> {
-                return delegate.getCatalog(catalogName);
-            });
+            return catalogCache.getIfAbsent(catalogName, () -> delegate.getCatalog(catalogName));
         }
-        catch (ExecutionException executionException) {
+        catch (Exception executionException) {
             log.debug(executionException.getCause(),
                     String.format("Error while caching catalog[%s] metadata. Falling back to default flow", catalogName));
             return delegate.getCatalog(catalogName);
@@ -117,11 +121,9 @@ public class HetuMetastoreCache
     public List<CatalogEntity> getCatalogs()
     {
         try {
-            return catalogsCache.get("", () -> {
-                return delegate.getCatalogs();
-            });
+            return catalogsCache.getIfAbsent("", () -> delegate.getCatalogs());
         }
-        catch (ExecutionException executionException) {
+        catch (Exception executionException) {
             log.debug(executionException.getCause(),
                     "Error while caching all catalogs metadata. Falling back to default flow");
             return delegate.getCatalogs();
@@ -136,6 +138,7 @@ public class HetuMetastoreCache
         }
         finally {
             databasesCache.invalidate(database.getCatalogName());
+            databaseCache.invalidate(database.getCatalogName() + "." + database.getName());
         }
     }
 
@@ -147,6 +150,7 @@ public class HetuMetastoreCache
         }
         finally {
             databasesCache.invalidate(database.getCatalogName());
+            databaseCache.invalidate(database.getCatalogName() + "." + database.getName());
         }
     }
 
@@ -158,7 +162,9 @@ public class HetuMetastoreCache
         }
         finally {
             String key = catalogName + "." + databaseName;
+            String newKey = catalogName + "." + newDatabase.getName();
             databaseCache.invalidate(key);
+            databaseCache.invalidate(newKey);
             databasesCache.invalidate(catalogName);
         }
     }
@@ -181,11 +187,9 @@ public class HetuMetastoreCache
     {
         try {
             String key = catalogName + "." + databaseName;
-            return databaseCache.get(key, () -> {
-                return delegate.getDatabase(catalogName, databaseName);
-            });
+            return databaseCache.getIfAbsent(key, () -> delegate.getDatabase(catalogName, databaseName));
         }
-        catch (ExecutionException executionException) {
+        catch (Exception executionException) {
             log.debug(executionException.getCause(),
                     String.format("Error while caching database[%s.%s] metadata. Falling back to default flow"), catalogName, databaseName);
             return delegate.getDatabase(catalogName, databaseName);
@@ -196,11 +200,9 @@ public class HetuMetastoreCache
     public List<DatabaseEntity> getAllDatabases(String catalogName)
     {
         try {
-            return databasesCache.get(catalogName, () -> {
-                return delegate.getAllDatabases(catalogName);
-            });
+            return databasesCache.getIfAbsent(catalogName, () -> delegate.getAllDatabases(catalogName));
         }
-        catch (ExecutionException executionException) {
+        catch (Exception executionException) {
             log.debug(executionException.getCause(),
                     String.format("Error while caching all databases metadata in catalog[%s]. Falling back to default flow", catalogName));
             return delegate.getAllDatabases(catalogName);
@@ -214,8 +216,10 @@ public class HetuMetastoreCache
             delegate.createTable(table);
         }
         finally {
-            String key = table.getCatalogName() + "." + table.getDatabaseName();
-            tablesCache.invalidate(key);
+            String databaseKey = table.getCatalogName() + "." + table.getDatabaseName();
+            String tableKey = databaseKey + '.' + table.getName();
+            tableCache.invalidate(tableKey);
+            tablesCache.invalidate(databaseKey);
         }
     }
 
@@ -226,8 +230,10 @@ public class HetuMetastoreCache
             delegate.createTableIfNotExist(table);
         }
         finally {
-            String key = table.getCatalogName() + "." + table.getDatabaseName();
-            tablesCache.invalidate(key);
+            String databaseKey = table.getCatalogName() + "." + table.getDatabaseName();
+            String tableKey = databaseKey + '.' + table.getName();
+            tableCache.invalidate(tableKey);
+            tablesCache.invalidate(databaseKey);
         }
     }
 
@@ -253,7 +259,48 @@ public class HetuMetastoreCache
         }
         finally {
             String databaseKey = catalogName + '.' + databaseName;
-            String tableKey = catalogName + "." + databaseName + "." + oldTableName;
+            String tableKey = databaseKey + "." + oldTableName;
+            String newTableKey = databaseKey + "." + newTable.getName();
+            tableCache.invalidate(tableKey);
+            tableCache.invalidate(newTableKey);
+            tablesCache.invalidate(databaseKey);
+        }
+    }
+
+    @Override
+    public void alterCatalogParameter(String catalogName, String key, String value)
+    {
+        try {
+            delegate.alterCatalogParameter(catalogName, key, value);
+        }
+        finally {
+            catalogCache.invalidate(catalogName);
+            catalogsCache.invalidateAll();
+        }
+    }
+
+    @Override
+    public void alterDatabaseParameter(String catalogName, String databaseName, String key, String value)
+    {
+        try {
+            delegate.alterDatabaseParameter(catalogName, databaseName, key, value);
+        }
+        finally {
+            String databaseKey = catalogName + '.' + databaseName;
+            databaseCache.invalidate(databaseKey);
+            databasesCache.invalidate(catalogName);
+        }
+    }
+
+    @Override
+    public void alterTableParameter(String catalogName, String databaseName, String tableName, String key, String value)
+    {
+        try {
+            delegate.alterTableParameter(catalogName, databaseName, tableName, key, value);
+        }
+        finally {
+            String databaseKey = catalogName + '.' + databaseName;
+            String tableKey = catalogName + "." + databaseName + "." + tableName;
             tableCache.invalidate(tableKey);
             tablesCache.invalidate(databaseKey);
         }
@@ -264,11 +311,9 @@ public class HetuMetastoreCache
     {
         try {
             String key = catalogName + '.' + databaseName + '.' + tableName;
-            return tableCache.get(key, () -> {
-                return delegate.getTable(catalogName, databaseName, tableName);
-            });
+            return tableCache.getIfAbsent(key, () -> delegate.getTable(catalogName, databaseName, tableName));
         }
-        catch (ExecutionException executionException) {
+        catch (Exception executionException) {
             log.debug(executionException.getCause(),
                     String.format("Error while caching table[%s.%s.%s] metadata. Falling back to default flow", catalogName, databaseName, tableName));
             return delegate.getTable(catalogName, databaseName, tableName);
@@ -280,24 +325,12 @@ public class HetuMetastoreCache
     {
         try {
             String key = catalogName + "." + databaseName;
-            return tablesCache.get(key, () -> {
-                return delegate.getAllTables(catalogName, databaseName);
-            });
+            return tablesCache.getIfAbsent(key, () -> delegate.getAllTables(catalogName, databaseName));
         }
-        catch (ExecutionException executionException) {
+        catch (Exception executionException) {
             log.debug(executionException.getCause(),
-                    String.format("Error while caching all tables metadata in %s.%s. Falling back to default flow"), catalogName, databaseName);
+                    String.format("Error while caching all tables metadata in %s.%s. Falling back to default flow", catalogName, databaseName));
             return delegate.getAllTables(catalogName, databaseName);
         }
-    }
-
-    private void buildMetaStoreCache(long maximumSize, Duration ttl)
-    {
-        catalogCache = CacheBuilder.newBuilder().maximumSize(maximumSize).expireAfterAccess(ttl).build();
-        catalogsCache = CacheBuilder.newBuilder().maximumSize(maximumSize).expireAfterAccess(ttl).build();
-        databaseCache = CacheBuilder.newBuilder().maximumSize(maximumSize).expireAfterAccess(ttl).build();
-        databasesCache = CacheBuilder.newBuilder().maximumSize(maximumSize).expireAfterAccess(ttl).build();
-        tableCache = CacheBuilder.newBuilder().maximumSize(maximumSize).expireAfterAccess(ttl).build();
-        tablesCache = CacheBuilder.newBuilder().maximumSize(maximumSize).expireAfterAccess(ttl).build();
     }
 }

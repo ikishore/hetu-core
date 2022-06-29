@@ -17,6 +17,7 @@ import com.google.common.base.Joiner;
 import com.google.common.base.Splitter;
 import com.google.common.collect.ImmutableList;
 import com.google.common.collect.ImmutableMap;
+import com.google.common.collect.ImmutableSet;
 import com.google.common.collect.Sets;
 import com.google.common.net.HostAndPort;
 import com.google.inject.Injector;
@@ -65,16 +66,19 @@ import io.prestosql.metastore.HetuMetaStoreManager;
 import io.prestosql.protocol.SmileModule;
 import io.prestosql.security.AccessControl;
 import io.prestosql.security.AccessControlManager;
+import io.prestosql.security.GroupProviderManager;
 import io.prestosql.security.PasswordSecurityModule;
 import io.prestosql.server.NodeStateChangeHandler;
 import io.prestosql.server.PluginManager;
 import io.prestosql.server.ServerConfig;
+import io.prestosql.server.ServerInfoResource;
 import io.prestosql.server.ServerMainModule;
 import io.prestosql.server.ShutdownAction;
 import io.prestosql.server.security.ServerSecurityModule;
 import io.prestosql.spi.Plugin;
 import io.prestosql.spi.QueryId;
 import io.prestosql.spi.connector.CatalogName;
+import io.prestosql.spi.security.GroupProvider;
 import io.prestosql.split.PageSourceManager;
 import io.prestosql.split.SplitManager;
 import io.prestosql.sql.parser.SqlParserOptions;
@@ -220,14 +224,14 @@ public class TestingPrestoServer
         this.baseDataDir = baseDataDir.orElseGet(TestingPrestoServer::tempDirectory);
         this.preserveData = baseDataDir.isPresent();
 
-        properties = new HashMap<>(properties);
-        String coordinatorPort = properties.remove("http-server.http.port");
+        Map<String, String> propertiesMap = new HashMap<>(properties);
+        String coordinatorPort = propertiesMap.remove("http-server.http.port");
         if (coordinatorPort == null) {
             coordinatorPort = "0";
         }
 
         ImmutableMap.Builder<String, String> serverProperties = ImmutableMap.<String, String>builder()
-                .putAll(properties)
+                .putAll(propertiesMap)
                 .put("coordinator", String.valueOf(coordinator))
                 .put("presto.version", "testversion")
                 .put("task.concurrency", "4")
@@ -258,6 +262,8 @@ public class TestingPrestoServer
                     binder.bind(TestingEventListenerManager.class).in(Scopes.SINGLETON);
                     binder.bind(AccessControlManager.class).to(TestingAccessControlManager.class).in(Scopes.SINGLETON);
                     binder.bind(EventListenerManager.class).to(TestingEventListenerManager.class).in(Scopes.SINGLETON);
+                    binder.bind(GroupProviderManager.class).in(Scopes.SINGLETON);
+                    binder.bind(GroupProvider.class).toInstance(user -> ImmutableSet.of());
                     binder.bind(AccessControl.class).to(AccessControlManager.class).in(Scopes.SINGLETON);
                     binder.bind(ShutdownAction.class).to(TestShutdownAction.class).in(Scopes.SINGLETON);
                     binder.bind(NodeStateChangeHandler.class).in(Scopes.SINGLETON);
@@ -336,6 +342,7 @@ public class TestingPrestoServer
         shutdownAction = injector.getInstance(ShutdownAction.class);
         announcer = injector.getInstance(Announcer.class);
 
+        injector.getInstance(ServerInfoResource.class).startupComplete();
         announcer.forceAnnounce();
 
         refreshNodes();

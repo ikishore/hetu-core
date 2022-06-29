@@ -19,6 +19,7 @@ import io.prestosql.metadata.Metadata;
 import io.prestosql.operator.StreamingAggregationOperator.StreamingAggregationOperatorFactory;
 import io.prestosql.operator.aggregation.InternalAggregationFunction;
 import io.prestosql.spi.Page;
+import io.prestosql.spi.connector.QualifiedObjectName;
 import io.prestosql.spi.function.Signature;
 import io.prestosql.spi.plan.AggregationNode;
 import io.prestosql.spi.plan.PlanNodeId;
@@ -28,7 +29,9 @@ import org.testng.annotations.AfterMethod;
 import org.testng.annotations.BeforeMethod;
 import org.testng.annotations.Test;
 
+import java.util.HashMap;
 import java.util.List;
+import java.util.Map;
 import java.util.Optional;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.ScheduledExecutorService;
@@ -37,6 +40,7 @@ import static io.airlift.concurrent.Threads.daemonThreadsNamed;
 import static io.prestosql.SessionTestUtils.TEST_SESSION;
 import static io.prestosql.metadata.MetadataManager.createTestMetadataManager;
 import static io.prestosql.operator.OperatorAssertion.assertOperatorEquals;
+import static io.prestosql.operator.OperatorAssertion.assertOperatorEqualsWithSimpleSelfStateComparison;
 import static io.prestosql.spi.function.FunctionKind.AGGREGATE;
 import static io.prestosql.spi.type.BigintType.BIGINT;
 import static io.prestosql.spi.type.BooleanType.BOOLEAN;
@@ -52,10 +56,10 @@ public class TestStreamingAggregationOperator
 {
     private static final Metadata metadata = createTestMetadataManager();
 
-    private static final InternalAggregationFunction LONG_SUM = metadata.getAggregateFunctionImplementation(
-            new Signature("sum", AGGREGATE, BIGINT.getTypeSignature(), BIGINT.getTypeSignature()));
-    private static final InternalAggregationFunction COUNT = metadata.getAggregateFunctionImplementation(
-            new Signature("count", AGGREGATE, BIGINT.getTypeSignature()));
+    private static final InternalAggregationFunction LONG_SUM = metadata.getFunctionAndTypeManager().getAggregateFunctionImplementation(
+            new Signature(QualifiedObjectName.valueOfDefaultFunction("sum"), AGGREGATE, BIGINT.getTypeSignature(), BIGINT.getTypeSignature()));
+    private static final InternalAggregationFunction COUNT = metadata.getFunctionAndTypeManager().getAggregateFunctionImplementation(
+            new Signature(QualifiedObjectName.valueOfDefaultFunction("count"), AGGREGATE, BIGINT.getTypeSignature()));
 
     private ExecutorService executor;
     private ScheduledExecutorService scheduledExecutor;
@@ -128,6 +132,55 @@ public class TestStreamingAggregationOperator
                 .build();
 
         assertOperatorEquals(operatorFactory, driverContext, input, expected);
+    }
+
+    @Test
+    public void testSnapshot()
+    {
+        RowPagesBuilder rowPagesBuilder = RowPagesBuilder.rowPagesBuilder(BOOLEAN, VARCHAR, BIGINT);
+        List<Page> input = rowPagesBuilder
+                .addSequencePage(3, 0, 0, 1)
+                .row(true, "3", 4)
+                .row(false, "3", 5)
+                .pageBreak()
+                .row(true, "3", 6)
+                .row(false, "4", 7)
+                .row(true, "4", 8)
+                .row(false, "4", 9)
+                .row(true, "4", 10)
+                .pageBreak()
+                .row(false, "5", 11)
+                .row(true, "5", 12)
+                .row(false, "5", 13)
+                .row(true, "5", 14)
+                .row(false, "5", 15)
+                .pageBreak()
+                .addSequencePage(3, 0, 6, 16)
+                .build();
+
+        MaterializedResult expected = resultBuilder(driverContext.getSession(), VARCHAR, BIGINT, BIGINT)
+                .row("0", 1L, 1L)
+                .row("1", 1L, 2L)
+                .row("2", 1L, 3L)
+                .row("3", 3L, 15L)
+                .row("4", 4L, 34L)
+                .row("5", 5L, 65L)
+                .row("6", 1L, 16L)
+                .row("7", 1L, 17L)
+                .row("8", 1L, 18L)
+                .build();
+
+        assertOperatorEqualsWithSimpleSelfStateComparison(operatorFactory, driverContext, input, expected, createExpectedMapping());
+    }
+
+    private Map<String, Object> createExpectedMapping()
+    {
+        Map<String, Object> expectedMapping = new HashMap<>();
+        expectedMapping.put("operatorContext", 0);
+        expectedMapping.put("systemMemoryContext", 0L);
+        expectedMapping.put("userMemoryContext", 2244L);
+        expectedMapping.put("finishing", false);
+        return expectedMapping;
     }
 
     @Test

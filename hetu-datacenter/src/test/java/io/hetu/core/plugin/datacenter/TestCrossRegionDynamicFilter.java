@@ -1,5 +1,5 @@
 /*
- * Copyright (C) 2018-2020. Huawei Technologies Co., Ltd. All rights reserved.
+ * Copyright (C) 2018-2021. Huawei Technologies Co., Ltd. All rights reserved.
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
  * You may obtain a copy of the License at
@@ -1392,24 +1392,24 @@ public class TestCrossRegionDynamicFilter
         hetuServer.installPlugin(new StateStoreManagerPlugin());
         hetuServer.loadStateSotre();
 
-        DistributedQueryRunner queryRunner = null;
+        DistributedQueryRunner distributedQueryRunner = null;
         try {
-            queryRunner = DistributedQueryRunner.builder(testSessionBuilder().build())
+            distributedQueryRunner = DistributedQueryRunner.builder(testSessionBuilder().build())
                     .setNodeCount(1)
                     .build();
 
             Map<String, String> connectorProperties = new HashMap<>(properties);
             connectorProperties.putIfAbsent("connection-url", hetuServer.getBaseUrl().toString());
             connectorProperties.putIfAbsent("connection-user", "root");
-            queryRunner.installPlugin(new DataCenterPlugin());
-            queryRunner.createDCCatalog("dc", "dc", connectorProperties);
-            queryRunner.installPlugin(new TpchPlugin());
-            queryRunner.createCatalog("tpch", "tpch", properties);
+            distributedQueryRunner.installPlugin(new DataCenterPlugin());
+            distributedQueryRunner.createDCCatalog("dc", "dc", connectorProperties);
+            distributedQueryRunner.installPlugin(new TpchPlugin());
+            distributedQueryRunner.createCatalog("tpch", "tpch", properties);
 
-            return queryRunner;
+            return distributedQueryRunner;
         }
         catch (Throwable e) {
-            closeAllSuppress(e, queryRunner);
+            closeAllSuppress(e, distributedQueryRunner);
             throw e;
         }
     }

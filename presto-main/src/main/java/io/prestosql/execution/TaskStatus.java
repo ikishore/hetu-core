@@ -16,12 +16,17 @@ package io.prestosql.execution;
 import com.fasterxml.jackson.annotation.JsonCreator;
 import com.fasterxml.jackson.annotation.JsonProperty;
 import com.google.common.collect.ImmutableList;
+import com.google.common.collect.ImmutableMap;
 import com.google.common.collect.ImmutableSet;
 import io.airlift.units.DataSize;
 import io.airlift.units.Duration;
+import io.prestosql.snapshot.RestoreResult;
+import io.prestosql.snapshot.SnapshotInfo;
 
 import java.net.URI;
 import java.util.List;
+import java.util.Map;
+import java.util.Optional;
 import java.util.Set;
 
 import static com.google.common.base.MoreObjects.toStringHelper;
@@ -52,7 +57,7 @@ public class TaskStatus
     private static final long MAX_VERSION = Long.MAX_VALUE;
 
     private final TaskId taskId;
-    private final String taskInstanceId;
+    private final String confirmationInstanceId;
     private final long version;
     private final TaskState state;
     private final URI self;
@@ -72,10 +77,16 @@ public class TaskStatus
 
     private final List<ExecutionFailureInfo> failures;
 
+    // snapshotCaptureResult and snapshotRestoreResult are used to store result of snapshot capture and restore. They are empty when the following conditions happened:
+    // (1) Snapshot is not enabled
+    // (2) Snapshot is enabled but no data for capture/restore result
+    private final Map<Long, SnapshotInfo> snapshotCaptureResult;
+    private final Optional<RestoreResult> snapshotRestoreResult;
+
     @JsonCreator
     public TaskStatus(
             @JsonProperty("taskId") TaskId taskId,
-            @JsonProperty("taskInstanceId") String taskInstanceId,
+            @JsonProperty("taskInstanceId") String confirmationInstanceId,
             @JsonProperty("version") long version,
             @JsonProperty("state") TaskState state,
             @JsonProperty("self") URI self,
@@ -90,10 +101,12 @@ public class TaskStatus
             @JsonProperty("systemMemoryReservation") DataSize systemMemoryReservation,
             @JsonProperty("revocableMemoryReservation") DataSize revocableMemoryReservation,
             @JsonProperty("fullGcCount") long fullGcCount,
-            @JsonProperty("fullGcTime") Duration fullGcTime)
+            @JsonProperty("fullGcTime") Duration fullGcTime,
+            @JsonProperty("snapshotCaptureResult") Map<Long, SnapshotInfo> snapshotCaptureResult,
+            @JsonProperty("snapshotRestoreResult") Optional<RestoreResult> snapshotRestoreResult)
     {
         this.taskId = requireNonNull(taskId, "taskId is null");
-        this.taskInstanceId = requireNonNull(taskInstanceId, "taskInstanceId is null");
+        this.confirmationInstanceId = requireNonNull(confirmationInstanceId, "confirmationInstanceId is null");
 
         checkState(version >= MIN_VERSION, "version must be >= MIN_VERSION");
         this.version = version;
@@ -120,6 +133,9 @@ public class TaskStatus
         checkArgument(fullGcCount >= 0, "fullGcCount is negative");
         this.fullGcCount = fullGcCount;
         this.fullGcTime = requireNonNull(fullGcTime, "fullGcTime is null");
+
+        this.snapshotCaptureResult = snapshotCaptureResult;
+        this.snapshotRestoreResult = snapshotRestoreResult;
     }
 
     @JsonProperty
@@ -129,9 +145,9 @@ public class TaskStatus
     }
 
     @JsonProperty
-    public String getTaskInstanceId()
+    public String getConfirmationInstanceId()
     {
-        return taskInstanceId;
+        return confirmationInstanceId;
     }
 
     @JsonProperty
@@ -224,6 +240,18 @@ public class TaskStatus
         return fullGcTime;
     }
 
+    @JsonProperty
+    public Map<Long, SnapshotInfo> getSnapshotCaptureResult()
+    {
+        return snapshotCaptureResult;
+    }
+
+    @JsonProperty
+    public Optional<RestoreResult> getSnapshotRestoreResult()
+    {
+        return snapshotRestoreResult;
+    }
+
     @Override
     public String toString()
     {
@@ -235,9 +263,14 @@ public class TaskStatus
 
     public static TaskStatus initialTaskStatus(TaskId taskId, URI location, String nodeId)
     {
+        return initialTaskStatus(taskId, "", location, nodeId);
+    }
+
+    public static TaskStatus initialTaskStatus(TaskId taskId, String confirmationInstanceId, URI location, String nodeId)
+    {
         return new TaskStatus(
                 taskId,
-                "",
+                confirmationInstanceId,
                 MIN_VERSION,
                 PLANNED,
                 location,
@@ -252,14 +285,16 @@ public class TaskStatus
                 new DataSize(0, BYTE),
                 new DataSize(0, BYTE),
                 0,
-                new Duration(0, MILLISECONDS));
+                new Duration(0, MILLISECONDS),
+                ImmutableMap.of(),
+                Optional.empty());
     }
 
     public static TaskStatus failWith(TaskStatus taskStatus, TaskState state, List<ExecutionFailureInfo> exceptions)
     {
         return new TaskStatus(
                 taskStatus.getTaskId(),
-                taskStatus.getTaskInstanceId(),
+                taskStatus.getConfirmationInstanceId(),
                 MAX_VERSION,
                 state,
                 taskStatus.getSelf(),
@@ -274,6 +309,8 @@ public class TaskStatus
                 taskStatus.getSystemMemoryReservation(),
                 taskStatus.getRevocableMemoryReservation(),
                 taskStatus.getFullGcCount(),
-                taskStatus.getFullGcTime());
+                taskStatus.getFullGcTime(),
+                taskStatus.snapshotCaptureResult,
+                taskStatus.snapshotRestoreResult);
     }
 }

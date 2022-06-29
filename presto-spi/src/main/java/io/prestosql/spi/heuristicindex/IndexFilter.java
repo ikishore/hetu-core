@@ -1,5 +1,5 @@
 /*
- * Copyright (C) 2018-2020. Huawei Technologies Co., Ltd. All rights reserved.
+ * Copyright (C) 2018-2021. Huawei Technologies Co., Ltd. All rights reserved.
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
  * You may obtain a copy of the License at
@@ -23,7 +23,7 @@ public interface IndexFilter
      * Apply the filter on a given expression to check if the index matches the expression.
      *
      * @param expression the expression used to filter the result. e.g. col_a = 10 AND col_b in ("a", "b")
-     * @return if the indices in this filter matches the expression.
+     * @return if ANY index in this filter matches the expression.
      */
     public boolean matches(Object expression);
 

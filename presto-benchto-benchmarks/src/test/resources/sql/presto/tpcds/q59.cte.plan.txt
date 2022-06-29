@@ -5,17 +5,18 @@ local exchange (GATHER, SINGLE, [])
                 join (INNER, REPLICATED):
                     join (INNER, REPLICATED):
                         remote exchange (REPARTITION, HASH, ["d_week_seq", "ss_store_sk", "sum", "sum_10", "sum_11", "sum_12", "sum_13", "sum_8", "sum_9"])
-                            final aggregation over (d_week_seq, ss_store_sk)
-                                local exchange (GATHER, SINGLE, [])
-                                    remote exchange (REPARTITION, HASH, ["d_week_seq", "ss_store_sk"])
-                                        partial aggregation over (d_week_seq, ss_store_sk)
-                                            join (INNER, REPLICATED):
-                                                Filter
-                                                    scan store_sales
-                                                local exchange (GATHER, SINGLE, [])
-                                                    remote exchange (REPLICATE, BROADCAST, [])
-                                                        Filter
-                                                            scan date_dim
+                            cte wss
+                                final hashaggregation over (d_week_seq, ss_store_sk)
+                                    local exchange (GATHER, SINGLE, [])
+                                        remote exchange (REPARTITION, HASH, ["d_week_seq", "ss_store_sk"])
+                                            partial hashaggregation over (d_week_seq, ss_store_sk)
+                                                join (INNER, REPLICATED):
+                                                    Filter
+                                                        scan store_sales
+                                                    local exchange (GATHER, SINGLE, [])
+                                                        remote exchange (REPLICATE, BROADCAST, [])
+                                                            Filter
+                                                                scan date_dim
                         local exchange (GATHER, SINGLE, [])
                             remote exchange (REPLICATE, BROADCAST, [])
                                 Filter
@@ -25,21 +26,22 @@ local exchange (GATHER, SINGLE, [])
                             Filter
                                 scan store
             local exchange (GATHER, SINGLE, [])
-                remote exchange (REPARTITION, HASH, ["expr_361", "s_store_id_235"])
+                remote exchange (REPARTITION, HASH, ["s_store_id_179", "subtract"])
                     join (INNER, REPLICATED):
                         join (INNER, REPLICATED):
-                            remote exchange (REPARTITION, HASH, ["d_week_seq_147", "ss_store_sk_127", "sum_182", "sum_183", "sum_184", "sum_185", "sum_186", "sum_187", "sum_188"])
-                                final aggregation over (d_week_seq_147, ss_store_sk_127)
-                                    local exchange (GATHER, SINGLE, [])
-                                        remote exchange (REPARTITION, HASH, ["d_week_seq_147", "ss_store_sk_127"])
-                                            partial aggregation over (d_week_seq_147, ss_store_sk_127)
-                                                join (INNER, REPLICATED):
-                                                    Filter
-                                                        scan store_sales
-                                                    local exchange (GATHER, SINGLE, [])
-                                                        remote exchange (REPLICATE, BROADCAST, [])
-                                                            Filter
-                                                                scan date_dim
+                            remote exchange (REPARTITION, HASH, ["d_week_seq_109", "ss_store_sk_89", "sum_144", "sum_145", "sum_146", "sum_147", "sum_148", "sum_149", "sum_150"])
+                                cte wss
+                                    final hashaggregation over (d_week_seq_109, ss_store_sk_89)
+                                        local exchange (GATHER, SINGLE, [])
+                                            remote exchange (REPARTITION, HASH, ["d_week_seq_109", "ss_store_sk_89"])
+                                                partial hashaggregation over (d_week_seq_109, ss_store_sk_89)
+                                                    join (INNER, REPLICATED):
+                                                        Filter
+                                                            scan store_sales
+                                                        local exchange (GATHER, SINGLE, [])
+                                                            remote exchange (REPLICATE, BROADCAST, [])
+                                                                Filter
+                                                                    scan date_dim
                             local exchange (GATHER, SINGLE, [])
                                 remote exchange (REPLICATE, BROADCAST, [])
                                     Filter

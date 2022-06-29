@@ -1,5 +1,5 @@
 /*
- * Copyright (C) 2018-2020. Huawei Technologies Co., Ltd. All rights reserved.
+ * Copyright (C) 2018-2021. Huawei Technologies Co., Ltd. All rights reserved.
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
  * You may obtain a copy of the License at
@@ -17,7 +17,8 @@ package io.hetu.core.heuristicindex;
 import com.google.common.annotations.VisibleForTesting;
 import com.google.common.base.Strings;
 import io.airlift.log.Logger;
-import io.hetu.core.plugin.heuristicindex.index.btree.BTreeIndex;
+import io.hetu.core.common.util.SecurePathWhiteList;
+import io.hetu.core.heuristicindex.util.IndexConstants;
 import io.prestosql.spi.HetuConstant;
 import io.prestosql.spi.connector.CreateIndexMetadata;
 import io.prestosql.spi.filesystem.HetuFileSystemClient;
@@ -27,11 +28,13 @@ import io.prestosql.spi.heuristicindex.Pair;
 import io.prestosql.spi.type.Type;
 
 import java.io.IOException;
+import java.io.OutputStream;
 import java.nio.file.Path;
 import java.nio.file.Paths;
 import java.util.ArrayList;
 import java.util.Collections;
 import java.util.List;
+import java.util.Locale;
 import java.util.Map;
 import java.util.Properties;
 import java.util.concurrent.ConcurrentHashMap;
@@ -40,12 +43,13 @@ import java.util.concurrent.locks.Lock;
 import java.util.concurrent.locks.ReentrantLock;
 import java.util.stream.Collectors;
 
+import static com.google.common.base.Preconditions.checkArgument;
 import static io.prestosql.spi.heuristicindex.SerializationUtils.serializeMap;
 import static io.prestosql.spi.heuristicindex.SerializationUtils.serializeStripeSymbol;
 
 /**
  * Indexes which needs to be created at table or partition level
- * needs to use this writer.
+ * needs to use this writer. E.g. BTREE index.
  */
 public class PartitionIndexWriter
         implements IndexWriter
@@ -61,6 +65,16 @@ public class PartitionIndexWriter
     private final Properties properties;
     private final HetuFileSystemClient fs;
     private final Path root;
+
+    /*
+    Each stripe from pages is mapped to a auto-incremental integer, starting from 0.
+    This mapping is stored in symbolToIdMap like 0 -> "<ORCFileName>:<stripeStart>:<stripeEnd>"
+    See more about serialization at {@link io.prestosql.spi.heuristicindex.SerializationUtils}
+
+    The inverted index is stored in data map like {10 -> "1,2", 2 -> "2,3"}, meaning that
+    value 10 occurs in stripe 1 and 2, and value 2 occurs in stripe 2 and 3. The majority of memory
+    is used by this map.
+     */
     private final AtomicInteger counter = new AtomicInteger(0); // symbol table counter
     private final Map<String, String> symbolToIdMap;
     private final Map<Comparable<? extends Comparable<?>>, String> dataMap;
@@ -120,6 +134,12 @@ public class PartitionIndexWriter
                 Comparable<? extends Comparable<?>> comparableKey = (Comparable<? extends Comparable<?>>) key;
                 String existing = dataMap.putIfAbsent(comparableKey, code);
                 if (existing != null) {
+                    // replace old string with new values added. e.g. "1,2,2" -> "1,2,2,3"
+                    // while loop used to allow concurrent modification.
+                    // THIS IS UGLY BUT IS THE WORKING SOLUTION TO SAVE MEMORY.
+                    // Tried to use collections like List[1,2,2,3] or Set[1,2,3] but both
+                    // crash node with too high memory usage.
+                    // TODO: Resolved memory issue in a more decent way
                     String newData = getNewData(key, code);
                     boolean done = dataMap.replace(comparableKey, existing, newData);
                     while (!done) {
@@ -138,8 +158,11 @@ public class PartitionIndexWriter
         return output + "," + splitData;
     }
 
+    /**
+     * Persists the data into an Index object and serialize it to disk.
+     */
     @Override
-    public void persist()
+    public long persist()
             throws IOException
     {
         persistLock.lock();
@@ -158,38 +181,60 @@ public class PartitionIndexWriter
             String dbPath = "";
             for (Pair<String, Type> entry : createIndexMetadata.getIndexColumns()) {
                 if (partition != null) {
-                    dbPath = this.root + "/" + createIndexMetadata.getTableName() + "/" + entry.getFirst() + "/" + createIndexMetadata.getIndexType().toUpperCase() + "/" + partition;
+                    dbPath = this.root + "/" + createIndexMetadata.getTableName() + "/" + entry.getFirst().toLowerCase(Locale.ENGLISH) + "/" + createIndexMetadata.getIndexType().toUpperCase() + "/" + partition;
                 }
                 else {
-                    dbPath = this.root + "/" + createIndexMetadata.getTableName() + "/" + entry.getFirst() + "/" + createIndexMetadata.getIndexType().toUpperCase();
+                    dbPath = this.root + "/" + createIndexMetadata.getTableName() + "/" + entry.getFirst().toLowerCase(Locale.ENGLISH) + "/" + createIndexMetadata.getIndexType().toUpperCase();
                 }
                 partitionIndex = HeuristicIndexFactory.createIndex(createIndexMetadata.getIndexType());
             }
+
+            // check required for security scan since we are constructing a path using input
+            checkArgument(!dbPath.toString().contains("../"),
+                    dbPath + " must be absolute and under one of the following whitelisted directories:  " + SecurePathWhiteList.getSecurePathWhiteList().toString());
+            checkArgument(SecurePathWhiteList.isSecurePath(dbPath),
+                    dbPath + " must be under one of the following whitelisted directories: " + SecurePathWhiteList.getSecurePathWhiteList().toString());
 
             List<Pair<Comparable<? extends Comparable<?>>, String>> values = new ArrayList<>(dataMap.size());
             for (Map.Entry<Comparable<? extends Comparable<?>>, String> entry : dataMap.entrySet()) {
                 values.add(new Pair<>(entry.getKey(), entry.getValue()));
             }
-            String columnName = createIndexMetadata.getIndexColumns().get(0).getFirst();
+            String columnName = createIndexMetadata.getIndexColumns().get(0).getFirst().toLowerCase(Locale.ENGLISH);
             partitionIndex.addKeyValues(Collections.singletonList(new Pair<>(columnName, values)));
 
             properties.put(SYMBOL_TABLE_KEY_NAME, serializedSymbolTable);
             properties.put(MAX_MODIFIED_TIME, String.valueOf(maxLastModifiedTime));
             partitionIndex.setProperties(properties);
-            Path filePath = Paths.get(dbPath + "/" + BTreeIndex.FILE_NAME);
+            Path filePath = Paths.get(dbPath + "/" + IndexConstants.LAST_MODIFIED_FILE_PREFIX + maxLastModifiedTime);
 
-            try {
-                fs.createDirectories(filePath.getParent());
-                partitionIndex.serialize(fs.newOutputStream(filePath));
+            // check required for security scan since we are constructing a path using input
+            checkArgument(!filePath.toString().contains("../"),
+                    filePath + " must be absolute and under one of the following whitelisted directories:  " + SecurePathWhiteList.getSecurePathWhiteList().toString());
+            checkArgument(SecurePathWhiteList.isSecurePath(dbPath),
+                    filePath + " must be under one of the following whitelisted directories: " + SecurePathWhiteList.getSecurePathWhiteList().toString());
+
+            List<Path> oldFiles = Collections.emptyList();
+            if (fs.exists(Paths.get(dbPath))) {
+                oldFiles = fs.walk(Paths.get(dbPath)).filter(p -> !fs.isDirectory(p)).collect(Collectors.toList());
+            }
+            for (Path oldFile : oldFiles) {
+                fs.deleteIfExists(oldFile);
+            }
+            fs.createDirectories(filePath.getParent());
+            try (OutputStream os = fs.newOutputStream(filePath)) {
+                partitionIndex.serialize(os);
             }
             catch (IOException e) {
                 // roll back creation
                 fs.delete(filePath);
                 throw e;
             }
+            return (long) fs.getAttribute(filePath, "size");
         }
         finally {
-            partitionIndex.close();
+            if (partitionIndex != null) {
+                partitionIndex.close();
+            }
             persistLock.unlock();
         }
     }

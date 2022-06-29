@@ -20,17 +20,21 @@ import com.google.common.collect.ImmutableMap;
 import com.google.common.collect.ListMultimap;
 import com.google.common.collect.Multimap;
 import com.google.common.collect.Multiset;
+import io.hetu.core.spi.cube.CubeMetadata;
 import io.prestosql.execution.Output;
-import io.prestosql.metadata.QualifiedObjectName;
 import io.prestosql.security.AccessControl;
 import io.prestosql.spi.connector.CatalogName;
 import io.prestosql.spi.connector.ColumnHandle;
-import io.prestosql.spi.function.Signature;
+import io.prestosql.spi.connector.ColumnMetadata;
+import io.prestosql.spi.connector.ConnectorTableMetadata;
+import io.prestosql.spi.connector.QualifiedObjectName;
+import io.prestosql.spi.function.FunctionHandle;
 import io.prestosql.spi.metadata.TableHandle;
 import io.prestosql.spi.security.Identity;
 import io.prestosql.spi.type.Type;
 import io.prestosql.sql.tree.ExistsPredicate;
 import io.prestosql.sql.tree.Expression;
+import io.prestosql.sql.tree.FieldReference;
 import io.prestosql.sql.tree.FunctionCall;
 import io.prestosql.sql.tree.GroupingOperation;
 import io.prestosql.sql.tree.Identifier;
@@ -124,7 +128,7 @@ public class Analysis
     private final Map<NodeRef<Expression>, Type> coercions = new LinkedHashMap<>();
     private final Set<NodeRef<Expression>> typeOnlyCoercions = new LinkedHashSet<>();
     private final Map<NodeRef<Relation>, List<Type>> relationCoercions = new LinkedHashMap<>();
-    private final Map<NodeRef<FunctionCall>, Signature> functionSignature = new LinkedHashMap<>();
+    private final Map<NodeRef<FunctionCall>, FunctionHandle> functionHandles = new LinkedHashMap<>();
     private final Map<NodeRef<Identifier>, LambdaArgumentDeclaration> lambdaArgumentReferences = new LinkedHashMap<>();
 
     private final Map<Field, ColumnHandle> columns = new LinkedHashMap<>();
@@ -142,8 +146,10 @@ public class Analysis
     // for create table
     private Optional<QualifiedObjectName> createTableDestination = Optional.empty();
     private Map<String, Expression> createTableProperties = ImmutableMap.of();
+    private ConnectorTableMetadata tableMetadata;
     private boolean createTableAsSelectWithData = true;
     private boolean createTableAsSelectNoOp;
+    private TableHandle createTableAsSelectNoOpTarget;
     private Optional<List<Identifier>> createTableColumnAliases = Optional.empty();
     private Optional<String> createTableComment = Optional.empty();
 
@@ -151,6 +157,7 @@ public class Analysis
     private boolean isInsertOverwrite;
     private Optional<Update> update = Optional.empty();
     private Optional<TableHandle> analyzeTarget = Optional.empty();
+    private Optional<List<ColumnMetadata>> updatedColumns = Optional.empty();
 
     // for describe input and describe output
     private final boolean isDescribe;
@@ -164,6 +171,12 @@ public class Analysis
     private Statement originalStatement;
     private CubeInsert cubeInsert;
     private boolean cubeOverwrite;
+
+    // row id field for update/delete queries
+    private final Map<NodeRef<Table>, FieldReference> rowIdField = new LinkedHashMap<>();
+
+    // row id handle for update/delete queries
+    private final Map<NodeRef<Table>, ColumnHandle> rowIdHandle = new LinkedHashMap<>();
 
     public Analysis(@Nullable Statement root, List<Expression> parameters, boolean isDescribe)
     {
@@ -231,9 +244,15 @@ public class Analysis
         return createTableAsSelectNoOp;
     }
 
-    public void setCreateTableAsSelectNoOp(boolean createTableAsSelectNoOp)
+    public TableHandle getCreateTableAsSelectNoOpTarget()
+    {
+        return createTableAsSelectNoOpTarget;
+    }
+
+    public void setCreateTableAsSelectNoOp(boolean createTableAsSelectNoOp, TableHandle target)
     {
         this.createTableAsSelectNoOp = createTableAsSelectNoOp;
+        this.createTableAsSelectNoOpTarget = target;
     }
 
     public void setAsyncQuery(boolean asyncQuery)
@@ -543,14 +562,19 @@ public class Analysis
         tables.put(NodeRef.of(table), handle);
     }
 
-    public Signature getFunctionSignature(FunctionCall function)
+    public FunctionHandle getFunctionHandle(FunctionCall function)
     {
-        return functionSignature.get(NodeRef.of(function));
+        return functionHandles.get(NodeRef.of(function));
     }
 
-    public void addFunctionSignatures(Map<NodeRef<FunctionCall>, Signature> infos)
+    public void addFunctionHandles(Map<NodeRef<FunctionCall>, FunctionHandle> infos)
     {
-        functionSignature.putAll(infos);
+        functionHandles.putAll(infos);
+    }
+
+    public Map<NodeRef<FunctionCall>, FunctionHandle> getFunctionHandles()
+    {
+        return ImmutableMap.copyOf(functionHandles);
     }
 
     public Set<NodeRef<Expression>> getColumnReferences()
@@ -634,6 +658,16 @@ public class Analysis
         return createTableProperties;
     }
 
+    public void setCreateTableMetadata(ConnectorTableMetadata tableMetadata)
+    {
+        this.tableMetadata = tableMetadata;
+    }
+
+    public ConnectorTableMetadata getCreateTableMetadata()
+    {
+        return tableMetadata;
+    }
+
     public Optional<List<Identifier>> getColumnAliases()
     {
         return createTableColumnAliases;
@@ -667,6 +701,16 @@ public class Analysis
     public Optional<Insert> getInsert()
     {
         return insert;
+    }
+
+    public void setUpdatedColumns(List<ColumnMetadata> updatedColumns)
+    {
+        this.updatedColumns = Optional.of(updatedColumns);
+    }
+
+    public Optional<List<ColumnMetadata>> getUpdatedColumns()
+    {
+        return updatedColumns;
     }
 
     public boolean isInsertOverwrite()
@@ -856,6 +900,26 @@ public class Analysis
         return redundantOrderBy.contains(NodeRef.of(orderBy));
     }
 
+    public void setRowIdField(Table table, FieldReference field)
+    {
+        rowIdField.put(NodeRef.of(table), field);
+    }
+
+    public FieldReference getRowIdField(Table table)
+    {
+        return rowIdField.get(NodeRef.of(table));
+    }
+
+    public void setRowIdHandle(Table table, ColumnHandle handle)
+    {
+        rowIdHandle.put(NodeRef.of(table), handle);
+    }
+
+    public ColumnHandle getRowIdHandle(Table table)
+    {
+        return rowIdHandle.get(NodeRef.of(table));
+    }
+
     public void registerCubeForTable(TableHandle original, TableHandle cube)
     {
         this.cubes.computeIfAbsent(original, key -> new ArrayList<>()).add(cube);
@@ -870,11 +934,15 @@ public class Analysis
     public static final class CubeInsert
     {
         private final TableHandle target;
+        private final TableHandle sourceTable;
         private final List<ColumnHandle> columns;
+        private final CubeMetadata metadata;
 
-        public CubeInsert(TableHandle target, List<ColumnHandle> columns)
+        public CubeInsert(CubeMetadata metadata, TableHandle target, TableHandle sourceTable, List<ColumnHandle> columns)
         {
+            this.metadata = requireNonNull(metadata, "cubeMetadata is null");
             this.target = requireNonNull(target, "target is null");
+            this.sourceTable = requireNonNull(sourceTable, "sourceTable is null");
             this.columns = requireNonNull(columns, "columns is null");
             checkArgument(columns.size() > 0, "No columns given to insert");
         }
@@ -887,6 +955,16 @@ public class Analysis
         public TableHandle getTarget()
         {
             return target;
+        }
+
+        public TableHandle getSourceTable()
+        {
+            return sourceTable;
+        }
+
+        public CubeMetadata getMetadata()
+        {
+            return metadata;
         }
     }
 
@@ -1087,7 +1165,7 @@ public class Analysis
             }
             RowFilterScopeEntry that = (RowFilterScopeEntry) o;
             return table.equals(that.table) &&
-                           identity.equals(that.identity);
+                    identity.equals(that.identity);
         }
 
         @Override

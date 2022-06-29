@@ -84,7 +84,7 @@ public class StripeReader
     private static final Logger log = Logger.get(StripeReader.class);
 
     private final OrcDataSource orcDataSource;
-    private final ZoneId storageTimeZone;
+    private final ZoneId legacyFileTimeZone;
     private final Optional<OrcDecompressor> decompressor;
     private final ColumnMetadata<OrcType> types;
     private final HiveWriterVersion hiveWriterVersion;
@@ -97,7 +97,7 @@ public class StripeReader
     private final OrcCacheProperties orcCacheProperties;
 
     public StripeReader(OrcDataSource orcDataSource,
-            ZoneId storageTimeZone,
+            ZoneId legacyFileTimeZone,
             Optional<OrcDecompressor> decompressor,
             ColumnMetadata<OrcType> types,
             Set<OrcColumn> readColumns,
@@ -110,7 +110,7 @@ public class StripeReader
             OrcCacheProperties orcCacheProperties)
     {
         this.orcDataSource = requireNonNull(orcDataSource, "orcDataSource is null");
-        this.storageTimeZone = requireNonNull(storageTimeZone, "storageTimeZone is null");
+        this.legacyFileTimeZone = requireNonNull(legacyFileTimeZone, "legacyFileTimeZone is null");
         this.decompressor = requireNonNull(decompressor, "decompressor is null");
         this.types = requireNonNull(types, "types is null");
         this.includedOrcColumnIds = getIncludeColumns(requireNonNull(readColumns, "readColumns is null"));
@@ -128,7 +128,7 @@ public class StripeReader
     {
         // read the stripe footer
         OrcStripeFooterCacheKey cacheKey = new OrcStripeFooterCacheKey();
-        cacheKey.setOrcDataSourceId(orcDataSource.getId());
+        cacheKey.setOrcDataSourceId(new OrcDataSourceIdWithTimeStamp(orcDataSource.getId(), orcDataSource.getLastModifiedTime()));
         cacheKey.setStripeOffset(stripe.getOffset());
 
         StripeFooter stripeFooter;
@@ -147,9 +147,9 @@ public class StripeReader
         }
         ColumnMetadata<ColumnEncoding> columnEncodings = stripeFooter.getColumnEncodings();
         if (writeValidation.isPresent()) {
-            writeValidation.get().validateTimeZone(orcDataSource.getId(), stripeFooter.getTimeZone().orElse(null));
+            writeValidation.get().validateTimeZone(orcDataSource.getId(), stripeFooter.getTimeZone());
         }
-        ZoneId fileTimeZone = stripeFooter.getTimeZone().orElse(storageTimeZone);
+        ZoneId fileTimeZone = stripeFooter.getTimeZone();
 
         // get streams for selected columns
         Map<StreamId, Stream> streams = new HashMap<>();
@@ -204,7 +204,7 @@ public class StripeReader
                         selectedRowGroups,
                         columnEncodings);
 
-                return new Stripe(stripe.getNumberOfRows(), fileTimeZone, storageTimeZone, columnEncodings, rowGroups, dictionaryStreamSources);
+                return new Stripe(stripe.getNumberOfRows(), fileTimeZone, columnEncodings, rowGroups, dictionaryStreamSources);
             }
             catch (InvalidCheckpointException e) {
                 // The ORC file contains a corrupt checkpoint stream treat the stripe as a single row group.
@@ -231,7 +231,7 @@ public class StripeReader
                 List<RowGroupIndex> rowGroupIndexes;
                 if (orcCacheProperties.isRowIndexCacheEnabled()) {
                     OrcRowIndexCacheKey indexCacheKey = new OrcRowIndexCacheKey();
-                    indexCacheKey.setOrcDataSourceId(orcDataSource.getId());
+                    indexCacheKey.setOrcDataSourceId(new OrcDataSourceIdWithTimeStamp(orcDataSource.getId(), orcDataSource.getLastModifiedTime()));
                     indexCacheKey.setStripeOffset(stripe.getOffset());
                     indexCacheKey.setStreamId(entry.getKey());
                     try {
@@ -275,7 +275,7 @@ public class StripeReader
         }
         RowGroup rowGroup = new RowGroup(0, 0, stripe.getNumberOfRows(), minAverageRowBytes, new InputStreamSources(builder.build()));
 
-        return new Stripe(stripe.getNumberOfRows(), fileTimeZone, storageTimeZone, columnEncodings, ImmutableList.of(rowGroup), dictionaryStreamSources);
+        return new Stripe(stripe.getNumberOfRows(), fileTimeZone, columnEncodings, ImmutableList.of(rowGroup), dictionaryStreamSources);
     }
 
     private static boolean isSupportedStreamType(Stream stream, OrcTypeKind orcTypeKind)
@@ -292,7 +292,7 @@ public class StripeReader
         return true;
     }
 
-    private Map<StreamId, OrcChunkLoader> readDiskRanges(long stripeOffset, Map<StreamId, DiskRange> diskRanges, AggregatedMemoryContext systemMemoryUsage)
+    private Map<StreamId, OrcChunkLoader> readDiskRanges(long stripeOffset, Map<StreamId, DiskRange> inputDiskRanges, AggregatedMemoryContext systemMemoryUsage)
             throws IOException
     {
         //
@@ -300,6 +300,7 @@ public class StripeReader
         //
 
         // transform ranges to have an absolute offset in file
+        Map<StreamId, DiskRange> diskRanges = inputDiskRanges;
         ImmutableMap.Builder<StreamId, DiskRange> diskRangesBuilder = ImmutableMap.builder();
         for (Entry<StreamId, DiskRange> entry : diskRanges.entrySet()) {
             DiskRange diskRange = entry.getValue();
@@ -425,7 +426,7 @@ public class StripeReader
         // read the footer
         Slice tailBuffer = orcDataSource.readFully(offset, tailLength);
         try (InputStream inputStream = new OrcInputStream(OrcChunkLoader.create(orcDataSource.getId(), tailBuffer, decompressor, systemMemoryUsage))) {
-            return metadataReader.readStripeFooter(types, inputStream);
+            return metadataReader.readStripeFooter(types, inputStream, legacyFileTimeZone);
         }
     }
 
@@ -444,7 +445,7 @@ public class StripeReader
                 OrcInputStream inputStream = new OrcInputStream(streamsData.get(entry.getKey()));
                 if (orcCacheProperties.isBloomFilterCacheEnabled()) {
                     OrcBloomFilterCacheKey bloomFilterCacheKey = new OrcBloomFilterCacheKey();
-                    bloomFilterCacheKey.setOrcDataSourceId(orcDataSource.getId());
+                    bloomFilterCacheKey.setOrcDataSourceId(new OrcDataSourceIdWithTimeStamp(orcDataSource.getId(), orcDataSource.getLastModifiedTime()));
                     bloomFilterCacheKey.setStripeOffset(stripe.getOffset());
                     bloomFilterCacheKey.setStreamId(entry.getKey());
                     try {
@@ -467,7 +468,7 @@ public class StripeReader
                 OrcInputStream inputStream = new OrcInputStream(streamsData.get(entry.getKey()));
                 if (orcCacheProperties.isBloomFilterCacheEnabled()) {
                     OrcBloomFilterCacheKey bloomFilterCacheKey = new OrcBloomFilterCacheKey();
-                    bloomFilterCacheKey.setOrcDataSourceId(orcDataSource.getId());
+                    bloomFilterCacheKey.setOrcDataSourceId(new OrcDataSourceIdWithTimeStamp(orcDataSource.getId(), orcDataSource.getLastModifiedTime()));
                     bloomFilterCacheKey.setStripeOffset(stripe.getOffset());
                     bloomFilterCacheKey.setStreamId(entry.getKey());
                     try {
@@ -499,7 +500,7 @@ public class StripeReader
                 List<RowGroupIndex> rowGroupIndexes;
                 if (orcCacheProperties.isRowIndexCacheEnabled()) {
                     OrcRowIndexCacheKey indexCacheKey = new OrcRowIndexCacheKey();
-                    indexCacheKey.setOrcDataSourceId(orcDataSource.getId());
+                    indexCacheKey.setOrcDataSourceId(new OrcDataSourceIdWithTimeStamp(orcDataSource.getId(), orcDataSource.getLastModifiedTime()));
                     indexCacheKey.setStripeOffset(stripe.getOffset());
                     indexCacheKey.setStreamId(entry.getKey());
                     try {

@@ -44,6 +44,7 @@ import java.util.Optional;
 import java.util.Set;
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.atomic.AtomicBoolean;
+import java.util.regex.Pattern;
 
 import static com.google.common.base.CharMatcher.whitespace;
 import static com.google.common.base.Preconditions.checkState;
@@ -74,6 +75,8 @@ public class Console
 
     private static final String PROMPT_NAME = "lk";
     private static final Duration EXIT_DELAY = new Duration(3, SECONDS);
+    private static final Pattern CREATE_CUBE_PATTERN = Pattern.compile("^(create)\\s*cube.*where.*", Pattern.CASE_INSENSITIVE | Pattern.DOTALL | Pattern.MULTILINE);
+    private static final Pattern RELOAD_CUBE_PATTERN = Pattern.compile("^(reload)\\s*cube.*", Pattern.CASE_INSENSITIVE | Pattern.DOTALL | Pattern.MULTILINE);
 
     @Inject
     public HelpOption helpOption;
@@ -147,7 +150,6 @@ public class Console
                         clientOptions.ignoreErrors,
                         clientOptions.progress);
             }
-
             runConsole(queryRunner, exiting);
             return true;
         }
@@ -194,6 +196,11 @@ public class Console
         catch (IOException exception) {
             throw new UncheckedIOException("Failed to read password from console", exception);
         }
+    }
+
+    public ClientOptions getClientOptions()
+    {
+        return clientOptions;
     }
 
     private void runConsole(QueryRunner queryRunner, AtomicBoolean exiting)
@@ -249,6 +256,8 @@ public class Console
                         System.out.println();
                         System.out.println(getHelpText());
                         continue;
+                    default:
+                        break;
                 }
                 // execute any complete statements
                 StatementSplitter splitter = new StatementSplitter(line, STATEMENT_DELIMITERS);
@@ -257,9 +266,40 @@ public class Console
                     if (split.terminator().equals("\\G")) {
                         outputFormat = ClientOptions.OutputFormat.VERTICAL;
                     }
-                    process(queryRunner, split.statement(), outputFormat, tableNameCompleter::populateCache, true, true, reader.getTerminal(), System.out, System.out);
+                    if (CREATE_CUBE_PATTERN.matcher(split.statement()).matches()) {
+                        PrintStream out = System.out;
+                        PrintStream errorChannel = System.out;
+                        CubeConsole cubeConsole = new CubeConsole(this);
+                        queryRunner.setCubeConsole(cubeConsole);
+                        cubeConsole.createCubeCommand(split.statement(), queryRunner, ClientOptions.OutputFormat.NULL, tableNameCompleter::populateCache, false, true, reader.getTerminal(), out, errorChannel);
+                    }
+                    else if (RELOAD_CUBE_PATTERN.matcher(split.statement()).matches()) {
+                        PrintStream out = System.out;
+                        PrintStream errorChannel = System.out;
+                        ReloadCubeConsole reloadCubeConsole = new ReloadCubeConsole(this);
+                        queryRunner.setReloadCubeConsole(reloadCubeConsole);
+                        boolean isReloadCubeSucceed = reloadCubeConsole.reload(split.statement(), queryRunner, ClientOptions.OutputFormat.VERTICAL, tableNameCompleter::populateCache, true, true, reader.getTerminal(), out, errorChannel);
+                        if (isReloadCubeSucceed) {
+                            CubeConsole cubeConsole = new CubeConsole(this);
+                            queryRunner.setCubeConsole(cubeConsole);
+                            if (CREATE_CUBE_PATTERN.matcher(reloadCubeConsole.getNewQuery()).matches()) {
+                                boolean isCreateCubeSucceed = cubeConsole.createCubeCommand(reloadCubeConsole.getNewQuery(), queryRunner, ClientOptions.OutputFormat.NULL, tableNameCompleter::populateCache, false, true, reader.getTerminal(), out, errorChannel);
+                                if (!isCreateCubeSucceed) {
+                                    System.out.println("An Error occurred. The cube needs to be created manually. Query to create the cube: " + reloadCubeConsole.getNewQuery());
+                                }
+                            }
+                            else {
+                                process(queryRunner, reloadCubeConsole.getNewQuery(), outputFormat, tableNameCompleter::populateCache, true, true, reader.getTerminal(), System.out, System.out);
+                            }
+                        }
+                        if (reloadCubeConsole.isInsertAll()) {
+                            process(queryRunner, "INSERT INTO CUBE " + reloadCubeConsole.getCubeTableName(), outputFormat, tableNameCompleter::populateCache, true, true, reader.getTerminal(), System.out, System.out);
+                        }
+                    }
+                    else {
+                        process(queryRunner, split.statement(), outputFormat, tableNameCompleter::populateCache, true, true, reader.getTerminal(), System.out, System.out);
+                    }
                 }
-
                 // replace remaining with trailing partial statement
                 remaining = whitespace().trimTrailingFrom(splitter.getPartialStatement());
             }
@@ -283,11 +323,61 @@ public class Console
             if (!isEmptyStatement(split.statement())) {
                 try (Terminal terminal = terminal()) {
                     String statement = split.statement();
-                    if (!process(queryRunner, split.statement(), outputFormat, () -> {}, false, showProgress, terminal, System.out, System.err)) {
-                        if (!ignoreErrors) {
-                            return false;
+                    CubeConsole cubeConsole = new CubeConsole(this);
+                    queryRunner.setCubeConsole(cubeConsole);
+                    ReloadCubeConsole reloadCubeConsole = new ReloadCubeConsole(this);
+                    queryRunner.setReloadCubeConsole(reloadCubeConsole);
+                    if (CREATE_CUBE_PATTERN.matcher(statement).matches()) {
+                        PrintStream out = System.out;
+                        PrintStream errorChannel = System.out;
+                        if (!cubeConsole.createCubeCommand(statement, queryRunner, ClientOptions.OutputFormat.NULL, () -> {}, false, showProgress, terminal, out, errorChannel)) {
+                            if (!ignoreErrors) {
+                                return false;
+                            }
+                            success = false;
                         }
-                        success = false;
+                    }
+                    else if (RELOAD_CUBE_PATTERN.matcher(statement).matches()) {
+                        PrintStream out = System.out;
+                        PrintStream errorChannel = System.out;
+                        boolean isReloadCubeSucceed = reloadCubeConsole.reload(statement, queryRunner, ClientOptions.OutputFormat.NULL, () -> {}, false, showProgress, terminal, out, errorChannel);
+                        if (!isReloadCubeSucceed) {
+                            if (!ignoreErrors) {
+                                return false;
+                            }
+                            success = false;
+                        }
+                        else {
+                            if (CREATE_CUBE_PATTERN.matcher(reloadCubeConsole.getNewQuery()).matches()) {
+                                boolean isCreateCubeSucceed = cubeConsole.createCubeCommand(reloadCubeConsole.getNewQuery(), queryRunner, ClientOptions.OutputFormat.NULL, () -> {}, false, showProgress, terminal, out, errorChannel);
+                                if (!isCreateCubeSucceed) {
+                                    System.err.println("An Error occurred. The cube needs to be created manually. Query to create the cube: " + reloadCubeConsole.getNewQuery());
+                                    if (!ignoreErrors) {
+                                        return false;
+                                    }
+                                    success = false;
+                                }
+                            }
+                            else {
+                                if (!process(queryRunner, reloadCubeConsole.getNewQuery(), outputFormat, () -> {}, false, showProgress, terminal, System.out, System.err)) {
+                                    if (!ignoreErrors) {
+                                        return false;
+                                    }
+                                    success = false;
+                                }
+                            }
+                        }
+                        if (reloadCubeConsole.isInsertAll()) {
+                            process(queryRunner, "INSERT INTO CUBE " + reloadCubeConsole.getCubeTableName(), outputFormat, () -> {}, true, showProgress, terminal, System.out, System.err);
+                        }
+                    }
+                    else {
+                        if (!process(queryRunner, statement, outputFormat, () -> {}, false, showProgress, terminal, System.out, System.err)) {
+                            if (!ignoreErrors) {
+                                return false;
+                            }
+                            success = false;
+                        }
                     }
                 }
                 catch (IOException e) {
@@ -435,5 +525,18 @@ public class Console
             System.setOut(out);
             System.setErr(err);
         }
+    }
+
+    public boolean runQuery(QueryRunner queryRunner,
+                                  String sql,
+                                  ClientOptions.OutputFormat outputFormat,
+                                  Runnable schemaChanged,
+                                  boolean usePager,
+                                  boolean showProgress,
+                                  Terminal terminal,
+                                  PrintStream out,
+                                  PrintStream errorChannel)
+    {
+        return process(queryRunner, sql, outputFormat, schemaChanged, usePager, showProgress, terminal, out, errorChannel);
     }
 }

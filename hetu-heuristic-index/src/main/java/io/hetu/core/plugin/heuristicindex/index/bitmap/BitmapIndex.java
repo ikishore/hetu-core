@@ -1,5 +1,5 @@
 /*
- * Copyright (C) 2018-2020. Huawei Technologies Co., Ltd. All rights reserved.
+ * Copyright (C) 2018-2021. Huawei Technologies Co., Ltd. All rights reserved.
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
  * You may obtain a copy of the License at
@@ -15,6 +15,7 @@
 package io.hetu.core.plugin.heuristicindex.index.bitmap;
 
 import com.google.common.collect.ImmutableSet;
+import io.airlift.log.Logger;
 import io.prestosql.spi.connector.CreateIndexMetadata;
 import io.prestosql.spi.heuristicindex.Index;
 import io.prestosql.spi.heuristicindex.Pair;
@@ -86,6 +87,7 @@ public class BitmapIndex
         implements Index
 {
     public static final String ID = "BITMAP";
+    private static final Logger log = Logger.get(BitmapIndex.class);
 
     // configuration properties
     /**
@@ -106,6 +108,8 @@ public class BitmapIndex
     private File file;
     private AtomicBoolean closed = new AtomicBoolean(false);
     private AtomicBoolean updateAllowed = new AtomicBoolean(true);
+    private final Map<Object, RoaringBitmap> cache = new HashMap<>();
+    private long memoryUsage;
 
     @Override
     public Set<CreateIndexMetadata.Level> getSupportedIndexLevels()
@@ -176,24 +180,26 @@ public class BitmapIndex
         return lookUp(expression).hasNext();
     }
 
-    private RoaringBitmap lookUpSingle(Object lookupValue)
+    /**
+     * The lookup value is used to cache the created RoaringBitmap for
+     * future queries
+     * @param lookupValue
+     * @param byteArray
+     * @return
+     */
+    private RoaringBitmap byteArrayToBitmap(Object lookupValue, Object byteArray)
     {
-        try {
-            Object objValue = btree.get(lookupValue);
-
-            if (objValue == null) {
+        return cache.computeIfAbsent(lookupValue, k -> {
+            if (byteArray == null) {
                 return null;
             }
-
-            byte[] value = (byte[]) objValue;
+            byte[] value = (byte[]) byteArray;
             ByteBuffer bb = ByteBuffer.wrap(value);
-            ImmutableRoaringBitmap bitmap = new ImmutableRoaringBitmap(bb);
-            RoaringBitmap roaringBitmap = new RoaringBitmap(bitmap);
-            return roaringBitmap;
-        }
-        catch (Exception e) {
-            throw new RuntimeException(e);
-        }
+            ImmutableRoaringBitmap bm = new ImmutableRoaringBitmap(bb);
+            RoaringBitmap result = new RoaringBitmap(bm);
+            memoryUsage += result.getSizeInBytes();
+            return result;
+        });
     }
 
     @Override
@@ -206,13 +212,14 @@ public class BitmapIndex
             List<Range> ranges = ((SortedRangeSet) (predicate.getValues())).getOrderedRanges();
 
             try {
-                btree = getBtreeReadOptimized();
                 ArrayList<RoaringBitmap> allMatches = new ArrayList<>();
                 for (Range range : ranges) {
                     if (range.isSingleValue()) {
                         // unique value(for example: id=1, id in (1,2) (IN operator gives single exact values one by one)), bound: EXACTLY
-                        RoaringBitmap bitmap = lookUpSingle(getActualValue(predicate.getType(), range.getSingleValue()));
-                        if (bitmap != null) {
+                        Object value = getActualValue(predicate.getType(), range.getSingleValue());
+                        Object byteArray = getBtreeReadOptimized().get(value);
+                        if (byteArray != null) {
+                            RoaringBitmap bitmap = byteArrayToBitmap(value, byteArray);
                             allMatches.add(bitmap);
                         }
                     }
@@ -220,53 +227,62 @@ public class BitmapIndex
                         // <, <=, >=, >, BETWEEN
                         boolean highBoundless = range.getHigh().isUpperUnbounded();
                         boolean lowBoundless = range.getLow().isLowerUnbounded();
-                        ConcurrentNavigableMap<Object, String> concurrentNavigableMap = null;
+                        ConcurrentNavigableMap<Object, byte[]> concurrentNavigableMap = null;
 
                         if (highBoundless && !lowBoundless) {
-                            // >= or >
-                            Object low = range.getLow().getValue();
-                            Object high = btree.lastKey();
+                            Object low = getActualValue(predicate.getType(), range.getLow().getValue());
+                            Object high = getBtreeReadOptimized().lastKey();
                             boolean fromInclusive = range.getLow().getBound().equals(Marker.Bound.EXACTLY);
-                            if (btree.comparator().compare(low, high) > 0) {
+                            if (getBtreeReadOptimized().comparator().compare(low, high) > 0) {
                                 Object temp = low;
                                 low = high;
                                 high = temp;
                             }
-                            concurrentNavigableMap = btree.subMap(low, fromInclusive, high, true);
+                            concurrentNavigableMap = getBtreeReadOptimized().subMap(low, fromInclusive, high, true);
                         }
                         else if (!highBoundless && lowBoundless) {
                             // <= or <
-                            Object low = btree.firstKey();
-                            Object high = range.getHigh().getValue();
+                            Object low = getBtreeReadOptimized().firstKey();
+                            Object high = getActualValue(predicate.getType(), range.getHigh().getValue());
                             boolean toInclusive = range.getHigh().getBound().equals(Marker.Bound.EXACTLY);
-                            if (btree.comparator().compare(low, high) > 0) {
+                            if (getBtreeReadOptimized().comparator().compare(low, high) > 0) {
                                 Object temp = low;
                                 low = high;
                                 high = temp;
                             }
-                            concurrentNavigableMap = btree.subMap(low, true, high, toInclusive);
+                            concurrentNavigableMap = getBtreeReadOptimized().subMap(low, true, high, toInclusive);
                         }
                         else if (!highBoundless && !lowBoundless) {
                             // BETWEEN
-                            Object low = range.getHigh().getValue();
-                            Object high = range.getLow().getValue();
-                            if (btree.comparator().compare(low, high) > 0) {
+                            Object low = getActualValue(predicate.getType(), range.getLow().getValue());
+                            Object high = getActualValue(predicate.getType(), range.getHigh().getValue());
+                            if (getBtreeReadOptimized().comparator().compare(low, high) > 0) {
                                 Object temp = low;
                                 low = high;
                                 high = temp;
                             }
-                            concurrentNavigableMap = btree.subMap(low, true, high, true);
+                            concurrentNavigableMap = getBtreeReadOptimized().subMap(low, true, high, true);
                         }
                         else {
                             // This case, combined gives a range of boundless for both high and low end
                             throw new UnsupportedOperationException("No use for bitmap index as all values are matched due to no bounds.");
                         }
 
-                        for (Object i : concurrentNavigableMap.keySet()) {
-                            RoaringBitmap bitmap = lookUpSingle(getActualValue(predicate.getType(), i));
-                            allMatches.add(bitmap);
+                        for (Map.Entry<Object, byte[]> e : concurrentNavigableMap.entrySet()) {
+                            if (e != null) {
+                                RoaringBitmap bitmap = byteArrayToBitmap(e.getKey(), e.getValue());
+                                allMatches.add(bitmap);
+                            }
                         }
                     }
+                }
+
+                if (allMatches.size() == 0) {
+                    return Collections.emptyIterator();
+                }
+
+                if (allMatches.size() == 1) {
+                    return allMatches.get(0).iterator();
                 }
 
                 return RoaringBitmap.or(allMatches.iterator()).iterator();
@@ -329,7 +345,7 @@ public class BitmapIndex
     @Override
     public long getMemoryUsage()
     {
-        return 0;
+        return memoryUsage;
     }
 
     @Override
@@ -350,7 +366,9 @@ public class BitmapIndex
             db.close();
         }
 
-        getFile().delete();
+        if (!getFile().delete()) {
+            log.debug("Failed to delete file: " + getFile().getName());
+        }
         closed.set(true);
     }
 

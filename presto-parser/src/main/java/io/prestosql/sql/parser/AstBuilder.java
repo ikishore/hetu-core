@@ -54,7 +54,6 @@ import io.prestosql.sql.tree.CurrentTime;
 import io.prestosql.sql.tree.CurrentUser;
 import io.prestosql.sql.tree.Deallocate;
 import io.prestosql.sql.tree.DecimalLiteral;
-import io.prestosql.sql.tree.DefaultExpressionTraversalVisitor;
 import io.prestosql.sql.tree.Delete;
 import io.prestosql.sql.tree.DereferenceExpression;
 import io.prestosql.sql.tree.DescribeInput;
@@ -76,11 +75,13 @@ import io.prestosql.sql.tree.ExplainFormat;
 import io.prestosql.sql.tree.ExplainOption;
 import io.prestosql.sql.tree.ExplainType;
 import io.prestosql.sql.tree.Expression;
+import io.prestosql.sql.tree.ExternalBodyReference;
 import io.prestosql.sql.tree.Extract;
 import io.prestosql.sql.tree.FetchFirst;
 import io.prestosql.sql.tree.Format;
 import io.prestosql.sql.tree.FrameBound;
 import io.prestosql.sql.tree.FunctionCall;
+import io.prestosql.sql.tree.FunctionProperty;
 import io.prestosql.sql.tree.GenericLiteral;
 import io.prestosql.sql.tree.Grant;
 import io.prestosql.sql.tree.GrantRoles;
@@ -131,16 +132,20 @@ import io.prestosql.sql.tree.QuantifiedComparisonExpression;
 import io.prestosql.sql.tree.Query;
 import io.prestosql.sql.tree.QueryBody;
 import io.prestosql.sql.tree.QuerySpecification;
+import io.prestosql.sql.tree.RefreshMetadataCache;
 import io.prestosql.sql.tree.Relation;
+import io.prestosql.sql.tree.ReloadCube;
 import io.prestosql.sql.tree.RenameColumn;
 import io.prestosql.sql.tree.RenameIndex;
 import io.prestosql.sql.tree.RenameSchema;
 import io.prestosql.sql.tree.RenameTable;
 import io.prestosql.sql.tree.ResetSession;
+import io.prestosql.sql.tree.Return;
 import io.prestosql.sql.tree.Revoke;
 import io.prestosql.sql.tree.RevokeRoles;
 import io.prestosql.sql.tree.Rollback;
 import io.prestosql.sql.tree.Rollup;
+import io.prestosql.sql.tree.RoutineCharacteristics;
 import io.prestosql.sql.tree.Row;
 import io.prestosql.sql.tree.SampledRelation;
 import io.prestosql.sql.tree.SearchedCaseExpression;
@@ -154,6 +159,7 @@ import io.prestosql.sql.tree.ShowCatalogs;
 import io.prestosql.sql.tree.ShowColumns;
 import io.prestosql.sql.tree.ShowCreate;
 import io.prestosql.sql.tree.ShowCubes;
+import io.prestosql.sql.tree.ShowExternalFunction;
 import io.prestosql.sql.tree.ShowFunctions;
 import io.prestosql.sql.tree.ShowGrants;
 import io.prestosql.sql.tree.ShowIndex;
@@ -163,10 +169,12 @@ import io.prestosql.sql.tree.ShowSchemas;
 import io.prestosql.sql.tree.ShowSession;
 import io.prestosql.sql.tree.ShowStats;
 import io.prestosql.sql.tree.ShowTables;
+import io.prestosql.sql.tree.ShowViews;
 import io.prestosql.sql.tree.SimpleCaseExpression;
 import io.prestosql.sql.tree.SimpleGroupBy;
 import io.prestosql.sql.tree.SingleColumn;
 import io.prestosql.sql.tree.SortItem;
+import io.prestosql.sql.tree.SqlParameterDeclaration;
 import io.prestosql.sql.tree.StartTransaction;
 import io.prestosql.sql.tree.Statement;
 import io.prestosql.sql.tree.StringLiteral;
@@ -201,12 +209,17 @@ import java.util.ArrayList;
 import java.util.Iterator;
 import java.util.LinkedHashSet;
 import java.util.List;
+import java.util.Locale;
 import java.util.Optional;
 import java.util.Set;
 import java.util.stream.Collectors;
 
 import static com.google.common.collect.ImmutableList.toImmutableList;
 import static com.google.common.collect.Iterables.getOnlyElement;
+import static io.prestosql.sql.tree.RoutineCharacteristics.Determinism.DETERMINISTIC;
+import static io.prestosql.sql.tree.RoutineCharacteristics.Determinism.NOT_DETERMINISTIC;
+import static io.prestosql.sql.tree.RoutineCharacteristics.NullCallClause.CALLED_ON_NULL_INPUT;
+import static io.prestosql.sql.tree.RoutineCharacteristics.NullCallClause.RETURNS_NULL_ON_NULL_INPUT;
 import static java.lang.String.format;
 import static java.util.Objects.requireNonNull;
 import static java.util.stream.Collectors.toList;
@@ -238,6 +251,12 @@ class AstBuilder
     public Node visitStandalonePathSpecification(SqlBaseParser.StandalonePathSpecificationContext context)
     {
         return visit(context.pathSpecification());
+    }
+
+    @Override
+    public Node visitStandaloneRoutineBody(SqlBaseParser.StandaloneRoutineBodyContext context)
+    {
+        return visit(context.routineBody());
     }
 
     // ******************* statements **********************
@@ -288,14 +307,86 @@ class AstBuilder
     @Override
     public Node visitCreateCube(SqlBaseParser.CreateCubeContext context)
     {
-        List<Identifier> groupingSet = visit(context.cubeGroup().identifier(), Identifier.class);
-        List<FunctionCall> aggregations = new ArrayList<>(visit(context.aggregations().expression(), FunctionCall.class));
+        if (context.cubeProperties() == null) {
+            throw new IllegalArgumentException("Missing properties: AGGREGATIONS, GROUP");
+        }
+
+        QualifiedName cubeName = getQualifiedName(context.cubeName);
+        QualifiedName sourceTableName = getQualifiedName(context.tableName);
+        List<Identifier> groupingSet = ImmutableList.of();
+        List<FunctionCall> aggregations = ImmutableList.of();
+        List<Property> properties = new ArrayList<>();
+        Optional<Expression> optionalExpression = visitIfPresent(context.expression(), Expression.class);
+        boolean cubeGroupProvided = false;
+        boolean aggregationsProvided = false;
+        boolean sourceFilterProvided = false;
+        Optional<Expression> sourceFilterPredicate = Optional.empty();
+        for (SqlBaseParser.CubePropertyContext propertyContext : context.cubeProperties().cubeProperty()) {
+            if (propertyContext.cubeGroup() != null) {
+                if (cubeGroupProvided) {
+                    throw new IllegalArgumentException("Duplicate property: GROUP");
+                }
+                groupingSet = visit(propertyContext.cubeGroup().identifier(), Identifier.class);
+                cubeGroupProvided = true;
+            }
+            else if (propertyContext.aggregations() != null) {
+                if (aggregationsProvided) {
+                    throw new IllegalArgumentException("Duplicate property: AGGREGATIONS");
+                }
+                aggregations = visit(propertyContext.aggregations().expression(), FunctionCall.class);
+                aggregationsProvided = true;
+            }
+            else if (propertyContext.sourceFilter() != null) {
+                if (sourceFilterProvided) {
+                    throw new IllegalArgumentException("Duplicate Property: FILTER");
+                }
+                sourceFilterPredicate = visitIfPresent(propertyContext.sourceFilter().expression(), Expression.class);
+                sourceFilterProvided = true;
+            }
+            else if (propertyContext.property() != null) {
+                properties.add((Property) visitProperty(propertyContext.property()));
+            }
+        }
+
+        if (!cubeGroupProvided) {
+            throw new IllegalArgumentException("Missing property: GROUP");
+        }
+
+        if (!aggregationsProvided) {
+            throw new IllegalArgumentException("Missing property: AGGREGATIONS");
+        }
+
+        List<Identifier> decomposedGroupingSet = new ArrayList<>();
+        groupingSet.forEach(groupItem -> {
+            decomposedGroupingSet.add(new Identifier(groupItem.getLocation().get(), groupItem.getValue().toLowerCase(Locale.ENGLISH), groupItem.isDelimited()));
+        });
+
         Set<FunctionCall> decomposedAggregations = new LinkedHashSet<>();
         aggregations.forEach(aggItem -> {
+            List<Expression> listArguments = aggItem.getArguments();
+            List<Expression> newArguments = new ArrayList<>();
+            for (Expression argument : listArguments) {
+                if (argument instanceof Identifier) {
+                    newArguments.add(new Identifier(argument.getLocation().get(), ((Identifier) argument).getValue().toLowerCase(Locale.ENGLISH),
+                            ((Identifier) argument).isDelimited()));
+                }
+                else {
+                    newArguments.add(argument);
+                }
+            }
+
             if (!"avg".equals(aggItem.getName().toString())) {
-                decomposedAggregations.add(aggItem);
+                decomposedAggregations.add(new FunctionCall(
+                        aggItem.getLocation(),
+                        aggItem.getName(),
+                        aggItem.getWindow(),
+                        aggItem.getFilter(),
+                        aggItem.getOrderBy(),
+                        aggItem.isDistinct(),
+                        newArguments));
             }
             else {
+                decomposedAggregations.add(aggItem);
                 decomposedAggregations.add(new FunctionCall(
                         aggItem.getLocation(),
                         QualifiedName.of("sum"),
@@ -303,7 +394,7 @@ class AstBuilder
                         aggItem.getFilter(),
                         aggItem.getOrderBy(),
                         aggItem.isDistinct(),
-                        aggItem.getArguments()));
+                        newArguments));
                 decomposedAggregations.add(new FunctionCall(
                         aggItem.getLocation(),
                         QualifiedName.of("count"),
@@ -311,19 +402,10 @@ class AstBuilder
                         aggItem.getFilter(),
                         aggItem.getOrderBy(),
                         aggItem.isDistinct(),
-                        aggItem.getArguments()));
+                        newArguments));
             }
         });
-
-        QualifiedName cubeName = getQualifiedName(context.cubeName);
-        QualifiedName originalTableName = getQualifiedName(context.tableName);
-
-        List<Property> properties = ImmutableList.of();
-        if (context.cubeProperties() != null) {
-            properties = visit(context.cubeProperties().property(), Property.class);
-        }
-
-        return new CreateCube(getLocation(context), cubeName, originalTableName, groupingSet, decomposedAggregations, context.EXISTS() != null, properties);
+        return new CreateCube(getLocation(context), cubeName, sourceTableName, decomposedGroupingSet, decomposedAggregations, context.EXISTS() != null, properties, optionalExpression, sourceFilterPredicate.orElse(null));
     }
 
     @Override
@@ -331,10 +413,7 @@ class AstBuilder
     {
         QualifiedName cubeName = getQualifiedName(context.qualifiedName());
         Optional<Expression> optionalExpression = visitIfPresent(context.expression(), Expression.class);
-        if (!optionalExpression.isPresent()) {
-            throw new IllegalArgumentException("WHERE expression is mandatory!");
-        }
-        return new InsertCube(getLocation(context), cubeName, optionalExpression.get(), null, false);
+        return new InsertCube(getLocation(context), cubeName, optionalExpression, false);
     }
 
     @Override
@@ -342,21 +421,7 @@ class AstBuilder
     {
         QualifiedName cubeName = getQualifiedName(context.qualifiedName());
         Optional<Expression> optionalExpression = visitIfPresent(context.expression(), Expression.class);
-        if (!optionalExpression.isPresent()) {
-            throw new IllegalArgumentException("WHERE expression is mandatory!");
-        }
-        return new InsertCube(getLocation(context), cubeName, optionalExpression.get(), null, true);
-    }
-
-    private static class IdentifierBuilderVisitor
-            extends DefaultExpressionTraversalVisitor<Void, ImmutableList.Builder<Identifier>>
-    {
-        @Override
-        protected Void visitIdentifier(Identifier node, ImmutableList.Builder<Identifier> builder)
-        {
-            builder.add(node);
-            return null;
-        }
+        return new InsertCube(getLocation(context), cubeName, optionalExpression, true);
     }
 
     @Override
@@ -449,9 +514,22 @@ class AstBuilder
     }
 
     @Override
+    public Node visitRefreshMetadataCache(SqlBaseParser.RefreshMetadataCacheContext context)
+    {
+        Optional<Identifier> identifier = createIdentifier(context.cluster, context.catalog);
+        return new RefreshMetadataCache(getLocation(context), identifier);
+    }
+
+    @Override
     public Node visitDropCube(SqlBaseParser.DropCubeContext context)
     {
         return new DropCube(getLocation(context), getQualifiedName(context.qualifiedName()), context.EXISTS() != null);
+    }
+
+    @Override
+    public Node visitReloadCube(SqlBaseParser.ReloadCubeContext context)
+    {
+        return new ReloadCube(getLocation(context), getQualifiedName(context.qualifiedName()), context.EXISTS() != null);
     }
 
     @Override
@@ -527,9 +605,6 @@ class AstBuilder
     public Node visitUpdateIndex(SqlBaseParser.UpdateIndexContext context)
     {
         List<Property> properties = ImmutableList.of();
-        if (context.properties() != null) {
-            properties = visit(context.properties().property(), Property.class);
-        }
         return new UpdateIndex(
                 getLocation(context),
                 getQualifiedName(context.qualifiedName()),
@@ -689,6 +764,28 @@ class AstBuilder
     }
 
     @Override
+    public Node visitShowExternalFunction(SqlBaseParser.ShowExternalFunctionContext context)
+    {
+        Optional<List<String>> parameterTypes = context.types() == null ? Optional.empty() : Optional.of(getTypes(context.types()));
+        return new ShowExternalFunction(getLocation(context), getQualifiedName(context.qualifiedName()), parameterTypes);
+    }
+
+    @Override
+    public Node visitReturnStatement(SqlBaseParser.ReturnStatementContext context)
+    {
+        return new Return((Expression) visit(context.expression()));
+    }
+
+    @Override
+    public Node visitExternalBodyReference(SqlBaseParser.ExternalBodyReferenceContext context)
+    {
+        if (context.externalRoutineName() != null) {
+            return new ExternalBodyReference((Identifier) visit(context.externalRoutineName().identifier()));
+        }
+        return new ExternalBodyReference();
+    }
+
+    @Override
     public Node visitStartTransaction(SqlBaseParser.StartTransactionContext context)
     {
         return new StartTransaction(visit(context.transactionMode(), TransactionMode.class));
@@ -797,6 +894,12 @@ class AstBuilder
     public Node visitProperty(SqlBaseParser.PropertyContext context)
     {
         return new Property(getLocation(context), (Identifier) visit(context.identifier()), (Expression) visit(context.expression()));
+    }
+
+    @Override
+    public Node visitFunctionProperty(SqlBaseParser.FunctionPropertyContext context)
+    {
+        return new FunctionProperty(getLocation(context), (Identifier) visit(context.identifier()), (StringLiteral) visit(context.string()));
     }
 
     // ********************** query expressions ********************
@@ -1119,9 +1222,20 @@ class AstBuilder
     }
 
     @Override
+    public Node visitShowCreateCube(SqlBaseParser.ShowCreateCubeContext context)
+    {
+        return new ShowCreate(getLocation(context), ShowCreate.Type.CUBE, getQualifiedName(context.qualifiedName()));
+    }
+
+    @Override
     public Node visitShowFunctions(SqlBaseParser.ShowFunctionsContext context)
     {
-        return new ShowFunctions(getLocation(context));
+        return new ShowFunctions(
+                getLocation(context),
+                getTextIfPresent(context.pattern)
+                        .map(AstBuilder::unquote),
+                getTextIfPresent(context.escape)
+                        .map(AstBuilder::unquote));
     }
 
     @Override
@@ -1647,7 +1761,7 @@ class AstBuilder
         String fieldString = context.identifier().getText();
         Extract.Field field;
         try {
-            field = Extract.Field.valueOf(fieldString.toUpperCase());
+            field = Extract.Field.valueOf(fieldString.toUpperCase(Locale.ROOT));
         }
         catch (IllegalArgumentException e) {
             throw parseError("Invalid EXTRACT field: " + fieldString, context);
@@ -1743,6 +1857,8 @@ class AstBuilder
 
         boolean distinct = isDistinct(context.setQuantifier());
 
+        boolean ignoreNulls = context.nullTreatment() != null && context.nullTreatment().IGNORE() != null;
+
         if (name.toString().equalsIgnoreCase("if")) {
             check(context.expression().size() == 2 || context.expression().size() == 3, "Invalid number of arguments for 'if' function", context);
             check(!window.isPresent(), "OVER clause not valid for 'if' function", context);
@@ -1825,6 +1941,7 @@ class AstBuilder
                 filter,
                 orderBy,
                 distinct,
+                ignoreNulls,
                 visit(context.expression(), Expression.class));
     }
 
@@ -2109,6 +2226,19 @@ class AstBuilder
     public Node visitPathSpecification(SqlBaseParser.PathSpecificationContext context)
     {
         return new PathSpecification(getLocation(context), visit(context.pathElement(), PathElement.class));
+    }
+
+    @Override
+    public Node visitShowViews(SqlBaseParser.ShowViewsContext context)
+    {
+        return new ShowViews(
+                getLocation(context),
+                Optional.ofNullable(context.qualifiedName())
+                        .map(this::getQualifiedName),
+                getTextIfPresent(context.pattern)
+                        .map(AstBuilder::unquote),
+                getTextIfPresent(context.escape)
+                        .map(AstBuilder::unquote));
     }
 
     // ***************** helpers *****************
@@ -2477,6 +2607,13 @@ class AstBuilder
         throw new IllegalArgumentException("Unsupported quantifier: " + symbol.getText());
     }
 
+    private List<String> getTypes(SqlBaseParser.TypesContext types)
+    {
+        return types.type().stream()
+                .map(this::getType)
+                .collect(toImmutableList());
+    }
+
     private String getType(SqlBaseParser.TypeContext type)
     {
         if (type.baseType() != null) {
@@ -2524,6 +2661,47 @@ class AstBuilder
         }
 
         throw new IllegalArgumentException("Unsupported type specification: " + type.getText());
+    }
+
+    private SqlParameterDeclaration getParameterDeclarations(SqlBaseParser.SqlParameterDeclarationContext context)
+    {
+        return new SqlParameterDeclaration((Identifier) visit(context.identifier()), getType(context.type()));
+    }
+
+    private RoutineCharacteristics getRoutineCharacteristics(SqlBaseParser.RoutineCharacteristicsContext context)
+    {
+        RoutineCharacteristics.Language language = null;
+        RoutineCharacteristics.Determinism determinism = null;
+        RoutineCharacteristics.NullCallClause nullCallClause = null;
+
+        for (SqlBaseParser.RoutineCharacteristicContext characteristic : context.routineCharacteristic()) {
+            if (characteristic.language() != null) {
+                if (language != null) {
+                    throw new ParsingException(format("Duplicate language clause: %s", characteristic.language().getText()), getLocation(characteristic.language()));
+                }
+                language = new RoutineCharacteristics.Language(((Identifier) visit(characteristic.language().identifier())).getValue());
+            }
+            else if (characteristic.determinism() != null) {
+                if (determinism != null) {
+                    throw new ParsingException(format("Duplicate determinism characteristics: %s", characteristic.determinism().getText()), getLocation(characteristic.determinism()));
+                }
+                determinism = characteristic.determinism().NOT() == null ? DETERMINISTIC : NOT_DETERMINISTIC;
+            }
+            else if (characteristic.nullCallClause() != null) {
+                if (nullCallClause != null) {
+                    throw new ParsingException(format("Duplicate null-call clause: %s", characteristic.nullCallClause().getText()), getLocation(characteristic.nullCallClause()));
+                }
+                nullCallClause = characteristic.nullCallClause().CALLED() != null ? CALLED_ON_NULL_INPUT : RETURNS_NULL_ON_NULL_INPUT;
+            }
+            else {
+                throw new IllegalArgumentException(format("Unsupported RoutineCharacteristic: %s", characteristic.getText()));
+            }
+        }
+
+        return new RoutineCharacteristics(
+                Optional.ofNullable(language),
+                Optional.ofNullable(determinism),
+                Optional.ofNullable(nullCallClause));
     }
 
     private String typeParameterToString(SqlBaseParser.TypeParameterContext typeParameter)

@@ -23,7 +23,6 @@ import io.prestosql.execution.TaskStateMachine;
 import io.prestosql.memory.MemoryPool;
 import io.prestosql.memory.QueryContext;
 import io.prestosql.metadata.Metadata;
-import io.prestosql.metadata.QualifiedObjectName;
 import io.prestosql.operator.Driver;
 import io.prestosql.operator.TaskContext;
 import io.prestosql.plugin.memory.MemoryConnectorFactory;
@@ -31,6 +30,7 @@ import io.prestosql.plugin.tpch.TpchConnectorFactory;
 import io.prestosql.spi.Page;
 import io.prestosql.spi.Plugin;
 import io.prestosql.spi.QueryId;
+import io.prestosql.spi.connector.QualifiedObjectName;
 import io.prestosql.spi.memory.MemoryPoolId;
 import io.prestosql.spi.metadata.TableHandle;
 import io.prestosql.spiller.SpillSpaceTracker;
@@ -44,7 +44,9 @@ import java.util.Optional;
 import java.util.OptionalInt;
 
 import static io.airlift.units.DataSize.Unit.GIGABYTE;
+import static io.prestosql.testing.TestingPagesSerdeFactory.TESTING_SERDE_FACTORY;
 import static io.prestosql.testing.TestingSession.testSessionBuilder;
+import static io.prestosql.testing.TestingSnapshotUtils.NOOP_SNAPSHOT_UTILS;
 import static org.testng.Assert.assertTrue;
 
 public class MemoryLocalQueryRunner
@@ -85,7 +87,8 @@ public class MemoryLocalQueryRunner
                 localQueryRunner.getExecutor(),
                 localQueryRunner.getScheduler(),
                 new DataSize(4, GIGABYTE),
-                spillSpaceTracker);
+                spillSpaceTracker,
+                NOOP_SNAPSHOT_UTILS);
 
         TaskContext taskContext = queryContext
                 .addTaskContext(new TaskStateMachine(new TaskId("query", 0, 0), localQueryRunner.getExecutor()),
@@ -93,7 +96,8 @@ public class MemoryLocalQueryRunner
                         false,
                         false,
                         OptionalInt.empty(),
-                        Optional.empty());
+                        Optional.empty(),
+                        TESTING_SERDE_FACTORY);
 
         // Use NullOutputFactory to avoid coping out results to avoid affecting benchmark results
         ImmutableList.Builder<Page> output = ImmutableList.builder();
@@ -119,16 +123,16 @@ public class MemoryLocalQueryRunner
 
     private static LocalQueryRunner createMemoryLocalQueryRunner(Session session)
     {
-        LocalQueryRunner localQueryRunner = LocalQueryRunner.queryRunnerWithInitialTransaction(session);
+        LocalQueryRunner queryRunnerWithInitialTransaction = LocalQueryRunner.queryRunnerWithInitialTransaction(session);
 
         // add tpch
-        localQueryRunner.createCatalog("tpch", new TpchConnectorFactory(1), ImmutableMap.of());
-        localQueryRunner.createCatalog(
+        queryRunnerWithInitialTransaction.createCatalog("tpch", new TpchConnectorFactory(1), ImmutableMap.of());
+        queryRunnerWithInitialTransaction.createCatalog(
                 "memory",
                 new MemoryConnectorFactory(),
                 ImmutableMap.of("memory.max-data-per-node", "4GB"));
 
-        return localQueryRunner;
+        return queryRunnerWithInitialTransaction;
     }
 
     public void dropTable(String tableName)

@@ -40,6 +40,7 @@ import static io.airlift.slice.Slices.utf8Slice;
 import static io.prestosql.spi.StandardErrorCode.INVALID_FUNCTION_ARGUMENT;
 import static io.prestosql.spi.StandardErrorCode.NUMERIC_VALUE_OUT_OF_RANGE;
 import static io.prestosql.spi.function.FunctionKind.SCALAR;
+import static io.prestosql.spi.function.OperatorType.MODULUS;
 import static io.prestosql.spi.type.Decimals.longTenToNth;
 import static io.prestosql.spi.type.DoubleType.DOUBLE;
 import static io.prestosql.spi.type.UnscaledDecimal128Arithmetic.add;
@@ -523,7 +524,7 @@ public final class MathFunctions
                 .kind(SCALAR)
                 .name("mod")
                 .build();
-        return modulusScalarFunction(signature);
+        return modulusScalarFunction(signature, MODULUS);
     }
 
     @Description("remainder of given quotient")
@@ -1160,7 +1161,7 @@ public final class MathFunctions
         checkCondition(!isNaN(operand), INVALID_FUNCTION_ARGUMENT, "operand must not be NaN");
         checkCondition(isFinite(bound1), INVALID_FUNCTION_ARGUMENT, "first bound must be finite");
         checkCondition(isFinite(bound2), INVALID_FUNCTION_ARGUMENT, "second bound must be finite");
-        checkCondition(bound1 != bound2, INVALID_FUNCTION_ARGUMENT, "bounds cannot equal each other");
+        checkCondition(!(Math.abs(bound1 - bound2) < 1e-6f), INVALID_FUNCTION_ARGUMENT, "bounds cannot equal each other");
 
         long result;
 
@@ -1244,6 +1245,42 @@ public final class MathFunctions
         double dotProduct = mapDotProduct(leftMap, rightMap);
 
         return dotProduct / (normLeftMap * normRightMap);
+    }
+
+    @Description("A pseudo-random number between start and stop (exclusive)")
+    @ScalarFunction(value = "random", alias = "rand", deterministic = false)
+    @SqlType(StandardTypes.TINYINT)
+    public static long randomTinyint(@SqlType(StandardTypes.TINYINT) long start, @SqlType(StandardTypes.TINYINT) long stop)
+    {
+        checkCondition(start < stop, INVALID_FUNCTION_ARGUMENT, "start value must be less than stop value");
+        return ThreadLocalRandom.current().nextLong(start, stop);
+    }
+
+    @Description("A pseudo-random number between start and stop (exclusive)")
+    @ScalarFunction(value = "random", alias = "rand", deterministic = false)
+    @SqlType(StandardTypes.SMALLINT)
+    public static long randomSmallint(@SqlType(StandardTypes.SMALLINT) long start, @SqlType(StandardTypes.SMALLINT) long stop)
+    {
+        checkCondition(start < stop, INVALID_FUNCTION_ARGUMENT, "start value must be less than stop value");
+        return ThreadLocalRandom.current().nextInt((int) start, (int) stop);
+    }
+
+    @Description("A pseudo-random number between start and stop (exclusive)")
+    @ScalarFunction(value = "random", alias = "rand", deterministic = false)
+    @SqlType(StandardTypes.INTEGER)
+    public static long randomInteger(@SqlType(StandardTypes.INTEGER) long start, @SqlType(StandardTypes.INTEGER) long stop)
+    {
+        checkCondition(start < stop, INVALID_FUNCTION_ARGUMENT, "start value must be less than stop value");
+        return ThreadLocalRandom.current().nextInt((int) start, (int) stop);
+    }
+
+    @Description("A pseudo-random number between start and stop (exclusive)")
+    @ScalarFunction(value = "random", alias = "rand", deterministic = false)
+    @SqlType(StandardTypes.BIGINT)
+    public static long random(@SqlType(StandardTypes.BIGINT) long start, @SqlType(StandardTypes.BIGINT) long stop)
+    {
+        checkCondition(start < stop, INVALID_FUNCTION_ARGUMENT, "start value must be less than stop value");
+        return ThreadLocalRandom.current().nextLong(start, stop);
     }
 
     private static double mapDotProduct(Block leftMap, Block rightMap)

@@ -25,13 +25,16 @@ import com.google.common.util.concurrent.ListenableFuture;
 import io.airlift.log.Logger;
 import io.airlift.units.Duration;
 import io.prestosql.Session;
+import io.prestosql.SystemSessionProperties;
 import io.prestosql.execution.QueryExecution.QueryOutputInfo;
 import io.prestosql.execution.StateMachine.StateChangeListener;
+import io.prestosql.execution.resourcegroups.ResourceGroupManager;
 import io.prestosql.execution.warnings.WarningCollector;
 import io.prestosql.memory.VersionedMemoryPoolId;
 import io.prestosql.metadata.Metadata;
 import io.prestosql.operator.BlockedReason;
 import io.prestosql.operator.OperatorStats;
+import io.prestosql.operator.TaskLocation;
 import io.prestosql.security.AccessControl;
 import io.prestosql.server.BasicQueryInfo;
 import io.prestosql.server.BasicQueryStats;
@@ -78,6 +81,8 @@ import static io.prestosql.execution.QueryState.FINISHED;
 import static io.prestosql.execution.QueryState.FINISHING;
 import static io.prestosql.execution.QueryState.PLANNING;
 import static io.prestosql.execution.QueryState.QUEUED;
+import static io.prestosql.execution.QueryState.RESCHEDULING;
+import static io.prestosql.execution.QueryState.RESUMING;
 import static io.prestosql.execution.QueryState.RUNNING;
 import static io.prestosql.execution.QueryState.STARTING;
 import static io.prestosql.execution.QueryState.TERMINAL_QUERY_STATES;
@@ -101,6 +106,8 @@ public class QueryStateMachine
     private final Session session;
     private final URI self;
     private final ResourceGroupId resourceGroup;
+    private final ResourceGroupManager resourceGroupManager;
+    private boolean throttlingEnabled;
     private final TransactionManager transactionManager;
     private final Metadata metadata;
     private final QueryOutputManager outputManager;
@@ -159,6 +166,7 @@ public class QueryStateMachine
             Session session,
             URI self,
             ResourceGroupId resourceGroup,
+            ResourceGroupManager resourceGroupManager,
             TransactionManager transactionManager,
             Executor executor,
             Ticker ticker,
@@ -171,6 +179,9 @@ public class QueryStateMachine
         this.queryId = session.getQueryId();
         this.self = requireNonNull(self, "self is null");
         this.resourceGroup = requireNonNull(resourceGroup, "resourceGroup is null");
+        this.resourceGroupManager = resourceGroupManager;
+        this.throttlingEnabled = resourceGroupManager.isGroupRegistered(resourceGroup)
+                                    && resourceGroupManager.getSoftReservedMemory(resourceGroup) != Long.MAX_VALUE;
         this.transactionManager = requireNonNull(transactionManager, "transactionManager is null");
         this.queryStateTimer = new QueryStateTimer(ticker);
         this.metadata = requireNonNull(metadata, "metadata is null");
@@ -190,6 +201,7 @@ public class QueryStateMachine
             Session session,
             URI self,
             ResourceGroupId resourceGroup,
+            ResourceGroupManager resourceGroupManager,
             boolean transactionControl,
             TransactionManager transactionManager,
             AccessControl accessControl,
@@ -203,6 +215,7 @@ public class QueryStateMachine
                 session,
                 self,
                 resourceGroup,
+                resourceGroupManager,
                 transactionControl,
                 transactionManager,
                 accessControl,
@@ -215,9 +228,10 @@ public class QueryStateMachine
     static QueryStateMachine beginWithTicker(
             String query,
             Optional<String> preparedQuery,
-            Session session,
+            Session inputSession,
             URI self,
             ResourceGroupId resourceGroup,
+            ResourceGroupManager resourceGroupManager,
             boolean transactionControl,
             TransactionManager transactionManager,
             AccessControl accessControl,
@@ -226,19 +240,21 @@ public class QueryStateMachine
             Metadata metadata,
             WarningCollector warningCollector)
     {
+        Session localSession = inputSession;
         // If there is not an existing transaction, begin an auto commit transaction
-        if (!session.getTransactionId().isPresent() && !transactionControl) {
+        if (!localSession.getTransactionId().isPresent() && !transactionControl) {
             // TODO: make autocommit isolation level a session parameter
             TransactionId transactionId = transactionManager.beginTransaction(true);
-            session = session.beginTransactionId(transactionId, transactionManager, accessControl);
+            localSession = localSession.beginTransactionId(transactionId, transactionManager, accessControl);
         }
 
         QueryStateMachine queryStateMachine = new QueryStateMachine(
                 query,
                 preparedQuery,
-                session,
+                localSession,
                 self,
                 resourceGroup,
+                resourceGroupManager,
                 transactionManager,
                 executor,
                 ticker,
@@ -252,6 +268,21 @@ public class QueryStateMachine
     public QueryId getQueryId()
     {
         return queryId;
+    }
+
+    public ResourceGroupId getResourceGroup()
+    {
+        return resourceGroup;
+    }
+
+    public ResourceGroupManager getResourceGroupManager()
+    {
+        return resourceGroupManager;
+    }
+
+    public boolean isThrottlingEnabled()
+    {
+        return throttlingEnabled;
     }
 
     public Session getSession()
@@ -323,9 +354,9 @@ public class QueryStateMachine
 
         ErrorCode errorCode = null;
         if (state == FAILED) {
-            ExecutionFailureInfo failureCause = this.failureCause.get();
-            if (failureCause != null) {
-                errorCode = failureCause.getErrorCode();
+            ExecutionFailureInfo localFailureCause = this.failureCause.get();
+            if (localFailureCause != null) {
+                errorCode = localFailureCause.getErrorCode();
             }
         }
 
@@ -360,7 +391,6 @@ public class QueryStateMachine
 
         return new BasicQueryInfo(
                 queryId,
-                session.getBatchQueries(),
                 session.toSessionRepresentation(),
                 Optional.of(resourceGroup),
                 state,
@@ -383,12 +413,12 @@ public class QueryStateMachine
         // never be visible.
         QueryState state = queryState.get();
 
-        ExecutionFailureInfo failureCause = null;
+        ExecutionFailureInfo localFailureCause = null;
         ErrorCode errorCode = null;
         if (state == FAILED) {
-            failureCause = this.failureCause.get();
-            if (failureCause != null) {
-                errorCode = failureCause.getErrorCode();
+            localFailureCause = this.failureCause.get();
+            if (localFailureCause != null) {
+                errorCode = localFailureCause.getErrorCode();
             }
         }
 
@@ -419,7 +449,7 @@ public class QueryStateMachine
                 clearTransactionId.get(),
                 updateType.get(),
                 rootStage,
-                failureCause,
+                localFailureCause,
                 errorCode,
                 warningCollector.getWarnings(),
                 inputs.get(),
@@ -543,6 +573,8 @@ public class QueryStateMachine
                 queryStateTimer.getAnalysisTime(),
                 queryStateTimer.getDistributedPlanningTime(),
                 queryStateTimer.getPlanningTime(),
+                queryStateTimer.getLogicalPlanningTime(),
+                queryStateTimer.getSyntaxAnalysisTime(),
                 queryStateTimer.getFinishingTime(),
 
                 totalTasks,
@@ -612,7 +644,7 @@ public class QueryStateMachine
         outputManager.setColumns(columnNames, columnTypes);
     }
 
-    public void updateOutputLocations(Set<URI> newExchangeLocations, boolean noMoreExchangeLocations)
+    public void updateOutputLocations(Set<TaskLocation> newExchangeLocations, boolean noMoreExchangeLocations)
     {
         outputManager.updateOutputLocations(newExchangeLocations, noMoreExchangeLocations);
     }
@@ -751,13 +783,34 @@ public class QueryStateMachine
     public boolean transitionToStarting()
     {
         queryStateTimer.beginStarting();
-        return queryState.setIf(STARTING, currentState -> currentState.ordinal() < STARTING.ordinal());
+        return queryState.setIf(STARTING, currentState -> {
+            if (currentState.ordinal() < STARTING.ordinal()) {
+                return true;
+            }
+            if (currentState == RESUMING) {
+                // Snapshot: Also allow to go from "resuming".
+                // Inform outputManager to reset some fields.
+                outputManager.resetForResume();
+                return true;
+            }
+            return false;
+        });
     }
 
     public boolean transitionToRunning()
     {
         queryStateTimer.beginRunning();
         return queryState.setIf(RUNNING, currentState -> currentState.ordinal() < RUNNING.ordinal());
+    }
+
+    public boolean transitionToRescheduling()
+    {
+        return queryState.setIf(RESCHEDULING, currentState -> currentState == RUNNING);
+    }
+
+    public boolean transitionToResuming()
+    {
+        return queryState.setIf(RESUMING, currentState -> currentState == RESCHEDULING);
     }
 
     public boolean transitionToFinishing()
@@ -823,12 +876,17 @@ public class QueryStateMachine
         if (failed) {
             QUERY_STATE_LOG.debug(throwable, "Query %s failed", queryId);
             session.getTransactionId().ifPresent(transactionId -> {
-                if (transactionManager.isAutoCommit(transactionId)) {
-                    transactionManager.asyncAbort(transactionId);
+                try {
+                    if (transactionManager.transactionExists(transactionId) && transactionManager.isAutoCommit(transactionId)) {
+                        transactionManager.asyncAbort(transactionId);
+                        return;
+                    }
                 }
-                else {
-                    transactionManager.fail(transactionId);
+                catch (RuntimeException e) {
+                    // This shouldn't happen but be safe and just fail the transaction directly
+                    QUERY_STATE_LOG.error(e, "Error aborting transaction for failed query. Transaction will be failed directly");
                 }
+                transactionManager.fail(transactionId);
             });
         }
         else {
@@ -851,12 +909,17 @@ public class QueryStateMachine
         boolean canceled = queryState.setIf(FAILED, currentState -> !currentState.isDone());
         if (canceled) {
             session.getTransactionId().ifPresent(transactionId -> {
-                if (transactionManager.isAutoCommit(transactionId)) {
-                    transactionManager.asyncAbort(transactionId);
+                try {
+                    if (transactionManager.transactionExists(transactionId) && transactionManager.isAutoCommit(transactionId)) {
+                        transactionManager.asyncAbort(transactionId);
+                        return;
+                    }
                 }
-                else {
-                    transactionManager.fail(transactionId);
+                catch (RuntimeException e) {
+                    // This shouldn't happen but be safe and just fail the transaction directly
+                    QUERY_STATE_LOG.error(e, "Error aborting transaction for failed query. Transaction will be failed directly");
                 }
+                transactionManager.fail(transactionId);
             });
         }
 
@@ -918,6 +981,16 @@ public class QueryStateMachine
         queryStateTimer.recordHeartbeat();
     }
 
+    public void beginSyntaxAnalysis()
+    {
+        queryStateTimer.beginSyntaxAnalysis();
+    }
+
+    public void endSyntaxAnalysis()
+    {
+        queryStateTimer.endSyntaxAnalysis();
+    }
+
     public void beginAnalysis()
     {
         queryStateTimer.beginAnalyzing();
@@ -926,6 +999,16 @@ public class QueryStateMachine
     public void endAnalysis()
     {
         queryStateTimer.endAnalysis();
+    }
+
+    public void beginLogicalPlan()
+    {
+        queryStateTimer.beginLogicalPlan();
+    }
+
+    public void endLogicalPlan()
+    {
+        queryStateTimer.endLogicalPlan();
     }
 
     public void beginDistributedPlanning()
@@ -965,7 +1048,8 @@ public class QueryStateMachine
         }
         return getAllStages(rootStage).stream()
                 .map(StageInfo::getState)
-                .allMatch(state -> (state == StageState.RUNNING) || state.isDone());
+                // Snapshot: RESCHEDULING, although a done state for stage, should not be deemed as "scheduled".
+                .allMatch(state -> (state == StageState.RUNNING) || state.isDone() && state != StageState.RESCHEDULING);
     }
 
     void setRunningAsync(boolean runningAsync)
@@ -999,6 +1083,12 @@ public class QueryStateMachine
         if (queryInfo.isFinalQueryInfo()) {
             finalQueryInfo.compareAndSet(Optional.empty(), Optional.of(queryInfo));
         }
+        else if (SystemSessionProperties.isSnapshotEnabled(session)) {
+            if (queryInfo.getState() == RESCHEDULING && queryInfo.areAllStagesDone()) {
+                // Snapsoht: All remote tasks have been cancelled. Can start scheduling new ones.
+                transitionToResuming();
+            }
+        }
         return queryInfo;
     }
 
@@ -1024,7 +1114,6 @@ public class QueryStateMachine
 
         QueryInfo prunedQueryInfo = new QueryInfo(
                 queryInfo.getQueryId(),
-                queryInfo.getBatchQueries(),
                 queryInfo.getSession(),
                 queryInfo.getState(),
                 getMemoryPool().getId(),
@@ -1071,6 +1160,8 @@ public class QueryStateMachine
                 queryStats.getAnalysisTime(),
                 queryStats.getDistributedPlanningTime(),
                 queryStats.getTotalPlanningTime(),
+                queryStats.getTotalLogicalPlanningTime(),
+                queryStats.getTotalSyntaxAnalysisTime(),
                 queryStats.getFinishingTime(),
                 queryStats.getTotalTasks(),
                 queryStats.getRunningTasks(),
@@ -1123,7 +1214,7 @@ public class QueryStateMachine
         @GuardedBy("this")
         private List<Type> columnTypes;
         @GuardedBy("this")
-        private final Set<URI> exchangeLocations = new LinkedHashSet<>();
+        private final Set<TaskLocation> exchangeLocations = new LinkedHashSet<>();
         @GuardedBy("this")
         private boolean noMoreExchangeLocations;
 
@@ -1151,24 +1242,31 @@ public class QueryStateMachine
             checkArgument(columnNames.size() == columnTypes.size(), "columnNames and columnTypes must be the same size");
 
             Optional<QueryOutputInfo> queryOutputInfo;
-            List<Consumer<QueryOutputInfo>> outputInfoListeners;
+            List<Consumer<QueryOutputInfo>> localOutputInfoListeners;
             synchronized (this) {
                 checkState(this.columnNames == null && this.columnTypes == null, "output fields already set");
                 this.columnNames = ImmutableList.copyOf(columnNames);
                 this.columnTypes = ImmutableList.copyOf(columnTypes);
 
                 queryOutputInfo = getQueryOutputInfo();
-                outputInfoListeners = ImmutableList.copyOf(this.outputInfoListeners);
+                localOutputInfoListeners = ImmutableList.copyOf(this.outputInfoListeners);
             }
-            queryOutputInfo.ifPresent(info -> fireStateChanged(info, outputInfoListeners));
+            queryOutputInfo.ifPresent(info -> fireStateChanged(info, localOutputInfoListeners));
         }
 
-        public void updateOutputLocations(Set<URI> newExchangeLocations, boolean noMoreExchangeLocations)
+        private void resetForResume()
+        {
+            // Snapshot: Preprare to restart, by allowing receival of exchange locations
+            this.noMoreExchangeLocations = false;
+            this.exchangeLocations.clear();
+        }
+
+        public void updateOutputLocations(Set<TaskLocation> newExchangeLocations, boolean noMoreExchangeLocations)
         {
             requireNonNull(newExchangeLocations, "newExchangeLocations is null");
 
             Optional<QueryOutputInfo> queryOutputInfo;
-            List<Consumer<QueryOutputInfo>> outputInfoListeners;
+            List<Consumer<QueryOutputInfo>> localOutputInfoListeners;
             synchronized (this) {
                 if (this.noMoreExchangeLocations) {
                     checkArgument(this.exchangeLocations.containsAll(newExchangeLocations), "New locations added after no more locations set");
@@ -1178,9 +1276,9 @@ public class QueryStateMachine
                 this.exchangeLocations.addAll(newExchangeLocations);
                 this.noMoreExchangeLocations = noMoreExchangeLocations;
                 queryOutputInfo = getQueryOutputInfo();
-                outputInfoListeners = ImmutableList.copyOf(this.outputInfoListeners);
+                localOutputInfoListeners = ImmutableList.copyOf(this.outputInfoListeners);
             }
-            queryOutputInfo.ifPresent(info -> fireStateChanged(info, outputInfoListeners));
+            queryOutputInfo.ifPresent(info -> fireStateChanged(info, localOutputInfoListeners));
         }
 
         private synchronized Optional<QueryOutputInfo> getQueryOutputInfo()

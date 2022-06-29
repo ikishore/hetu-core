@@ -1,5 +1,5 @@
 /*
- * Copyright (C) 2018-2020. Huawei Technologies Co., Ltd. All rights reserved.
+ * Copyright (C) 2018-2021. Huawei Technologies Co., Ltd. All rights reserved.
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
  * You may obtain a copy of the License at
@@ -52,26 +52,28 @@ public class SnappyCompressionSerializer<E>
             throws IOException
     {
         //serialize object
-        final DataOutput2 serializedOutput = new DataOutput2();
-        serializer.serialize(serializedOutput, value);
+        try (DataOutput2 serializedOutput = new DataOutput2()) {
+            serializer.serialize(serializedOutput, value);
 
-        //compress
-        final DataOutput2 compressedOutput = new DataOutput2();
-        compressedOutput.ensureAvail(serializedOutput.pos + 40);
-        int newLen = 0;
-        try {
-            newLen = Snappy.compress(serializedOutput.buf, 0, serializedOutput.pos, compressedOutput.buf, 0);
-        }
-        catch (Exception e) {
-            newLen = 0;
-        }
-        if (newLen < serializedOutput.pos && newLen != 0) {
-            out.packInt(newLen + 1);
-            out.write(compressedOutput.buf, 0, newLen);
-        }
-        else {
-            out.packInt(0);
-            out.write(serializedOutput.buf, 0, serializedOutput.pos);
+            //compress
+            try (DataOutput2 compressedOutput = new DataOutput2()) {
+                compressedOutput.ensureAvail(serializedOutput.pos + 40);
+                int newLen = 0;
+                try {
+                    newLen = Snappy.compress(serializedOutput.buf, 0, serializedOutput.pos, compressedOutput.buf, 0);
+                }
+                catch (Exception e) {
+                    newLen = 0;
+                }
+                if (newLen < serializedOutput.pos && newLen != 0) {
+                    out.packInt(newLen + 1);
+                    out.write(compressedOutput.buf, 0, newLen);
+                }
+                else {
+                    out.packInt(0);
+                    out.write(serializedOutput.buf, 0, serializedOutput.pos);
+                }
+            }
         }
     }
 
@@ -100,25 +102,26 @@ public class SnappyCompressionSerializer<E>
 
     public void valueArraySerialize(DataOutput2 out, Object vals) throws IOException
     {
-        DataOutput2 out2 = new DataOutput2();
-        this.serializer.valueArraySerialize(out2, vals);
-        if (out2.pos != 0) {
-            byte[] tmp = new byte[out2.pos + 40];
+        try (DataOutput2 out2 = new DataOutput2()) {
+            this.serializer.valueArraySerialize(out2, vals);
+            if (out2.pos != 0) {
+                byte[] tmp = new byte[out2.pos + 40];
 
-            int newLen;
-            try {
-                newLen = Snappy.compress(out2.buf, 0, out2.pos, tmp, 0);
-            }
-            catch (IndexOutOfBoundsException var7) {
-                newLen = 0;
-            }
-            if (newLen < out2.pos && newLen != 0) {
-                out.packInt(newLen + 1);
-                out.write(tmp, 0, newLen);
-            }
-            else {
-                out.packInt(0);
-                out.write(out2.buf, 0, out2.pos);
+                int newLen;
+                try {
+                    newLen = Snappy.compress(out2.buf, 0, out2.pos, tmp, 0);
+                }
+                catch (IndexOutOfBoundsException var7) {
+                    newLen = 0;
+                }
+                if (newLen < out2.pos && newLen != 0) {
+                    out.packInt(newLen + 1);
+                    out.write(tmp, 0, newLen);
+                }
+                else {
+                    out.packInt(0);
+                    out.write(out2.buf, 0, out2.pos);
+                }
             }
         }
     }
@@ -130,7 +133,6 @@ public class SnappyCompressionSerializer<E>
         }
         else {
             int length = in.unpackInt() - 1;
-            int startPosition = in.getPos();
             if (length == -1) {
                 return this.serializer.valueArrayDeserialize(in, size);
             }

@@ -15,7 +15,6 @@ package io.prestosql.plugin.hive.orc;
 
 import com.google.common.collect.ImmutableList;
 import com.google.common.collect.ImmutableMap;
-import com.google.common.collect.ImmutableSet;
 import io.airlift.tpch.Nation;
 import io.airlift.tpch.NationColumn;
 import io.airlift.tpch.NationGenerator;
@@ -38,13 +37,13 @@ import io.prestosql.type.InternalTypeManager;
 import org.apache.hadoop.conf.Configuration;
 import org.apache.hadoop.fs.Path;
 import org.apache.hadoop.mapred.JobConf;
-import org.joda.time.DateTimeZone;
 import org.testng.annotations.Test;
 
 import java.io.File;
 import java.time.Duration;
 import java.util.ArrayList;
 import java.util.List;
+import java.util.Map;
 import java.util.Optional;
 import java.util.OptionalLong;
 import java.util.Properties;
@@ -72,7 +71,8 @@ import static org.testng.Assert.assertEquals;
 public class TestOrcAcidPageSource
 {
     private static final Metadata METADATA = createTestMetadataManager();
-    public static final TypeManager TYPE_MANAGER = new InternalTypeManager(METADATA);
+    public static final TypeManager TYPE_MANAGER = new InternalTypeManager(METADATA.getFunctionAndTypeManager());
+    private static final Map<NationColumn, Integer> ALL_COLUMNS = ImmutableMap.of(NATION_KEY, 0, NAME, 1, REGION_KEY, 2, COMMENT, 3);
 
     private static final HivePageSourceFactory PAGE_SOURCE_FACTORY = new OrcPageSourceFactory(
             TYPE_MANAGER,
@@ -91,13 +91,13 @@ public class TestOrcAcidPageSource
     @Test
     public void testFullFileRead()
     {
-        assertRead(ImmutableSet.copyOf(NationColumn.values()), OptionalLong.empty(), Optional.empty(), nationKey -> false);
+        assertRead(ALL_COLUMNS, OptionalLong.empty(), Optional.empty(), nationKey -> false);
     }
 
     @Test
     public void testSingleColumnRead()
     {
-        assertRead(ImmutableSet.of(REGION_KEY), OptionalLong.empty(), Optional.empty(), nationKey -> false);
+        assertRead(ImmutableMap.of(REGION_KEY, ALL_COLUMNS.get(REGION_KEY)), OptionalLong.empty(), Optional.empty(), nationKey -> false);
     }
 
     /**
@@ -106,7 +106,7 @@ public class TestOrcAcidPageSource
     @Test
     public void testFullFileSkipped()
     {
-        assertRead(ImmutableSet.copyOf(NationColumn.values()), OptionalLong.of(100L), Optional.empty(), nationKey -> false);
+        assertRead(ALL_COLUMNS, OptionalLong.of(100L), Optional.empty(), nationKey -> false);
     }
 
     /**
@@ -115,7 +115,7 @@ public class TestOrcAcidPageSource
     @Test
     public void testSomeStripesAndRowGroupRead()
     {
-        assertRead(ImmutableSet.copyOf(NationColumn.values()), OptionalLong.of(5L), Optional.empty(), nationKey -> false);
+        assertRead(ALL_COLUMNS, OptionalLong.of(5L), Optional.empty(), nationKey -> false);
     }
 
     @Test
@@ -127,14 +127,14 @@ public class TestOrcAcidPageSource
                 .addDeleteDelta(new Path(partitionLocation, deleteDeltaSubdir(4L, 4L, 0)), 4L, 4L, 0)
                 .build();
 
-        assertRead(ImmutableSet.copyOf(NationColumn.values()), OptionalLong.empty(), deleteDeltaLocations, nationKey -> nationKey == 5 || nationKey == 19);
+        assertRead(ALL_COLUMNS, OptionalLong.empty(), deleteDeltaLocations, nationKey -> nationKey == 5 || nationKey == 19);
     }
 
-    private static void assertRead(Set<NationColumn> columns, OptionalLong nationKeyPredicate, Optional<DeleteDeltaLocations> deleteDeltaLocations, LongPredicate deletedRows)
+    private static void assertRead(Map<NationColumn, Integer> columns, OptionalLong nationKeyPredicate, Optional<DeleteDeltaLocations> deleteDeltaLocations, LongPredicate deletedRows)
     {
         TupleDomain<HiveColumnHandle> tupleDomain = TupleDomain.all();
         if (nationKeyPredicate.isPresent()) {
-            tupleDomain = TupleDomain.withColumnDomains(ImmutableMap.of(toHiveColumnHandle(NATION_KEY), Domain.singleValue(BIGINT, nationKeyPredicate.getAsLong())));
+            tupleDomain = TupleDomain.withColumnDomains(ImmutableMap.of(toHiveColumnHandle(NATION_KEY, ALL_COLUMNS.get(NATION_KEY)), Domain.singleValue(BIGINT, nationKeyPredicate.getAsLong())));
         }
 
         List<Nation> actual = readFile(columns, tupleDomain, deleteDeltaLocations);
@@ -150,13 +150,13 @@ public class TestOrcAcidPageSource
             expected.addAll(nCopies(1000, nation));
         }
 
-        assertEqualsByColumns(columns, actual, expected);
+        assertEqualsByColumns(columns.keySet(), actual, expected);
     }
 
-    private static List<Nation> readFile(Set<NationColumn> columns, TupleDomain<HiveColumnHandle> tupleDomain, Optional<DeleteDeltaLocations> deleteDeltaLocations)
+    private static List<Nation> readFile(Map<NationColumn, Integer> columns, TupleDomain<HiveColumnHandle> tupleDomain, Optional<DeleteDeltaLocations> deleteDeltaLocations)
     {
-        List<HiveColumnHandle> columnHandles = columns.stream()
-                .map(TestOrcAcidPageSource::toHiveColumnHandle)
+        List<HiveColumnHandle> columnHandles = columns.entrySet().stream()
+                .map(column -> toHiveColumnHandle(column.getKey(), column.getValue()))
                 .collect(toImmutableList());
 
         List<String> columnNames = columnHandles.stream()
@@ -176,13 +176,12 @@ public class TestOrcAcidPageSource
                 createSchema(),
                 columnHandles,
                 tupleDomain,
-                DateTimeZone.UTC,
                 Optional.empty(),
                 deleteDeltaLocations,
                 Optional.empty(),
                 Optional.empty(),
                 null,
-                false).get();
+                false, -1L).get();
 
         int nationKeyColumn = columnNames.indexOf("n_nationkey");
         int nameColumn = columnNames.indexOf("n_name");
@@ -224,7 +223,7 @@ public class TestOrcAcidPageSource
         return rows.build();
     }
 
-    private static HiveColumnHandle toHiveColumnHandle(NationColumn nationColumn)
+    private static HiveColumnHandle toHiveColumnHandle(NationColumn nationColumn, Integer hiveColumnIndex)
     {
         Type prestoType;
         switch (nationColumn.getType().getBase()) {
@@ -243,7 +242,7 @@ public class TestOrcAcidPageSource
                 nationColumn.getColumnName(),
                 toHiveType(new HiveTypeTranslator(), prestoType),
                 prestoType.getTypeSignature(),
-                0,
+                hiveColumnIndex,
                 REGULAR,
                 Optional.empty());
     }

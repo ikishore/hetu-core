@@ -28,6 +28,7 @@ import io.prestosql.plugin.hive.DeleteDeltaLocations;
 import io.prestosql.plugin.hive.FileFormatDataSourceStats;
 import io.prestosql.plugin.hive.HdfsEnvironment;
 import io.prestosql.plugin.hive.HiveColumnHandle;
+import io.prestosql.plugin.hive.HiveConfig;
 import io.prestosql.plugin.hive.HivePageSourceFactory;
 import io.prestosql.spi.PrestoException;
 import io.prestosql.spi.connector.ConnectorPageSource;
@@ -79,6 +80,7 @@ import static io.prestosql.plugin.hive.HiveSessionProperties.getParquetMaxReadBl
 import static io.prestosql.plugin.hive.HiveSessionProperties.isFailOnCorruptedParquetStatistics;
 import static io.prestosql.plugin.hive.HiveSessionProperties.isUseParquetColumnNames;
 import static io.prestosql.plugin.hive.HiveUtil.getDeserializerClassName;
+import static io.prestosql.plugin.hive.HiveUtil.shouldUseRecordReaderFromInputFormat;
 import static io.prestosql.plugin.hive.parquet.HdfsParquetDataSource.buildHdfsParquetDataSource;
 import static java.lang.String.format;
 import static java.util.Objects.requireNonNull;
@@ -92,17 +94,20 @@ public class ParquetPageSourceFactory
             .add("org.apache.hadoop.hive.ql.io.parquet.serde.ParquetHiveSerDe")
             .add("parquet.hive.serde.ParquetHiveSerDe")
             .build();
+    public static final String WRITER_TIME_ZONE_KEY = "writer.time.zone";
 
     private final TypeManager typeManager;
     private final HdfsEnvironment hdfsEnvironment;
     private final FileFormatDataSourceStats stats;
+    private final DateTimeZone timeZone;
 
     @Inject
-    public ParquetPageSourceFactory(TypeManager typeManager, HdfsEnvironment hdfsEnvironment, FileFormatDataSourceStats stats)
+    public ParquetPageSourceFactory(TypeManager typeManager, HdfsEnvironment hdfsEnvironment, FileFormatDataSourceStats stats, HiveConfig hiveConfig)
     {
         this.typeManager = requireNonNull(typeManager, "typeManager is null");
         this.hdfsEnvironment = requireNonNull(hdfsEnvironment, "hdfsEnvironment is null");
         this.stats = requireNonNull(stats, "stats is null");
+        timeZone = requireNonNull(hiveConfig, "hiveConfig is null").getParquetDateTimeZone();
     }
 
     @Override
@@ -116,15 +121,15 @@ public class ParquetPageSourceFactory
             Properties schema,
             List<HiveColumnHandle> columns,
             TupleDomain<HiveColumnHandle> effectivePredicate,
-            DateTimeZone hiveStorageTimeZone,
             Optional<DynamicFilterSupplier> dynamicFilter,
             Optional<DeleteDeltaLocations> deleteDeltaLocations,
             Optional<Long> startRowOffsetOfFile,
             Optional<List<IndexMetadata>> indexes,
             SplitMetadata splitMetadata,
-            boolean splitCacheable)
+            boolean splitCacheable,
+            long dataSourceLastModifiedTime)
     {
-        if (!PARQUET_SERDE_CLASS_NAMES.contains(getDeserializerClassName(schema))) {
+        if (!PARQUET_SERDE_CLASS_NAMES.contains(getDeserializerClassName(schema)) || shouldUseRecordReaderFromInputFormat(configuration, schema)) {
             return Optional.empty();
         }
 
@@ -145,7 +150,8 @@ public class ParquetPageSourceFactory
                 getParquetMaxReadBlockSize(session),
                 typeManager,
                 effectivePredicate,
-                stats));
+                stats,
+                timeZone));
     }
 
     public static ParquetPageSource createParquetPageSource(
@@ -163,11 +169,13 @@ public class ParquetPageSourceFactory
             DataSize maxReadBlockSize,
             TypeManager typeManager,
             TupleDomain<HiveColumnHandle> effectivePredicate,
-            FileFormatDataSourceStats stats)
+            FileFormatDataSourceStats stats,
+            DateTimeZone timeZone)
     {
         AggregatedMemoryContext systemMemoryContext = newSimpleAggregatedMemoryContext();
 
         ParquetDataSource dataSource = null;
+        DateTimeZone readerTimeZone = timeZone;
         try {
             FileSystem fileSystem = hdfsEnvironment.getFileSystem(user, path, configuration);
             FSDataInputStream inputStream = hdfsEnvironment.doAs(user, () -> fileSystem.open(path));
@@ -175,6 +183,10 @@ public class ParquetPageSourceFactory
             FileMetaData fileMetaData = parquetMetadata.getFileMetaData();
             MessageType fileSchema = fileMetaData.getSchema();
             dataSource = buildHdfsParquetDataSource(inputStream, path, fileSize, stats);
+            String writerTimeZoneId = fileMetaData.getKeyValueMetaData().get(WRITER_TIME_ZONE_KEY);
+            if (writerTimeZoneId != null && !writerTimeZoneId.equalsIgnoreCase(readerTimeZone.getID())) {
+                readerTimeZone = DateTimeZone.forID(writerTimeZoneId);
+            }
 
             List<org.apache.parquet.schema.Type> fields = columns.stream()
                     .filter(column -> column.getColumnType() == REGULAR)
@@ -204,9 +216,11 @@ public class ParquetPageSourceFactory
             }
             MessageColumnIO messageColumnIO = getColumnIO(fileSchema, requestedSchema);
             ParquetReader parquetReader = new ParquetReader(
+                    Optional.ofNullable(fileMetaData.getCreatedBy()),
                     messageColumnIO,
                     blocks.build(),
                     dataSource,
+                    readerTimeZone,
                     systemMemoryContext,
                     maxReadBlockSize);
 

@@ -22,6 +22,7 @@ import io.airlift.discovery.client.Announcer;
 import io.airlift.discovery.client.DiscoveryModule;
 import io.airlift.event.client.JsonEventModule;
 import io.airlift.event.client.http.HttpEventModule;
+import io.airlift.http.server.HttpServerInfo;
 import io.airlift.http.server.HttpServerModule;
 import io.airlift.jaxrs.JaxrsModule;
 import io.airlift.jmx.JmxHttpModule;
@@ -43,16 +44,22 @@ import io.prestosql.execution.scheduler.NodeSchedulerConfig;
 import io.prestosql.execution.warnings.WarningCollectorModule;
 import io.prestosql.filesystem.FileSystemClientManager;
 import io.prestosql.heuristicindex.HeuristicIndexerManager;
+import io.prestosql.httpserver.HetuHttpServerInfo;
+import io.prestosql.httpserver.HetuHttpServerModule;
 import io.prestosql.jmx.HetuJmxModule;
 import io.prestosql.metadata.StaticCatalogStore;
+import io.prestosql.metadata.StaticFunctionNamespaceStore;
 import io.prestosql.metastore.HetuMetaStoreManager;
 import io.prestosql.protocol.SmileModule;
 import io.prestosql.security.AccessControlManager;
 import io.prestosql.security.AccessControlModule;
+import io.prestosql.security.GroupProviderManager;
 import io.prestosql.security.PasswordSecurityModule;
 import io.prestosql.seedstore.SeedStoreManager;
 import io.prestosql.server.security.PasswordAuthenticatorManager;
 import io.prestosql.server.security.ServerSecurityModule;
+import io.prestosql.snapshot.SnapshotUtils;
+import io.prestosql.spi.seedstore.SeedStoreSubType;
 import io.prestosql.sql.parser.SqlParserOptions;
 import io.prestosql.statestore.StateStoreLauncher;
 import io.prestosql.statestore.StateStoreProvider;
@@ -104,7 +111,7 @@ public class PrestoServer
         modules.add(
                 new NodeModule(),
                 Modules.override(new DiscoveryModule()).with(new HetuDiscoveryModule()),
-                new HttpServerModule(),
+                Modules.override(new HttpServerModule()).with(new HetuHttpServerModule()),
                 new JsonModule(),
                 new SmileModule(),
                 new JaxrsModule(),
@@ -137,8 +144,20 @@ public class PrestoServer
             injector.getInstance(PluginManager.class).loadPlugins();
             FileSystemClientManager fileSystemClientManager = injector.getInstance(FileSystemClientManager.class);
             fileSystemClientManager.loadFactoryConfigs();
-            injector.getInstance(HetuMetaStoreManager.class).loadHetuMetastore(fileSystemClientManager);
-            injector.getInstance(HeuristicIndexerManager.class).buildIndexClient();
+
+            injector.getInstance(SeedStoreManager.class).loadSeedStore();
+            if (injector.getInstance(SeedStoreManager.class).isSeedStoreOnYarnEnabled()) {
+                addSeedOnYarnInformation(
+                        injector.getInstance(ServerConfig.class),
+                        injector.getInstance(SeedStoreManager.class),
+                        (HetuHttpServerInfo) injector.getInstance(HttpServerInfo.class));
+            }
+            launchEmbeddedStateStore(injector.getInstance(HetuConfig.class), injector.getInstance(StateStoreLauncher.class));
+            injector.getInstance(StateStoreProvider.class).loadStateStore();
+            injector.getInstance(HetuMetaStoreManager.class).loadHetuMetastore(fileSystemClientManager); // relies on state-store
+
+            injector.getInstance(HeuristicIndexerManager.class).buildIndexClient(); // relies on metastore
+            injector.getInstance(StaticFunctionNamespaceStore.class).loadFunctionNamespaceManagers();
             injector.getInstance(StaticCatalogStore.class).loadCatalogs();
             injector.getInstance(DynamicCatalogStore.class).loadCatalogStores(fileSystemClientManager);
             injector.getInstance(DynamicCatalogScanner.class).start();
@@ -147,15 +166,13 @@ public class PrestoServer
             injector.getInstance(AccessControlManager.class).loadSystemAccessControl();
             injector.getInstance(PasswordAuthenticatorManager.class).loadPasswordAuthenticator();
             injector.getInstance(EventListenerManager.class).loadConfiguredEventListener();
+            injector.getInstance(GroupProviderManager.class).loadConfiguredGroupProvider();
 
-            // Seed Store
-            injector.getInstance(SeedStoreManager.class).loadSeedStore();
-            // State Store
-            launchEmbeddedStateStore(injector.getInstance(HetuConfig.class), injector.getInstance(StateStoreLauncher.class));
-            injector.getInstance(StateStoreProvider.class).loadStateStore();
             // preload index (on coordinator only)
             if (injector.getInstance(ServerConfig.class).isCoordinator()) {
-                injector.getInstance(HeuristicIndexerManager.class).preloadIndex();
+                HeuristicIndexerManager heuristicIndexerManager = injector.getInstance(HeuristicIndexerManager.class);
+                heuristicIndexerManager.preloadIndex();
+                heuristicIndexerManager.initCache();
             }
             // register dynamic filter listener
             registerStateStoreListeners(
@@ -163,6 +180,9 @@ public class PrestoServer
                     injector.getInstance(DynamicFilterCacheManager.class),
                     injector.getInstance(ServerConfig.class),
                     injector.getInstance(NodeSchedulerConfig.class));
+
+            // Initialize snapshot Manager
+            injector.getInstance(SnapshotUtils.class).initialize();
 
             injector.getInstance(Announcer.class).start();
 
@@ -181,6 +201,34 @@ public class PrestoServer
         return ImmutableList.of();
     }
 
+    private static void addSeedOnYarnInformation(ServerConfig serverConfig,
+                                                 SeedStoreManager seedStoreManager,
+                                                 HetuHttpServerInfo httpServerInfo)
+    {
+        if (serverConfig == null || seedStoreManager == null || httpServerInfo == null) {
+            return;
+        }
+        if (!serverConfig.isCoordinator()) {
+            return;
+        }
+        String httpUri;
+        if (httpServerInfo.getHttpExternalUri() != null) {
+            httpUri = httpServerInfo.getHttpExternalUri().toString();
+        }
+        else if (httpServerInfo.getHttpsExternalUri() != null) {
+            httpUri = httpServerInfo.getHttpsExternalUri().toString();
+        }
+        else {
+            return;
+        }
+        try {
+            seedStoreManager.addSeed(SeedStoreSubType.ON_YARN, httpUri, false);
+        }
+        catch (IOException e) {
+            return;
+        }
+    }
+
     private static void launchEmbeddedStateStore(HetuConfig config, StateStoreLauncher launcher)
             throws Exception
     {
@@ -192,18 +240,19 @@ public class PrestoServer
 
     private static void logLocation(Logger log, String name, Path path)
     {
-        if (!Files.exists(path, NOFOLLOW_LINKS)) {
+        Path newPath = path;
+        if (!Files.exists(newPath, NOFOLLOW_LINKS)) {
             log.info("%s: [does not exist]", name);
             return;
         }
         try {
-            path = path.toAbsolutePath().toRealPath();
+            newPath = newPath.toAbsolutePath().toRealPath();
         }
         catch (IOException e) {
             log.info("%s: [not accessible]", name);
             return;
         }
-        log.info("%s: %s", name, path);
+        log.info("%s: %s", name, newPath);
     }
 
     private static void registerStateStoreListeners(

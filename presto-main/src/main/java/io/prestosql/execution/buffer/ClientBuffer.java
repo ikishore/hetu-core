@@ -44,7 +44,6 @@ import static java.util.Objects.requireNonNull;
 @ThreadSafe
 class ClientBuffer
 {
-    private final String taskInstanceId;
     private final OutputBufferId bufferId;
 
     private final AtomicLong rowsAdded = new AtomicLong();
@@ -69,9 +68,8 @@ class ClientBuffer
     @GuardedBy("this")
     private PendingRead pendingRead;
 
-    public ClientBuffer(String taskInstanceId, OutputBufferId bufferId)
+    public ClientBuffer(OutputBufferId bufferId)
     {
-        this.taskInstanceId = requireNonNull(taskInstanceId, "taskInstanceId is null");
         this.bufferId = requireNonNull(bufferId, "bufferId is null");
     }
 
@@ -82,16 +80,16 @@ class ClientBuffer
         //
 
         @SuppressWarnings("FieldAccessNotGuarded")
-        boolean destroyed = this.destroyed.get();
+        boolean bufferDestroyed = this.destroyed.get();
 
         @SuppressWarnings("FieldAccessNotGuarded")
         long sequenceId = this.currentSequenceId.get();
 
         // if destroyed the buffered page count must be zero regardless of observation ordering in this lock free code
-        int bufferedPages = destroyed ? 0 : Math.max(toIntExact(pagesAdded.get() - sequenceId), 0);
+        int bufferedPages = bufferDestroyed ? 0 : Math.max(toIntExact(pagesAdded.get() - sequenceId), 0);
 
         PageBufferInfo pageBufferInfo = new PageBufferInfo(bufferId.getId(), bufferedPages, bufferedBytes.get(), rowsAdded.get(), pagesAdded.get());
-        return new BufferInfo(bufferId, destroyed, bufferedPages, sequenceId, pageBufferInfo);
+        return new BufferInfo(bufferId, bufferDestroyed, bufferedPages, sequenceId, pageBufferInfo);
     }
 
     public boolean isDestroyed()
@@ -100,14 +98,14 @@ class ClientBuffer
         // NOTE: this code must be lock free so state machine updates do not hang
         //
         @SuppressWarnings("FieldAccessNotGuarded")
-        boolean destroyed = this.destroyed.get();
-        return destroyed;
+        boolean bufferDestroyed = this.destroyed.get();
+        return bufferDestroyed;
     }
 
     public void destroy()
     {
         List<SerializedPageReference> removedPages;
-        PendingRead pendingRead;
+        PendingRead finalPendingRead;
         synchronized (this) {
             removedPages = ImmutableList.copyOf(pages);
             pages.clear();
@@ -117,20 +115,20 @@ class ClientBuffer
             noMorePages = true;
             destroyed.set(true);
 
-            pendingRead = this.pendingRead;
+            finalPendingRead = this.pendingRead;
             this.pendingRead = null;
         }
 
         removedPages.forEach(SerializedPageReference::dereferencePage);
 
-        if (pendingRead != null) {
-            pendingRead.completeResultFutureWithEmpty();
+        if (finalPendingRead != null) {
+            finalPendingRead.completeResultFutureWithEmpty();
         }
     }
 
     public void enqueuePages(Collection<SerializedPageReference> pages)
     {
-        PendingRead pendingRead;
+        PendingRead finalPendingRead;
         synchronized (this) {
             // ignore pages after no more pages is set
             // this can happen with limit queries
@@ -140,13 +138,13 @@ class ClientBuffer
 
             addPages(pages);
 
-            pendingRead = this.pendingRead;
+            finalPendingRead = this.pendingRead;
             this.pendingRead = null;
         }
 
         // we just added a page, so process the pending read
-        if (pendingRead != null) {
-            processRead(pendingRead);
+        if (finalPendingRead != null) {
+            processRead(finalPendingRead);
         }
     }
 
@@ -190,7 +188,7 @@ class ClientBuffer
                 }
 
                 // otherwise, wait for more data to arrive
-                pendingRead = new PendingRead(taskInstanceId, sequenceId, maxSize);
+                pendingRead = new PendingRead(sequenceId, maxSize);
                 return pendingRead.getResultFuture();
             }
         }
@@ -205,7 +203,7 @@ class ClientBuffer
 
     public void setNoMorePages()
     {
-        PendingRead pendingRead;
+        PendingRead finalPendingRead;
         synchronized (this) {
             // ignore duplicate calls
             if (noMorePages) {
@@ -214,13 +212,13 @@ class ClientBuffer
 
             noMorePages = true;
 
-            pendingRead = this.pendingRead;
+            finalPendingRead = this.pendingRead;
             this.pendingRead = null;
         }
 
         // there will be no more pages, so process the pending read
-        if (pendingRead != null) {
-            processRead(pendingRead);
+        if (finalPendingRead != null) {
+            processRead(finalPendingRead);
         }
     }
 
@@ -242,12 +240,12 @@ class ClientBuffer
         boolean dataAddedOrNoMorePages = loadPagesIfNecessary(pagesSupplier, maxSize);
 
         if (dataAddedOrNoMorePages) {
-            PendingRead pendingRead;
+            PendingRead inputPendingRead;
             synchronized (this) {
-                pendingRead = this.pendingRead;
+                inputPendingRead = this.pendingRead;
             }
-            if (pendingRead != null) {
-                processRead(pendingRead);
+            if (inputPendingRead != null) {
+                processRead(inputPendingRead);
             }
         }
     }
@@ -273,7 +271,7 @@ class ClientBuffer
             // The page supplier has incremented the page reference count, and addPages below also increments
             // the reference count, so we need to drop the page supplier reference. The call dereferencePage
             // is performed outside of synchronized to avoid making a callback while holding a lock.
-            pageReferences = pagesSupplier.getPages(maxSize);
+            pageReferences = pagesSupplier.getPages(this, maxSize);
 
             // add the pages to this buffer, which will increase the reference count
             addPages(pageReferences);
@@ -333,13 +331,13 @@ class ClientBuffer
 
         // if request is for pages before the current position, just return an empty result
         if (sequenceId < currentSequenceId.get()) {
-            return emptyResults(taskInstanceId, sequenceId, false);
+            return emptyResults(sequenceId, false);
         }
 
         // if this buffer is finished, notify the client of this, so the client
         // will destroy this buffer
         if (pages.isEmpty() && noMorePages) {
-            return emptyResults(taskInstanceId, currentSequenceId.get(), true);
+            return emptyResults(currentSequenceId.get(), true);
         }
 
         // if request is for pages after the current position, there is a bug somewhere
@@ -362,7 +360,7 @@ class ClientBuffer
             }
             result.add(page.getSerializedPage());
         }
-        return new BufferResult(taskInstanceId, sequenceId, sequenceId + result.size(), false, result);
+        return new BufferResult(sequenceId, sequenceId + result.size(), false, result);
     }
 
     /**
@@ -412,26 +410,24 @@ class ClientBuffer
         long sequenceId = currentSequenceId.get();
 
         @SuppressWarnings("FieldAccessNotGuarded")
-        boolean destroyed = this.destroyed.get();
+        boolean bufferDestroyed = this.destroyed.get();
 
         return toStringHelper(this)
                 .add("bufferId", bufferId)
                 .add("sequenceId", sequenceId)
-                .add("destroyed", destroyed)
+                .add("destroyed", bufferDestroyed)
                 .toString();
     }
 
     @Immutable
     private static class PendingRead
     {
-        private final String taskInstanceId;
         private final long sequenceId;
         private final DataSize maxSize;
         private final SettableFuture<BufferResult> resultFuture = SettableFuture.create();
 
-        private PendingRead(String taskInstanceId, long sequenceId, DataSize maxSize)
+        private PendingRead(long sequenceId, DataSize maxSize)
         {
-            this.taskInstanceId = requireNonNull(taskInstanceId, "taskInstanceId is null");
             this.sequenceId = sequenceId;
             this.maxSize = maxSize;
         }
@@ -453,7 +449,7 @@ class ClientBuffer
 
         public void completeResultFutureWithEmpty()
         {
-            resultFuture.set(emptyResults(taskInstanceId, sequenceId, false));
+            resultFuture.set(emptyResults(sequenceId, false));
         }
     }
 
@@ -462,7 +458,7 @@ class ClientBuffer
         /**
          * Gets pages up to the specified size limit or a single page that exceeds the size limit.
          */
-        List<SerializedPageReference> getPages(DataSize maxSize);
+        List<SerializedPageReference> getPages(ClientBuffer client, DataSize maxSize);
 
         /**
          * @return true if more pages may be produced; false otherwise

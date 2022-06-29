@@ -74,6 +74,7 @@ import java.util.List;
 import java.util.Map;
 import java.util.Optional;
 import java.util.UUID;
+import java.util.concurrent.Executor;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.ScheduledExecutorService;
 
@@ -172,7 +173,8 @@ public abstract class AbstractTestHiveFileSystem
         }
 
         MetastoreLocator metastoreLocator = new TestingMetastoreLocator(config, host, port);
-        ExecutorService executor = newCachedThreadPool(daemonThreadsNamed("hive-%s"));
+        ExecutorService executors = newCachedThreadPool(daemonThreadsNamed("hive-%s"));
+        ExecutorService executorRefresh = newCachedThreadPool(daemonThreadsNamed("hive-refresh-%s"));
         HivePartitionManager hivePartitionManager = new HivePartitionManager(TYPE_MANAGER, config);
 
         HdfsConfiguration hdfsConfiguration = hdfsConfigurationProvider.apply(config);
@@ -180,7 +182,8 @@ public abstract class AbstractTestHiveFileSystem
         hdfsEnvironment = new HdfsEnvironment(hdfsConfiguration, config, new NoHdfsAuthentication());
         metastoreClient = new TestingHiveMetastore(
                 new BridgingHiveMetastore(new ThriftHiveMetastore(metastoreLocator, new ThriftHiveMetastoreConfig())),
-                executor,
+                executors,
+                executorRefresh,
                 config,
                 getBasePath(),
                 hdfsEnvironment);
@@ -208,7 +211,7 @@ public abstract class AbstractTestHiveFileSystem
                 new NamenodeStats(),
                 hdfsEnvironment,
                 new CachingDirectoryLister(new HiveConfig()),
-                new BoundedExecutor(executor, config.getMaxSplitIteratorThreads()),
+                new BoundedExecutor(executors, config.getMaxSplitIteratorThreads()),
                 new HiveCoercionPolicy(TYPE_MANAGER),
                 new CounterStat(),
                 config.getMaxOutstandingSplits(),
@@ -255,18 +258,18 @@ public abstract class AbstractTestHiveFileSystem
             ConnectorMetadata metadata = transaction.getMetadata();
             ConnectorSession session = newSession();
 
-            ConnectorTableHandle table = getTableHandle(metadata, this.table);
-            List<ColumnHandle> columnHandles = ImmutableList.copyOf(metadata.getColumnHandles(session, table).values());
+            ConnectorTableHandle tableHandle = getTableHandle(metadata, this.table);
+            List<ColumnHandle> columnHandles = ImmutableList.copyOf(metadata.getColumnHandles(session, tableHandle).values());
             Map<String, Integer> columnIndex = indexColumns(columnHandles);
 
-            ConnectorSplitSource splitSource = splitManager.getSplits(transaction.getTransactionHandle(), session, table, UNGROUPED_SCHEDULING);
+            ConnectorSplitSource splitSource = splitManager.getSplits(transaction.getTransactionHandle(), session, tableHandle, UNGROUPED_SCHEDULING);
 
             List<ConnectorSplit> splits = getAllSplits(splitSource);
             assertEquals(splits.size(), 1);
 
             long sum = 0;
             for (ConnectorSplit split : splits) {
-                try (ConnectorPageSource pageSource = pageSourceProvider.createPageSource(transaction.getTransactionHandle(), session, split, table, columnHandles)) {
+                try (ConnectorPageSource pageSource = pageSourceProvider.createPageSource(transaction.getTransactionHandle(), session, split, tableHandle, columnHandles)) {
                     MaterializedResult result = materializeSourceDataStream(session, pageSource, getTypes(columnHandles));
 
                     for (MaterializedRow row : result) {
@@ -472,9 +475,9 @@ public abstract class AbstractTestHiveFileSystem
         private final Path basePath;
         private final HdfsEnvironment hdfsEnvironment;
 
-        public TestingHiveMetastore(HiveMetastore delegate, ExecutorService executor, HiveConfig hiveConfig, Path basePath, HdfsEnvironment hdfsEnvironment)
+        public TestingHiveMetastore(HiveMetastore delegate, ExecutorService executor, Executor executorRefresh, HiveConfig hiveConfig, Path basePath, HdfsEnvironment hdfsEnvironment)
         {
-            super(delegate, executor, hiveConfig, new TestingNodeManager("fake-environment"));
+            super(delegate, executor, executorRefresh, hiveConfig, new TestingNodeManager("fake-environment"));
             this.basePath = basePath;
             this.hdfsEnvironment = hdfsEnvironment;
         }
@@ -501,15 +504,15 @@ public abstract class AbstractTestHiveFileSystem
         public void dropTable(HiveIdentity identity, String databaseName, String tableName, boolean deleteData)
         {
             try {
-                Optional<Table> table = getTable(identity, databaseName, tableName);
-                if (!table.isPresent()) {
+                Optional<Table> testTable = getTable(identity, databaseName, tableName);
+                if (!testTable.isPresent()) {
                     throw new TableNotFoundException(new SchemaTableName(databaseName, tableName));
                 }
 
                 // hack to work around the metastore not being configured for S3 or other FS
                 List<String> locations = listAllDataPaths(identity, databaseName, tableName);
 
-                Table.Builder tableBuilder = Table.builder(table.get());
+                Table.Builder tableBuilder = Table.builder(testTable.get());
                 tableBuilder.getStorageBuilder().setLocation("/");
 
                 // drop table
@@ -535,12 +538,12 @@ public abstract class AbstractTestHiveFileSystem
         public void updateTableLocation(String databaseName, String tableName, String location)
         {
             HiveIdentity identity = new HiveIdentity(TESTING_CONTEXT.getIdentity());
-            Optional<Table> table = getTable(identity, databaseName, tableName);
-            if (!table.isPresent()) {
+            Optional<Table> testTable = getTable(identity, databaseName, tableName);
+            if (!testTable.isPresent()) {
                 throw new TableNotFoundException(new SchemaTableName(databaseName, tableName));
             }
 
-            Table.Builder tableBuilder = Table.builder(table.get());
+            Table.Builder tableBuilder = Table.builder(testTable.get());
             tableBuilder.getStorageBuilder().setLocation(location);
 
             // NOTE: this clears the permissions
@@ -550,12 +553,12 @@ public abstract class AbstractTestHiveFileSystem
         private List<String> listAllDataPaths(HiveIdentity identity, String schemaName, String tableName)
         {
             ImmutableList.Builder<String> locations = ImmutableList.builder();
-            Table table = getTable(identity, schemaName, tableName).get();
-            if (table.getStorage().getLocation() != null) {
+            Table testTable = getTable(identity, schemaName, tableName).get();
+            if (testTable.getStorage().getLocation() != null) {
                 // For partitioned table, there should be nothing directly under this directory.
                 // But including this location in the set makes the directory content assert more
                 // extensive, which is desirable.
-                locations.add(table.getStorage().getLocation());
+                locations.add(testTable.getStorage().getLocation());
             }
 
             Optional<List<String>> partitionNames = getPartitionNames(identity, schemaName, tableName);
@@ -563,7 +566,7 @@ public abstract class AbstractTestHiveFileSystem
                 getPartitionsByNames(identity, schemaName, tableName, partitionNames.get()).values().stream()
                         .map(Optional::get)
                         .map(partition -> partition.getStorage().getLocation())
-                        .filter(location -> !location.startsWith(table.getStorage().getLocation()))
+                        .filter(location -> !location.startsWith(testTable.getStorage().getLocation()))
                         .forEach(locations::add);
             }
 

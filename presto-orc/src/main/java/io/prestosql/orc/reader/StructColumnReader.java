@@ -87,21 +87,21 @@ public class StructColumnReader<T>
         Map<String, OrcColumn> nestedColumns = column.getNestedColumns().stream()
                 .collect(toImmutableMap(stream -> stream.getColumnName().toLowerCase(Locale.ENGLISH), stream -> stream));
 
-        ImmutableList.Builder<String> fieldNames = ImmutableList.builder();
-        ImmutableMap.Builder<String, ColumnReader> structFields = ImmutableMap.builder();
+        ImmutableList.Builder<String> fieldNamesBuilder = ImmutableList.builder();
+        ImmutableMap.Builder<String, ColumnReader> columnReaderBuilder = ImmutableMap.builder();
         for (Field field : this.type.getFields()) {
             String fieldName = field.getName()
                     .orElseThrow(() -> new IllegalArgumentException("ROW type does not have field names declared: " + type))
                     .toLowerCase(Locale.ENGLISH);
-            fieldNames.add(fieldName);
+            fieldNamesBuilder.add(fieldName);
 
             OrcColumn fieldStream = nestedColumns.get(fieldName);
             if (fieldStream != null) {
-                structFields.put(fieldName, createColumnReader(field.getType(), fieldStream, systemMemoryContext, blockFactory));
+                columnReaderBuilder.put(fieldName, createColumnReader(field.getType(), fieldStream, systemMemoryContext, blockFactory));
             }
         }
-        this.fieldNames = fieldNames.build();
-        this.structFields = structFields.build();
+        this.fieldNames = fieldNamesBuilder.build();
+        this.structFields = columnReaderBuilder.build();
     }
 
     @Override
@@ -174,7 +174,7 @@ public class StructColumnReader<T>
     }
 
     @Override
-    public void startStripe(ZoneId fileTimeZone, ZoneId storageTimeZone, InputStreamSources dictionaryStreamSources, ColumnMetadata<ColumnEncoding> encoding)
+    public void startStripe(ZoneId fileTimeZone, InputStreamSources dictionaryStreamSources, ColumnMetadata<ColumnEncoding> encoding)
             throws IOException
     {
         presentStreamSource = missingStreamSource(BooleanInputStream.class);
@@ -187,7 +187,7 @@ public class StructColumnReader<T>
         rowGroupOpen = false;
 
         for (ColumnReader structField : structFields.values()) {
-            structField.startStripe(fileTimeZone, storageTimeZone, dictionaryStreamSources, encoding);
+            structField.startStripe(fileTimeZone, dictionaryStreamSources, encoding);
         }
     }
 

@@ -166,7 +166,9 @@ public class PushPartialAggregationThroughJoin
                 ImmutableList.of(),
                 aggregation.getStep(),
                 aggregation.getHashSymbol(),
-                aggregation.getGroupIdSymbol());
+                aggregation.getGroupIdSymbol(),
+                aggregation.getAggregationType(),
+                aggregation.getFinalizeSymbol());
     }
 
     private PlanNode pushPartialToJoin(
@@ -192,6 +194,10 @@ public class PushPartialAggregationThroughJoin
                 child.getDistributionType(),
                 child.isSpillable(),
                 child.getDynamicFilters());
-        return restrictOutputs(context.getIdAllocator(), joinNode, ImmutableSet.copyOf(aggregation.getOutputSymbols())).orElse(joinNode);
+        return restrictOutputs(context.getIdAllocator(),
+                                joinNode,
+                                ImmutableSet.copyOf(aggregation.getOutputSymbols()),
+                                true,
+                                context.getSymbolAllocator().getTypes()).orElse(joinNode);
     }
 }

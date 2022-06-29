@@ -31,7 +31,6 @@ import io.airlift.units.Duration;
 import io.prestosql.execution.LocationFactory;
 import io.prestosql.execution.QueryExecution;
 import io.prestosql.execution.QueryIdGenerator;
-import io.prestosql.execution.scheduler.NodeSchedulerConfig;
 import io.prestosql.memory.LowMemoryKiller.QueryMemoryInfo;
 import io.prestosql.metadata.InternalNode;
 import io.prestosql.metadata.InternalNodeManager;
@@ -57,14 +56,13 @@ import javax.annotation.PreDestroy;
 import javax.annotation.concurrent.GuardedBy;
 import javax.inject.Inject;
 
-import java.io.BufferedReader;
 import java.io.IOException;
-import java.io.InputStreamReader;
-import java.net.URI;
 import java.util.ArrayList;
 import java.util.HashMap;
 import java.util.HashSet;
+import java.util.LinkedHashMap;
 import java.util.List;
+import java.util.Locale;
 import java.util.Map;
 import java.util.Map.Entry;
 import java.util.Optional;
@@ -83,7 +81,6 @@ import static com.google.common.collect.ImmutableList.toImmutableList;
 import static com.google.common.collect.ImmutableSet.toImmutableSet;
 import static com.google.common.collect.MoreCollectors.toOptional;
 import static com.google.common.collect.Sets.difference;
-import static io.airlift.http.client.HttpUriBuilder.uriBuilderFrom;
 import static io.airlift.units.DataSize.succinctBytes;
 import static io.airlift.units.Duration.nanosSince;
 import static io.prestosql.ExceededMemoryLimitException.exceededGlobalTotalLimit;
@@ -130,17 +127,16 @@ public class ClusterMemoryManager
     private final AtomicLong clusterTotalMemoryReservation = new AtomicLong();
     private final AtomicLong clusterMemoryBytes = new AtomicLong();
     private final AtomicLong queriesKilledDueToOutOfMemory = new AtomicLong();
-    private final boolean isWorkScheduledOnCoordinator;
     // LocalStateProvider
     private final StateStoreProvider stateStoreProvider;
     private final HetuConfig hetuConfig;
     private final boolean isBinaryEncoding;
 
     @GuardedBy("this")
-    private final Map<String, RemoteNodeMemory> nodes = new HashMap<>();
+    private final Map<String, RemoteNodeMemory> nodes = new LinkedHashMap<>();
 
     @GuardedBy("this")
-    private final Map<String, RemoteNodeMemory> allNodes = new HashMap<>();
+    private final Map<String, RemoteNodeMemory> allNodes = new LinkedHashMap<>();
 
     @GuardedBy("this")
     private final Map<MemoryPoolId, List<Consumer<MemoryPoolInfo>>> changeListeners = new HashMap<>();
@@ -169,7 +165,6 @@ public class ClusterMemoryManager
             ServerConfig serverConfig,
             MemoryManagerConfig config,
             NodeMemoryConfig nodeMemoryConfig,
-            NodeSchedulerConfig schedulerConfig,
             StateStoreProvider stateStoreProvider,
             HetuConfig hetuConfig,
             InternalCommunicationConfig internalCommunicationConfig)
@@ -177,7 +172,6 @@ public class ClusterMemoryManager
         requireNonNull(config, "config is null");
         requireNonNull(nodeMemoryConfig, "nodeMemoryConfig is null");
         requireNonNull(serverConfig, "serverConfig is null");
-        requireNonNull(schedulerConfig, "schedulerConfig is null");
         this.nodeManager = requireNonNull(nodeManager, "nodeManager is null");
         this.locationFactory = requireNonNull(locationFactory, "locationFactory is null");
         this.httpClient = requireNonNull(httpClient, "httpClient is null");
@@ -188,7 +182,6 @@ public class ClusterMemoryManager
         this.coordinatorId = queryIdGenerator.getCoordinatorId();
         this.enabled = serverConfig.isCoordinator();
         this.killOnOutOfMemoryDelay = config.getKillOnOutOfMemoryDelay();
-        this.isWorkScheduledOnCoordinator = schedulerConfig.isIncludeCoordinator();
 
         verify(maxQueryMemory.toBytes() <= maxQueryTotalMemory.toBytes(),
                 "maxQueryMemory cannot be greater than maxQueryTotalMemory");
@@ -543,8 +536,8 @@ public class ClusterMemoryManager
         // Add new nodes
         for (InternalNode node : aliveNodes) {
             if (!nodes.containsKey(node.getNodeIdentifier()) && shouldIncludeNode(node)) {
-                nodes.put(node.getNodeIdentifier(), new RemoteNodeMemory(node, httpClient, memoryInfoCodec, assignmentsRequestCodec, locationFactory.createMemoryInfoLocation(node), isBinaryEncoding));
-                allNodes.put(node.getNodeIdentifier(), new RemoteNodeMemory(node, httpClient, memoryInfoCodec, assignmentsRequestCodec, locationFactory.createMemoryInfoLocation(node), isBinaryEncoding));
+                nodes.put(node.getInternalUri().toString(), new RemoteNodeMemory(node, httpClient, memoryInfoCodec, assignmentsRequestCodec, locationFactory.createMemoryInfoLocation(node), isBinaryEncoding));
+                allNodes.put(node.getInternalUri().toString(), new RemoteNodeMemory(node, httpClient, memoryInfoCodec, assignmentsRequestCodec, locationFactory.createMemoryInfoLocation(node), isBinaryEncoding));
             }
         }
 
@@ -563,7 +556,7 @@ public class ClusterMemoryManager
     {
         // If work isn't scheduled on the coordinator (the current node) there is no point
         // in polling or updating (when moving queries to the reserved pool) its memory pools
-        return isWorkScheduledOnCoordinator || !node.isCoordinator();
+        return node.isWorker();
     }
 
     private synchronized void updatePools(Map<MemoryPoolId, Integer> queryCounts)
@@ -602,7 +595,8 @@ public class ClusterMemoryManager
         Map<String, Optional<MemoryInfo>> memoryInfo = new HashMap<>();
         for (Entry<String, RemoteNodeMemory> entry : nodes.entrySet()) {
             // workerId is of the form "node_identifier [node_host] role"
-            String role = entry.getValue().getNode().isCoordinator() ? (isWorkScheduledOnCoordinator ? "Coordinator & Worker" : "Coordinator") :
+            InternalNode node = entry.getValue().getNode();
+            String role = node.isCoordinator() ? (node.isWorker() ? "Coordinator & Worker" : "Coordinator") :
                     "Worker";
             String workerId = entry.getKey() + " [" + entry.getValue().getNode().getHost() + "] " + role;
             memoryInfo.put(workerId, entry.getValue().getInfo());
@@ -610,32 +604,48 @@ public class ClusterMemoryManager
         return memoryInfo;
     }
 
+    public synchronized Long getUsedMemory()
+    {
+        Long usedMemory = 0L;
+        for (Entry<String, RemoteNodeMemory> entry : nodes.entrySet()) {
+            MemoryInfo memoryInfo = entry.getValue().getInfo().orElse(new MemoryInfo(0, 0, 0, new DataSize(0,
+                    DataSize.Unit.BYTE), new HashMap<>()));
+            Map<MemoryPoolId, MemoryPoolInfo> memoryPools = memoryInfo.getPools();
+            MemoryPoolId general = new MemoryPoolId("general");
+            MemoryPoolId reserved = new MemoryPoolId("reserved");
+            if (memoryPools.containsKey(general)) {
+                usedMemory += memoryPools.get(general).getReservedBytes();
+            }
+            if (memoryPools.containsKey(reserved)) {
+                usedMemory += memoryPools.get(reserved).getReservedBytes();
+            }
+        }
+        return usedMemory;
+    }
+
     public synchronized Map<String, JsonNode> getWorkerMemoryAndStateInfo()
     {
-        Map<String, JsonNode> memoryInfo = new HashMap<>();
+        Map<String, JsonNode> memoryInfo = new LinkedHashMap<>();
         for (Entry<String, RemoteNodeMemory> entry : allNodes.entrySet()) {
             // workerId is of the form "node_identifier [node_host] role"
-            String role = entry.getValue().getNode().isCoordinator() ? (isWorkScheduledOnCoordinator ? "Coordinator & Worker" : "Coordinator") :
-                    "Worker";
-            String workerId = entry.getKey() + " [" + entry.getValue().getNode().getHost() + "] " + role;
-            URI stateURI = uriBuilderFrom(entry.getValue().getNode().getInternalUri())
-                    .appendPath("/v1/info/state")
-                    .build();
-            String state = "\"" + NodeState.DISCONNECTION + "\"";
-            try (
-                    InputStreamReader inputStreamReader = new InputStreamReader(stateURI.toURL().openStream());
-                    BufferedReader reader = new BufferedReader(inputStreamReader)) {
-                state = reader.readLine();
+            InternalNode node = entry.getValue().getNode();
+            StringBuilder role = new StringBuilder(node.isCoordinator() ? (node.isWorker() ? "Coordinator & Worker" : "Coordinator") :
+                    "Worker");
+            role = new StringBuilder("\"" + role + "\"");
+            String workerId = entry.getValue().getNode().getInternalUri().toString();
+            String stateTemp = "\"" + NodeState.DISCONNECTION + "\"";
+            if (nodes.containsKey(entry.getKey())) {
+                stateTemp = "\"" + ACTIVE + "\"";
             }
-            catch (IOException e) {
-                log.info("Worker disconnect");
-            }
+            String state = stateTemp.substring(0, 2).toUpperCase(Locale.ENGLISH) + stateTemp.substring(2).toLowerCase(Locale.ENGLISH);
+            String id = "\"" + node.getNodeIdentifier() + "\"";
             JsonNode jsonNode = null;
             try {
-                MemoryInfo info = entry.getValue().getInfo().orElse(new MemoryInfo(0, 0, 0, new DataSize(0,
-                        DataSize.Unit.BYTE), new HashMap<>()));
+                MemoryInfo activeInfo = new MemoryInfo(0, 0, 0, new DataSize(0,
+                        DataSize.Unit.BYTE), new HashMap<>());
+                MemoryInfo info = entry.getValue().getInfo().orElse(activeInfo);
                 String memoryInfoJson = new ObjectMapper().writeValueAsString(info);
-                StringBuilder memoryAndStateInfo = new StringBuilder(memoryInfoJson).insert(memoryInfoJson.length() - 1, ",\"state\":" + state);
+                StringBuilder memoryAndStateInfo = new StringBuilder(memoryInfoJson).insert(memoryInfoJson.length() - 1, ",\"state\":" + state + ",\"id\":" + id + ",\"role\":" + role);
                 jsonNode = new ObjectMapper().readTree(memoryAndStateInfo.toString());
             }
             catch (JsonProcessingException e) {

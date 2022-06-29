@@ -47,24 +47,33 @@ import io.prestosql.query.CachedSqlQueryExecution;
 import io.prestosql.query.CachedSqlQueryExecutionPlan;
 import io.prestosql.security.AccessControl;
 import io.prestosql.server.BasicQueryInfo;
+import io.prestosql.snapshot.MarkerAnnouncer;
+import io.prestosql.snapshot.QuerySnapshotManager;
+import io.prestosql.snapshot.SnapshotUtils;
 import io.prestosql.spi.HetuConstant;
 import io.prestosql.spi.PrestoException;
+import io.prestosql.spi.PrestoWarning;
 import io.prestosql.spi.QueryId;
 import io.prestosql.spi.connector.CatalogName;
+import io.prestosql.spi.connector.CatalogSchemaName;
+import io.prestosql.spi.connector.QualifiedObjectName;
+import io.prestosql.spi.connector.StandardWarningCode;
+import io.prestosql.spi.function.BuiltInFunctionHandle;
+import io.prestosql.spi.function.FunctionHandle;
 import io.prestosql.spi.function.Signature;
 import io.prestosql.spi.metadata.TableHandle;
 import io.prestosql.spi.plan.*;
-import io.prestosql.spi.relation.InputReferenceExpression;
+import io.prestosql.spi.relation.CallExpression;
 import io.prestosql.spi.relation.RowExpression;
 import io.prestosql.spi.relation.VariableReferenceExpression;
 import io.prestosql.spi.service.PropertyService;
 import io.prestosql.spi.statestore.StateCollection;
 import io.prestosql.spi.statestore.StateMap;
 import io.prestosql.spi.statestore.StateStore;
+import io.prestosql.spi.type.BigintType;
 import io.prestosql.spi.type.Type;
 import io.prestosql.split.SplitManager;
 import io.prestosql.split.SplitSource;
-import io.prestosql.sql.TreePrinter;
 import io.prestosql.sql.analyzer.Analysis;
 import io.prestosql.sql.analyzer.Analyzer;
 import io.prestosql.sql.analyzer.FeaturesConfig;
@@ -79,9 +88,11 @@ import io.prestosql.sql.planner.Plan;
 import io.prestosql.sql.planner.PlanFragment;
 import io.prestosql.sql.planner.PlanFragmenter;
 import io.prestosql.sql.planner.PlanOptimizers;
+import io.prestosql.sql.planner.SimplePlanVisitor;
 import io.prestosql.sql.planner.StageExecutionPlan;
 import io.prestosql.sql.planner.SubPlan;
 import io.prestosql.sql.planner.TypeAnalyzer;
+//Bqo
 import io.prestosql.sql.planner.caching.CacheWorkloadProfiler;
 import io.prestosql.sql.planner.optimizations.*;
 import io.prestosql.sql.planner.*;
@@ -101,12 +112,13 @@ import static io.prestosql.spi.type.BigintType.BIGINT;
 import static io.prestosql.sql.planner.SystemPartitioningHandle.SINGLE_DISTRIBUTION;
 import static io.prestosql.sql.planner.planprinter.PlanPrinter.textDistributedPlan;
 
-
 import io.prestosql.sql.planner.plan.*;
 import io.prestosql.sql.planner.planprinter.PlanPrinter;
-import io.prestosql.sql.relational.Expressions;
-import io.prestosql.sql.tree.Except;
+import io.prestosql.sql.tree.CreateTableAsSelect;
 import io.prestosql.sql.tree.Explain;
+import io.prestosql.sql.tree.Insert;
+import io.prestosql.sql.tree.InsertCube;
+import io.prestosql.sql.tree.Statement;
 import io.prestosql.statestore.StateStoreProvider;
 import io.prestosql.utils.HetuConfig;
 import org.joda.time.DateTime;
@@ -115,12 +127,13 @@ import javax.annotation.concurrent.Immutable;
 import javax.annotation.concurrent.ThreadSafe;
 import javax.inject.Inject;
 
-
+import java.util.ArrayList;
 import java.util.HashMap;
 import java.util.HashSet;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
+import java.util.OptionalLong;
 import java.util.Set;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.ScheduledExecutorService;
@@ -139,11 +152,14 @@ import static io.prestosql.execution.buffer.OutputBuffers.BROADCAST_PARTITION_ID
 import static io.prestosql.execution.buffer.OutputBuffers.createInitialEmptyOutputBuffers;
 import static io.prestosql.execution.scheduler.SqlQueryScheduler.createSqlQueryScheduler;
 import static io.prestosql.spi.StandardErrorCode.NOT_SUPPORTED;
+import static io.prestosql.spi.StandardErrorCode.NO_NODES_AVAILABLE;
+import static io.prestosql.sql.planner.DistributedExecutionPlanner.Mode.NORMAL;
+import static io.prestosql.sql.planner.DistributedExecutionPlanner.Mode.RESUME;
+import static io.prestosql.sql.planner.DistributedExecutionPlanner.Mode.SNAPSHOT;
 import static io.prestosql.statestore.StateStoreConstants.CROSS_REGION_DYNAMIC_FILTERS;
 import static io.prestosql.statestore.StateStoreConstants.QUERY_COLUMN_NAME_TO_SYMBOL_MAPPING;
 import static java.util.Objects.requireNonNull;
 import static java.util.concurrent.TimeUnit.SECONDS;
-import static jdk.nashorn.internal.objects.NativeFunction.call;
 
 @ThreadSafe
 public class SqlQueryExecution
@@ -213,6 +229,8 @@ public class SqlQueryExecution
     private final DynamicFilterService dynamicFilterService;
     private final HeuristicIndexerManager heuristicIndexerManager;
     private final StateStoreProvider stateStoreProvider;
+    private final QuerySnapshotManager snapshotManager;
+    private final WarningCollector warningCollector;
 
     public SqlQueryExecution(
             PreparedQuery preparedQuery,
@@ -242,7 +260,8 @@ public class SqlQueryExecution
             WarningCollector warningCollector,
             DynamicFilterService dynamicFilterService,
             HeuristicIndexerManager heuristicIndexerManager,
-            StateStoreProvider stateStoreProvider)
+            StateStoreProvider stateStoreProvider,
+            SnapshotUtils snapshotUtils)
     {
         try (SetThreadName ignored = new SetThreadName("Query-%s", stateMachine.getQueryId())) {
             this.slug = requireNonNull(slug, "slug is null");
@@ -265,6 +284,9 @@ public class SqlQueryExecution
             this.costCalculator = requireNonNull(costCalculator, "costCalculator is null");
             this.dynamicFilterService = requireNonNull(dynamicFilterService, "dynamicFilterService is null");
             this.heuristicIndexerManager = requireNonNull(heuristicIndexerManager, "heuristicIndexerManager is null");
+            this.warningCollector = requireNonNull(warningCollector);
+
+            this.snapshotManager = snapshotUtils.getOrCreateQuerySnapshotManager(stateMachine.getQueryId(), stateMachine.getSession());
 
             checkArgument(scheduleSplitBatchSize > 0, "scheduleSplitBatchSize must be greater than 0");
             this.scheduleSplitBatchSize = scheduleSplitBatchSize;
@@ -296,7 +318,7 @@ public class SqlQueryExecution
             stateMachine.setUpdateType(analysis.getUpdateType());
 
             // when the query finishes cache the final query info, and clear the reference to the output stage
-            AtomicReference<SqlQueryScheduler> queryScheduler = this.queryScheduler;
+            AtomicReference<SqlQueryScheduler> localQueryScheduler = this.queryScheduler;
             stateMachine.addStateChangeListener(state -> {
                 //Set the AsyncRunning flag if query is capable of running async
                 if (analysis.isAsyncQuery() && state == QueryState.RUNNING) {
@@ -307,8 +329,11 @@ public class SqlQueryExecution
                     return;
                 }
 
-                // query is now done, so abort any work that is still running
-                SqlQueryScheduler scheduler = queryScheduler.get();
+                // Snapshot: query is now done, so clear its entries in the snapshot manager
+                if (SystemSessionProperties.isSnapshotEnabled(stateMachine.getSession())) {
+                    snapshotManager.doneQuery(state);
+                }
+                SqlQueryScheduler scheduler = localQueryScheduler.get();
                 if (scheduler != null) {
                     scheduler.abort();
                 }
@@ -334,6 +359,12 @@ public class SqlQueryExecution
     public void setMemoryPool(VersionedMemoryPoolId poolId)
     {
         stateMachine.setMemoryPool(poolId);
+    }
+
+    @Override
+    public QuerySnapshotManager getQuerySnapshotManager()
+    {
+        return snapshotManager;
     }
 
     @Override
@@ -522,18 +553,29 @@ public class SqlQueryExecution
                     log.warn("something unexpected happened.. cause: %s", e.getMessage());
                 }
 
-                //System.out.println("before distribution");
                 // plan distribution of query
                 planDistribution(plan);
-                //System.out.println("after distribution");
 
                 // transition to starting
                 if (!stateMachine.transitionToStarting()) {
                     // query already started or finished
                     return;
                 }
-
-                //System.out.println("DEPLOY");
+                stateMachine.addStateChangeListener(state -> {
+                    if (state == QueryState.RESUMING) {
+                        // Snapshot: old stages/tasks have finished. Ready to resume.
+                        try {
+                            resumeQuery(plan);
+                        }
+                        catch (Throwable e) {
+                            fail(e);
+                            throwIfInstanceOf(e, Error.class);
+                            log.warn(e, "Encountered error while rescheduling query");
+                        }
+                    }
+                });
+		
+		 //System.out.println("DEPLOY");
 
                 // if query is not finished, start the scheduler, otherwise cancel it
                 SqlQueryScheduler scheduler = queryScheduler.get();
@@ -545,8 +587,113 @@ public class SqlQueryExecution
             catch (Throwable e) {
                 fail(e);
                 throwIfInstanceOf(e, Error.class);
+                log.warn(e, "Encountered error while scheduling query");
             }
         }
+    }
+
+    private void resumeQuery(PlanRoot plan)
+    {
+        SqlQueryScheduler oldScheduler = queryScheduler.get();
+        try {
+            // Wait for previous scheduler to finish.
+            // This is important, otherwise the old schedule may close split sources after the new scheduler has started.
+            oldScheduler.doneScheduling().get();
+        }
+        catch (Exception e) {
+            throw new RuntimeException(e);
+        }
+
+        log.debug("Rescheduling query %s from a resumable task failure.", getQueryId());
+        PartitioningHandle partitioningHandle = plan.getRoot().getFragment().getPartitioningScheme().getPartitioning().getHandle();
+        OutputBuffers rootOutputBuffers = createInitialEmptyOutputBuffers(partitioningHandle)
+                .withBuffer(OUTPUT_BUFFER_ID, BROADCAST_PARTITION_ID)
+                .withNoMoreBufferIds();
+
+        // build the stage execution objects (this doesn't schedule execution)
+        SqlQueryScheduler scheduler;
+        try {
+            scheduler = createResumeScheduler(plan, rootOutputBuffers);
+        }
+        catch (PrestoException e) {
+            if (e.getErrorCode() == NO_NODES_AVAILABLE.toErrorCode()) {
+                // Not enough worker to resume all tasks. Retrying from any saved snapshot likely wont' work either.
+                // Clear ongoing and existing snapshots and restart.
+                snapshotManager.invalidateAllSnapshots();
+                scheduler = createResumeScheduler(plan, rootOutputBuffers);
+            }
+            else {
+                throw e;
+            }
+        }
+        queryScheduler.set(scheduler);
+        log.debug("Restarting query %s from a resumable task failure.", getQueryId());
+        scheduler.start();
+        stateMachine.transitionToStarting();
+    }
+
+    private SqlQueryScheduler createResumeScheduler(PlanRoot plan, OutputBuffers rootOutputBuffers)
+    {
+        String resumeMessage = "Query encountered failures. Recovering using the distributed-snapshot feature.";
+        warningCollector.add(new PrestoWarning(StandardWarningCode.SNAPSHOT_RECOVERY, resumeMessage));
+        // Check if there is a snapshot we can restore to, or restart from beginning,
+        // and update marker split sources so they know where to resume from.
+        // This MUST be done BEFORE creating the new scheduler, because it resets the snapshotManager internal states.
+        OptionalLong snapshotId = snapshotManager.getResumeSnapshotId();
+        MarkerAnnouncer announcer = splitManager.getMarkerAnnouncer(stateMachine.getSession());
+        announcer.resumeSnapshot(snapshotId.orElse(0));
+        // Clear any temporary content that's not part of the snapshot
+        resetOutputData(plan, snapshotId);
+        // Create a new scheduler, to schedule new stages and tasks
+        DistributedExecutionPlanner distributedExecutionPlanner = new DistributedExecutionPlanner(splitManager, metadata);
+        StageExecutionPlan executionPlan = distributedExecutionPlanner.plan(plan.getRoot(), stateMachine.getSession(),
+                RESUME, snapshotId.isPresent() ? snapshotId.getAsLong() : null, announcer.currentSnapshotId());
+
+        // build the stage execution objects (this doesn't schedule execution)
+        return createSqlQueryScheduler(
+                stateMachine,
+                locationFactory,
+                executionPlan,
+                nodePartitioningManager,
+                nodeScheduler,
+                remoteTaskFactory,
+                stateMachine.getSession(),
+                plan.isSummarizeTaskInfos(),
+                scheduleSplitBatchSize,
+                queryExecutor,
+                schedulerExecutor,
+                failureDetector,
+                rootOutputBuffers,
+                nodeTaskMap,
+                executionPolicy,
+                schedulerStats,
+                dynamicFilterService,
+                heuristicIndexerManager,
+                snapshotManager,
+                // Require same number of tasks to be scheduled, but do not require it if starting from beginning
+                snapshotId.isPresent() ? queryScheduler.get().getStageTaskCounts() : null,
+                true);
+    }
+
+    private void resetOutputData(PlanRoot plan, OptionalLong snapshotId)
+    {
+        plan.getRoot().getFragment().getRoot().accept(new SimplePlanVisitor<Void>()
+        {
+            @Override
+            public Void visitTableFinish(TableFinishNode node, Void context)
+            {
+                super.visitTableFinish(node, context);
+
+                // Find table-finish-node, which contains handle to the table
+                if (analysis.getStatement() instanceof CreateTableAsSelect) {
+                    metadata.resetCreateForRerun(getSession(), ((TableWriterNode.CreateTarget) node.getTarget()).getHandle(), OptionalLong.of(snapshotManager.computeSnapshotIndex(snapshotId)));
+                }
+                else {
+                    metadata.resetInsertForRerun(getSession(), ((TableWriterNode.InsertTarget) node.getTarget()).getHandle(), OptionalLong.of(snapshotManager.computeSnapshotIndex(snapshotId)));
+                }
+                return null;
+            }
+        }, null);
     }
 
     @Override
@@ -652,7 +799,7 @@ public class SqlQueryExecution
 
         Integer queryId = new Integer(allQueryCountLocal);
         PlanNode strippedPlan = plan.getRoot().getSources().get(0);
-        strippedPlan = new StoreForwardNode(idAllocator.getNextId(), strippedPlan, "/home/root1/openLookEng/EPFL-BQO/bqo-to-huawei/output/out-" + queryId.toString() + "-", strippedPlan.getOutputSymbols());
+        strippedPlan = new StoreForwardNode(idAllocator.getNextId(), strippedPlan, "/home/root1/openLookEng/1.6/output/out-" + queryId.toString() + "-", strippedPlan.getOutputSymbols());
         Symbol firstSymbol = strippedPlan.getOutputSymbols().get(0);
 
         Map<Symbol, AggregationNode.Aggregation> aggCalls = new HashMap<>();
@@ -661,8 +808,11 @@ public class SqlQueryExecution
         Optional<OrderingScheme> y = Optional.empty();
         Optional<Symbol> z = Optional.empty();
 
+        //Type type = BIGINT;
         AggregationNode.Aggregation aggr = new AggregationNode.Aggregation(
-                new Signature("count", AGGREGATE, BIGINT.getTypeSignature(), typesCollector.get(firstSymbol).getTypeSignature()),
+                //new CallExpression("count", BIGINT.getTypeSignature(), AGGREGATE , exprList),
+                new CallExpression("count", new BuiltInFunctionHandle(new Signature(QualifiedObjectName.valueOfDefaultFunction("count"), AGGREGATE, BIGINT.getTypeSignature(), typesCollector.get(firstSymbol).getTypeSignature())),
+                 BIGINT, exprList),
                 exprList,
                 false,
                 x,
@@ -675,7 +825,8 @@ public class SqlQueryExecution
 
         AggregationNode.GroupingSetDescriptor gsd = AggregationNode.singleGroupingSet(ImmutableList.of());
 
-        PlanNode metaNode = new AggregationNode(idAllocator.getNextId(), strippedPlan, aggCalls, gsd, new ArrayList<>(), AggregationNode.Step.SINGLE, Optional.empty(), Optional.empty());
+        PlanNode metaNode = new AggregationNode(idAllocator.getNextId(), strippedPlan, aggCalls, gsd, new ArrayList<>(), AggregationNode.Step.SINGLE, Optional.empty(),Optional.empty(), AggregationNode.AggregationType.HASH,Optional.empty());
+
 
         PlanNode gather = new ExchangeNode(
                 idAllocator.getNextId(),
@@ -684,7 +835,8 @@ public class SqlQueryExecution
                 new PartitioningScheme(Partitioning.create(SINGLE_DISTRIBUTION, ImmutableList.of()), metaNode.getOutputSymbols()),
                 ImmutableList.of(metaNode),
                 ImmutableList.of(metaNode.getOutputSymbols()),
-                Optional.empty());
+                Optional.empty(),
+                AggregationNode.AggregationType.HASH);
 
         PlanNode gather2 = new ExchangeNode(
                 idAllocator.getNextId(),
@@ -693,7 +845,7 @@ public class SqlQueryExecution
                 new PartitioningScheme(Partitioning.create(SINGLE_DISTRIBUTION, ImmutableList.of()), gather.getOutputSymbols()),
                 ImmutableList.of(gather),
                 ImmutableList.of(gather.getOutputSymbols()),
-                Optional.empty());
+                Optional.empty(), AggregationNode.AggregationType.HASH);
 
         Symbol firstSymbol2 = gather2.getOutputSymbols().get(0);
 
@@ -703,8 +855,23 @@ public class SqlQueryExecution
         Optional<OrderingScheme> y2 = Optional.empty();
         Optional<Symbol> z2 = Optional.empty();
 
+        /*AggregationNode.Aggregation aggr2 = new AggregationNode.Aggregation(
+                new CallExpression("count", new FunctionHandle() {
+                    @Override
+                    public CatalogSchemaName getFunctionNamespace() {
+                        return null;
+                    }
+                }, BIGINT, exprList2),
+                exprList2,
+                false,
+                x2,
+                y2,
+                z2);
+        aggCalls2.put(firstSymbol2, aggr2);*/
+
         AggregationNode.Aggregation aggr2 = new AggregationNode.Aggregation(
-                new Signature("sum", AGGREGATE, BIGINT.getTypeSignature(), BIGINT.getTypeSignature()),
+                new CallExpression("sum", new BuiltInFunctionHandle(new Signature(QualifiedObjectName.valueOfDefaultFunction("sum"), AGGREGATE, BIGINT.getTypeSignature(), typesCollector.get(firstSymbol2).getTypeSignature())),
+                        BIGINT, exprList2),
                 exprList2,
                 false,
                 x2,
@@ -712,7 +879,7 @@ public class SqlQueryExecution
                 z2);
         aggCalls2.put(firstSymbol2, aggr2);
 
-        PlanNode metaNode2 = new AggregationNode(idAllocator.getNextId(), gather2, aggCalls2, gsd, new ArrayList<>(), AggregationNode.Step.SINGLE, Optional.empty(), Optional.empty());
+        PlanNode metaNode2 = new AggregationNode(idAllocator.getNextId(), gather2, aggCalls2, gsd, new ArrayList<>(), AggregationNode.Step.SINGLE, Optional.empty(),Optional.empty(), AggregationNode.AggregationType.HASH,Optional.empty());
 
         return metaNode2;
     }
@@ -721,26 +888,10 @@ public class SqlQueryExecution
     {
         // time analysis phase
         stateMachine.beginAnalysis();
-
-        int allQueryCountLocal = allQueryCount.incrementAndGet();
-
-        // plan query
-        //this is to communicate with ReorderJoin that it should not consider a forced join order
-//        try {
-//            Files.write(Paths.get("./joinForcing.txt"), new String("0").getBytes());
-//        } catch (IOException ex) {
-//            ex.printStackTrace();
-//        }
-
-        double cpu_const = 1;
+        stateMachine.beginLogicalPlan();
+	    int allQueryCountLocal = allQueryCount.incrementAndGet();
+	    double cpu_const = 1;
         double memory_const = 1;
-
-        //forceJoinOrder = false; //TODO
-//        if(readFilterInfoValue()){
-//            aggregateFilterInfo.clear();
-//        }
-
-        //System.out.println("before 1st Create plan call");
 
         Plan plan = null;
 
@@ -757,7 +908,10 @@ public class SqlQueryExecution
         FeaturesConfig config = new FeaturesConfig();
 
         PlanCostEstimate old_cost = plan.getStatsAndCosts().getCosts().get(plan.getRoot().getId());
-        double full_old_cost = old_cost.getCpuCost() * config.getCpuCostWeight() + old_cost.getMaxMemory()*config.getMemoryCostWeight() + old_cost.getNetworkCost()*config.getNetworkCostWeight();
+
+        double full_old_cost = 10; //some default value but need to fix this. TODO
+        if(old_cost != null)
+            full_old_cost = old_cost.getCpuCost() * config.getCpuCostWeight() + old_cost.getMaxMemory()*config.getMemoryCostWeight() + old_cost.getNetworkCost()*config.getNetworkCostWeight();
 
         //System.out.println("Post-plan");
 
@@ -772,17 +926,6 @@ public class SqlQueryExecution
             throw e;
         }
 
-        //System.out.println("Lineage Mapping String");
-        //Map<PlanNodeId, CaptureLineage.Lineage> LineageMapping = captureLineage.getLineageMapping();
-        //for (PlanNodeId Key: LineageMapping.keySet()){
-            //System.out.println("Key = "+Key.toString()+" value = "+LineageMapping.get(Key).toString());
-            //if (LineageMapping.get(Key).getPlanNodeStatsEstimate() != null) System.out.println(LineageMapping.get(Key).getPlanNodeStatsEstimate());
-            //System.out.println();
-        //}
-
-        //System.out.println(captureLineageResult.toString());
-
-        //System.out.println("PLAN PRODUCED");
 
         //start of global Plan
         // plan query
@@ -825,16 +968,13 @@ public class SqlQueryExecution
 
             System.out.println("With cache: ");
 
+
             List<CaptureLineage.Lineage> subexpressionCache;
 
             if (SystemSessionProperties.isCachingPartioningEnabled(getSession()))
                 subexpressionCache = cacheWorkloadProfiler.getAvailableViews();
             else
                 subexpressionCache = new ArrayList<>();
-//            subexpressionCache = cacheWorkloadProfiler.getAvailableViews();
-
-            //change to line below to disable caching
-            //List<CaptureLineage.Lineage> subexpressionCache = new ArrayList<>();
 
             for (CaptureLineage.Lineage lineage : subexpressionCache) {
                 System.out.println(lineage.toString());
@@ -896,20 +1036,19 @@ public class SqlQueryExecution
                 //System.out.println("QUERY COUNT: " + queryCount + "New query cost: " + newQueryPlanCost + ", Cumulative local plans cost: " + localPlansCummulativeCost + ", Cumulative global plan cost: " + globalPlanCost);
             }
 
+//            List<CaptureLineage.Lineage> toMaterialize = globalPlaner.selectedViews.stream().filter(view -> cacheWorkloadProfiler.getPendingViews().contains(view)).collect(Collectors.toList());
 
-            List<CaptureLineage.Lineage> toMaterialize;
-            if (SystemSessionProperties.isCachingPartioningEnabled(getSession()))
+          List<CaptureLineage.Lineage> toMaterialize;
+          if (SystemSessionProperties.isCachingPartioningEnabled(getSession()))
                 toMaterialize = globalPlaner.selectedViews.stream().filter(view -> cacheWorkloadProfiler.getPendingViews().contains(view)).collect(Collectors.toList());
-		    else
-	            toMaterialize = new ArrayList<CaptureLineage.Lineage>();
+          else
+                toMaterialize = new ArrayList<CaptureLineage.Lineage>();
 
-//            toMaterialize = globalPlaner.selectedViews.stream().filter(view -> cacheWorkloadProfiler.getPendingViews().contains(view)).collect(Collectors.toList());
-
-            System.out.println("To Materialize ");
-            int i =1;
-            for (CaptureLineage.Lineage newView : toMaterialize) {
-                System.out.println("View "+i+"\n"+newView.toString());
-            }
+          System.out.println("To Materialize ");
+          int i =1;
+          for (CaptureLineage.Lineage newView : toMaterialize) {
+              System.out.println("View "+i+"\n"+newView.toString());
+          }
 
             for (CaptureLineage.Lineage newView : toMaterialize) {
                 Optional<CacheWorkloadProfiler.PlanWithCacheMetadata> planMaterialize = cacheWorkloadProfiler.getPlan(newView);
@@ -944,6 +1083,15 @@ public class SqlQueryExecution
                 }
             }
 
+            //this is to communicate with ReorderJoin that it needs to consider a forced join order
+//            try {
+//                Files.write(Paths.get("./joinForcing.txt"), new String("1").getBytes());
+//            } catch (IOException ex) {
+//                ex.printStackTrace();
+//            }
+             //TODO forceJoinOrder = true;
+
+
             if (!captureLineageResult.isFinalized()) {
                 Plan plan_new;
 
@@ -963,7 +1111,7 @@ public class SqlQueryExecution
                 System.out.println("Used Views are ");
                 int view_cnt = 1;
                 for (CaptureLineage.Lineage l : usedViews){
-                    System.out.println("view number "+view_cnt+" "+l.toString());
+                  System.out.println("view number "+view_cnt+" "+l.toString());
                 }
 
                 CaptureLineage captureLineageNew = new CaptureLineage(plan_new.getStatsAndCosts(), plan_new.getTypes());
@@ -1021,7 +1169,7 @@ public class SqlQueryExecution
                         symbolsAll.add(inputSymbols);
                     }
 
-                    ExchangeNode unionNode = new ExchangeNode(idAllocator.getNextId(), ExchangeNode.Type.GATHER, ExchangeNode.Scope.REMOTE, new PartitioningScheme(Partitioning.create(SINGLE_DISTRIBUTION, ImmutableList.of()), outputSymbols), logicalPlanList, symbolsAll, Optional.empty());
+                    ExchangeNode unionNode = new ExchangeNode(idAllocator.getNextId(), ExchangeNode.Type.GATHER, ExchangeNode.Scope.REMOTE, new PartitioningScheme(Partitioning.create(SINGLE_DISTRIBUTION, ImmutableList.of()), outputSymbols), logicalPlanList, symbolsAll, Optional.empty(), AggregationNode.AggregationType.HASH);
                     PlanNode rootNode = new OutputNode(idAllocator.getNextId(), unionNode, ImmutableList.of("agg"), ImmutableList.of(unionNode.getOutputSymbols().get(0)));
 
                     try {
@@ -1087,10 +1235,10 @@ public class SqlQueryExecution
 
         }
 
-
-        //plan = createPlan(analysis, stateMachine.getSession(), planOptimizers, idAllocator, metadata, new TypeAnalyzer(sqlParser, metadata), statsCalculator, costCalculator, stateMachine.getWarningCollector());
+        // plan query
+        //PlanNodeIdAllocator idAllocator = new PlanNodeIdAllocator();
+        //Plan plan = createPlan(analysis, stateMachine.getSession(), planOptimizers, idAllocator, metadata, new TypeAnalyzer(sqlParser, metadata), statsCalculator, costCalculator, stateMachine.getWarningCollector());
         queryPlan.set(plan);
-
 
         // extract inputs
         List<Input> inputs = new InputExtractor(metadata, stateMachine.getSession()).extractInputs(plan.getRoot());
@@ -1098,31 +1246,38 @@ public class SqlQueryExecution
 
         // extract output
         stateMachine.setOutput(analysis.getTarget());
+        stateMachine.endLogicalPlan();
 
-        //System.out.println("before fragmenter");
-
-        SubPlan fragmentedPlan;
-
-        try {
-            // fragment the plan
-            fragmentedPlan = planFragmenter.createSubPlans(stateMachine.getSession(), plan, false, stateMachine.getWarningCollector());
-        }
-        catch (Exception e) {
-            e.printStackTrace();
-            throw new NullPointerException("propagated");
-        }
-
-        //System.out.println("Fragmenter");
-
-        //System.out.println("after fragmenter");
+        // fragment the plan
+        SubPlan fragmentedPlan = planFragmenter.createSubPlans(stateMachine.getSession(), plan, false, stateMachine.getWarningCollector());
 
         // record analysis time
         stateMachine.endAnalysis();
 
-        //System.out.println("PLAN PRODUCED2");
-
         boolean explainAnalyze = analysis.getStatement() instanceof Explain && ((Explain) analysis.getStatement()).isAnalyze();
+
+        if (SystemSessionProperties.isSnapshotEnabled(getSession())) {
+            checkSnapshotSupport(getSession());
+        }
+
         return new PlanRoot(fragmentedPlan, !explainAnalyze, extractConnectors(analysis));
+    }
+
+    // This method was introduced separate logical planning from query analyzing stage
+    // and allow plans to be overwritten by CachedSqlQueryExecution
+    protected Plan createPlan(Analysis analysis,
+            Session session,
+            List<PlanOptimizer> planOptimizers,
+            PlanNodeIdAllocator idAllocator,
+            Metadata metadata,
+            TypeAnalyzer typeAnalyzer,
+            StatsCalculator statsCalculator,
+            CostCalculator costCalculator,
+            WarningCollector warningCollector, CaptureLineage captureLineage)
+    {
+        LogicalPlanner logicalPlanner = new LogicalPlanner(session, planOptimizers, idAllocator, metadata, typeAnalyzer, statsCalculator, costCalculator, warningCollector);
+        //return logicalPlanner.plan(analysis, true);
+        return logicalPlanner.plan(analysis, false);
     }
 
     // This method was introduced separate logical planning from query analyzing stage
@@ -1138,23 +1293,87 @@ public class SqlQueryExecution
                               WarningCollector warningCollector)
     {
         LogicalPlanner logicalPlanner = new LogicalPlanner(session, planOptimizers, idAllocator, metadata, typeAnalyzer, statsCalculator, costCalculator, warningCollector);
-        return logicalPlanner.plan(analysis);
+        //return logicalPlanner.plan(analysis, true);
+        return logicalPlanner.plan(analysis, false);
     }
 
-    // This method was introduced separate logical planning from query analyzing stage
-    // and allow plans to be overwritten by CachedSqlQueryExecution
-    protected Plan createPlan(Analysis analysis,
-                              Session session,
-                              List<PlanOptimizer> planOptimizers,
-                              PlanNodeIdAllocator idAllocator,
-                              Metadata metadata,
-                              TypeAnalyzer typeAnalyzer,
-                              StatsCalculator statsCalculator,
-                              CostCalculator costCalculator,
-                              WarningCollector warningCollector, CaptureLineage captureLineage)
+    // Check if snapshot feature conflict with other aspects of the query.
+    // If any requirement is not met, then proceed as if snapshot was not enabled,
+    // i.e. session.isSnapshotEnabled() and SystemSessionProperties.isSnapshotEnabled(session) return false
+    private void checkSnapshotSupport(Session session)
     {
-        LogicalPlanner logicalPlanner = new LogicalPlanner(session, planOptimizers, idAllocator, metadata, typeAnalyzer, statsCalculator, costCalculator, warningCollector);
-        return logicalPlanner.plan(analysis, captureLineage);
+        List<String> reasons = new ArrayList<>();
+        // Only support create-table-as-select and insert statements
+        Statement statement = analysis.getStatement();
+        if (statement instanceof CreateTableAsSelect) {
+            if (analysis.isCreateTableAsSelectNoOp()) {
+                // Table already exists. Ask catalog if target table supports snapshot
+                if (!metadata.isSnapshotSupportedAsOutput(session, analysis.getCreateTableAsSelectNoOpTarget())) {
+                    reasons.add("Only support inserting into tables in Hive with ORC format");
+                }
+            }
+            else {
+                // Ask catalog if new table supports snapshot
+                Map<String, Object> tableProperties = analysis.getCreateTableMetadata().getProperties();
+                if (!metadata.isSnapshotSupportedAsNewTable(session, analysis.getTarget().get().getCatalogName(), tableProperties)) {
+                    reasons.add("Only support creating tables in Hive with ORC format");
+                }
+            }
+        }
+        else if (statement instanceof Insert) {
+            // Ask catalog if target table supports snapshot
+            if (!metadata.isSnapshotSupportedAsOutput(session, analysis.getInsert().get().getTarget())) {
+                reasons.add("Only support inserting into tables in Hive with ORC format");
+            }
+        }
+        else if (statement instanceof InsertCube) {
+            reasons.add("INSERT INTO CUBE is not supported, only support CTAS (create table as select) and INSERT INTO (tables) statements");
+        }
+        else {
+            reasons.add("Only support CTAS (create table as select) and INSERT INTO (tables) statements");
+        }
+
+        // Doesn't work with the following features
+        if (SystemSessionProperties.isReuseTableScanEnabled(session)
+                || SystemSessionProperties.isCTEReuseEnabled(session)) {
+            reasons.add("No support along with reuse_table_scan or cte_reuse_enabled features");
+        }
+
+        // All input tables must support snapshotting
+        for (TableHandle tableHandle : analysis.getTables()) {
+            if (!metadata.isSnapshotSupportedAsInput(session, tableHandle)) {
+                reasons.add("Only support reading from Hive, TPCDS, and TPCH source tables");
+                break;
+            }
+        }
+
+        // Must have more than 1 worker
+        if (nodeScheduler.createNodeSelector(null, false, null).selectableNodeCount() == 1) {
+            reasons.add("Requires more than 1 worker nodes");
+        }
+
+        if (!snapshotManager.getSnapshotUtils().hasStoreClient()) {
+            String snapshotProfile = snapshotManager.getSnapshotUtils().getSnapshotProfile();
+            if (snapshotProfile == null) {
+                reasons.add("Property hetu.experimental.snapshot.profile is not specified");
+            }
+            else {
+                reasons.add("Specified value '" + snapshotProfile + "' for property hetu.experimental.snapshot.profile is not valid");
+            }
+        }
+
+        if (!reasons.isEmpty()) {
+            // Disable snapshot support in the session. If this value has been used before this point,
+            // then we may need to remedy those places to disable snapshot as well. Fortunately,
+            // most accesses occur before this point, except for classes like ExecutingStatementResource,
+            // where the "snapshot enabled" info is retrieved and set in ExchangeClient. This is harmless.
+            // The ExchangeClient may still have snapshotEnabled=true while it's disabled in the session.
+            // This does not alter ExchangeClient's behavior, because this instance (in coordinator)
+            // will never receive any marker.
+            session.disableSnapshot();
+            String reasonsMessage = "Snapshot feature is disabled: \n" + String.join(". \n", reasons);
+            warningCollector.add(new PrestoWarning(StandardWarningCode.SNAPSHOT_NOT_SUPPORTED, reasonsMessage));
+        }
     }
 
     private static Set<CatalogName> extractConnectors(Analysis analysis)
@@ -1178,13 +1397,21 @@ public class SqlQueryExecution
         // time distribution planning
         stateMachine.beginDistributedPlanning();
 
-        //System.out.println("before distribution");
         // plan the execution on the active nodes
         DistributedExecutionPlanner distributedPlanner = new DistributedExecutionPlanner(splitManager, metadata);
-        StageExecutionPlan outputStageExecutionPlan = distributedPlanner.plan(plan.getRoot(), stateMachine.getSession());
+        StageExecutionPlan outputStageExecutionPlan;
+        Session session = stateMachine.getSession();
+        if (SystemSessionProperties.isSnapshotEnabled(session)) {
+            // Snapshot: need to plan different when snapshot is enabled.
+            // See the "plan" method for difference between the different modes.
+            MarkerAnnouncer announcer = splitManager.getMarkerAnnouncer(session);
+            announcer.setSnapshotManager(snapshotManager);
+            outputStageExecutionPlan = distributedPlanner.plan(plan.getRoot(), session, SNAPSHOT, null, announcer.currentSnapshotId());
+        }
+        else {
+            outputStageExecutionPlan = distributedPlanner.plan(plan.getRoot(), session, NORMAL, null, 0);
+        }
         stateMachine.endDistributedPlanning();
-
-        //System.out.println("after distribution");
 
         // ensure split sources are closed
         stateMachine.addStateChangeListener(state -> {
@@ -1225,7 +1452,10 @@ public class SqlQueryExecution
                 executionPolicy,
                 schedulerStats,
                 dynamicFilterService,
-                heuristicIndexerManager);
+                heuristicIndexerManager,
+                snapshotManager,
+                null,
+                false);
 
         queryScheduler.set(scheduler);
 
@@ -1420,6 +1650,7 @@ public class SqlQueryExecution
         private final Optional<Cache<Integer, CachedSqlQueryExecutionPlan>> cache;
         private final HeuristicIndexerManager heuristicIndexerManager;
         private final StateStoreProvider stateStoreProvider;
+        private final SnapshotUtils snapshotUtils;
 
         @Inject
         SqlQueryExecutionFactory(QueryManagerConfig config,
@@ -1446,7 +1677,8 @@ public class SqlQueryExecution
                 CostCalculator costCalculator,
                 DynamicFilterService dynamicFilterService,
                 HeuristicIndexerManager heuristicIndexerManager,
-                StateStoreProvider stateStoreProvider)
+                StateStoreProvider stateStoreProvider,
+                SnapshotUtils snapshotUtils)
         {
             requireNonNull(config, "config is null");
             this.schedulerStats = requireNonNull(schedulerStats, "schedulerStats is null");
@@ -1473,6 +1705,7 @@ public class SqlQueryExecution
             this.dynamicFilterService = requireNonNull(dynamicFilterService, "dynamicFilterService is null");
             this.heuristicIndexerManager = requireNonNull(heuristicIndexerManager, "heuristicIndexerManager is null");
             this.stateStoreProvider = requireNonNull(stateStoreProvider, "stateStoreProvider is null");
+            this.snapshotUtils = requireNonNull(snapshotUtils, "snapshotUtils is null");
             this.loadConfigToService(hetuConfig);
             if (hetuConfig.isExecutionPlanCacheEnabled()) {
                 this.cache = Optional.of(CacheBuilder.newBuilder()
@@ -1500,8 +1733,8 @@ public class SqlQueryExecution
                 WarningCollector warningCollector)
         {
             String executionPolicyName = SystemSessionProperties.getExecutionPolicy(stateMachine.getSession());
-            ExecutionPolicy executionPolicy = executionPolicies.get(executionPolicyName);
-            checkArgument(executionPolicy != null, "No execution policy %s", executionPolicy);
+            ExecutionPolicy localExecutionPolicy = executionPolicies.get(executionPolicyName);
+            checkArgument(localExecutionPolicy != null, "No execution policy %s", localExecutionPolicy);
 
             return new CachedSqlQueryExecution(
                     preparedQuery,
@@ -1524,7 +1757,7 @@ public class SqlQueryExecution
                     failureDetector,
                     nodeTaskMap,
                     queryExplainer,
-                    executionPolicy,
+                    localExecutionPolicy,
                     schedulerStats,
                     statsCalculator,
                     costCalculator,
@@ -1532,7 +1765,8 @@ public class SqlQueryExecution
                     dynamicFilterService,
                     this.cache,
                     heuristicIndexerManager,
-                    stateStoreProvider);
+                    stateStoreProvider,
+                    snapshotUtils);
         }
     }
 }

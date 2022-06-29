@@ -71,6 +71,8 @@ public class FileBasedSystemAccessControl
 {
     public static final String NAME = "file";
     private static final Logger log = Logger.get(FileBasedSystemAccessControl.class);
+    private static final Pattern ANY = Pattern.compile(".*");
+    private static final Pattern SYSTEM = Pattern.compile("system");
     private final List<CatalogAccessControlRule> catalogRules;
     private final Optional<List<PrincipalUserMatchRule>> principalUserMatchRules;
     private final List<NodeInformationRule> nodeInfoRules;
@@ -265,7 +267,7 @@ public class FileBasedSystemAccessControl
     private boolean canAccessCatalog(Identity identity, Optional<String> catalogName)
     {
         for (CatalogAccessControlRule rule : catalogRules) {
-            Optional<Boolean> allowed = rule.match(identity.getUser(), catalogName);
+            Optional<Boolean> allowed = rule.match(identity.getUser(), identity.getGroups(), catalogName);
             if (allowed.isPresent()) {
                 return allowed.get();
             }
@@ -506,8 +508,9 @@ public class FileBasedSystemAccessControl
             // todo Change userRegex from ".*" to one particular user that Presto Admin will be restricted to run as
             catalogRulesBuilder.add(new CatalogAccessControlRule(
                     true,
-                    Optional.of(Pattern.compile(".*")),
-                    Optional.of(Pattern.compile("system"))));
+                    Optional.of(ANY),
+                    Optional.empty(),
+                    Optional.of(SYSTEM)));
 
             return new FileBasedSystemAccessControl(catalogRulesBuilder.build(), rules.getPrincipalUserMatchRules(), rules.getNodeInfoRules(), rules.getIndexRules(), rules.getImpersonationRules());
         }

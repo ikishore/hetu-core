@@ -1,5 +1,5 @@
 /*
- * Copyright (C) 2018-2020. Huawei Technologies Co., Ltd. All rights reserved.
+ * Copyright (C) 2018-2021. Huawei Technologies Co., Ltd. All rights reserved.
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
  * You may obtain a copy of the License at
@@ -20,6 +20,7 @@ import io.airlift.log.Logger;
 import io.airlift.units.DataSize;
 import io.prestosql.spi.Page;
 import io.prestosql.spi.plan.PlanNodeId;
+import io.prestosql.spi.snapshot.RestorableConfig;
 import io.prestosql.spi.type.Type;
 
 import java.io.Closeable;
@@ -28,11 +29,14 @@ import java.util.HashSet;
 import java.util.List;
 import java.util.Set;
 import java.util.concurrent.atomic.AtomicInteger;
+import java.util.function.Function;
 
 import static com.google.common.base.Preconditions.checkArgument;
 import static com.google.common.base.Preconditions.checkState;
 import static java.util.Objects.requireNonNull;
 
+// TODO-cp-I2TJ3G: will add snapshot support later
+@RestorableConfig(unsupported = true)
 public class CommonTableExpressionOperator
         implements Operator, Closeable
 {
@@ -42,31 +46,34 @@ public class CommonTableExpressionOperator
     private final OperatorContext operatorContext;
     private final PlanNodeId consumer;
     private final CommonTableExecutionContext cteContext;
+    private final Function<Page, Page> pagePreprocessor;
     private final int operatorInstaceId;
     private boolean finish;
-    private boolean isProducer;
+    private boolean isFeeder;
 
     public CommonTableExpressionOperator(
             PlanNodeId self,
             PlanNodeId consumer,
             OperatorContext operatorContext,
             CommonTableExecutionContext cteContext,
-            int operatorInstaceId)
+            int operatorInstaceId,
+            Function<Page, Page> pagePreprocessor)
     {
         this.self = requireNonNull(self, "PlanNode Id is null");
         this.consumer = requireNonNull(consumer, "consumer cannot be null");
         this.operatorContext = requireNonNull(operatorContext, "operatorContext is null");
         this.cteContext = requireNonNull(cteContext, "CTE context is null");
         this.operatorInstaceId = operatorInstaceId;
+        this.pagePreprocessor = pagePreprocessor;
 
         synchronized (cteContext) {
-            if (cteContext.isProducer(consumer)) {
-                this.isProducer = true;
-                cteContext.setProducerState(consumer, operatorInstaceId, true);
+            if (cteContext.isFeeder(consumer)) {
+                this.isFeeder = true;
+                cteContext.setFeederState(consumer, operatorInstaceId, true);
             }
         }
 
-        LOG.debug("CTE(" + cteContext.getName() + ")[" + consumer + "-" + operatorInstaceId + "] Operator Initialized (Producer: " + this.isProducer + ")");
+        LOG.debug("CTE(" + cteContext.getName() + ")[" + consumer + "-" + operatorInstaceId + "] Operator Initialized (Feeder: " + this.isFeeder + ")");
     }
 
     public static class CommonTableExpressionOperatorFactory
@@ -78,9 +85,10 @@ public class CommonTableExpressionOperator
         private final DataSize minOutputPageSize;
         private final int minOutputPageRowCount;
         private boolean closed;
-        private Set<PlanNodeId> parents = new HashSet<>();
-        private CommonTableExecutionContext cteCtx;
+        private final Set<PlanNodeId> parents = new HashSet<>();
+        private final CommonTableExecutionContext cteCtx;
         private final AtomicInteger operatorCounter = new AtomicInteger(0);
+        private final Function<Page, Page> pagePreprocessor;
 
         public CommonTableExpressionOperatorFactory(
                 int operatorId,
@@ -88,7 +96,8 @@ public class CommonTableExpressionOperator
                 CommonTableExecutionContext cteCtx,
                 List<Type> types,
                 DataSize minOutputPageSize,
-                int minOutputPageRowCount)
+                int minOutputPageRowCount,
+                Function<Page, Page> pagePreprocessor)
         {
             this.operatorId = operatorId;
             this.planNodeId = requireNonNull(planNodeId, "planNodeId is null");
@@ -96,6 +105,7 @@ public class CommonTableExpressionOperator
             this.minOutputPageSize = requireNonNull(minOutputPageSize, "minOutputPageSize is null");
             this.minOutputPageRowCount = minOutputPageRowCount;
             this.cteCtx = cteCtx;
+            this.pagePreprocessor = pagePreprocessor;
         }
 
         @Override
@@ -103,13 +113,14 @@ public class CommonTableExpressionOperator
         {
             checkState(!closed, "Factory is already closed");
             checkArgument(parents.size() > 0, "No parent assigned for CTE");
-            OperatorContext operatorContext = driverContext.addOperatorContext(operatorId, planNodeId, CommonTableExpressionOperator.class.getSimpleName());
+            OperatorContext addOperatorContext = driverContext.addOperatorContext(operatorId, planNodeId, CommonTableExpressionOperator.class.getSimpleName());
             return new CommonTableExpressionOperator(
                     planNodeId,
                     parents.stream().findAny().get(),
-                    operatorContext,
+                    addOperatorContext,
                     cteCtx,
-                    operatorCounter.incrementAndGet());
+                    operatorCounter.incrementAndGet(),
+                    pagePreprocessor);
         }
 
         @Override
@@ -121,7 +132,7 @@ public class CommonTableExpressionOperator
         @Override
         public OperatorFactory duplicate()
         {
-            return new CommonTableExpressionOperatorFactory(operatorId, planNodeId, cteCtx, types, minOutputPageSize, minOutputPageRowCount);
+            return new CommonTableExpressionOperatorFactory(operatorId, planNodeId, cteCtx, types, minOutputPageSize, minOutputPageRowCount, pagePreprocessor);
         }
 
         public void addConsumer(PlanNodeId id)
@@ -153,7 +164,7 @@ public class CommonTableExpressionOperator
     @Override
     public boolean needsInput()
     {
-        return isProducer && !finish;
+        return isFeeder && !finish;
     }
 
     /**
@@ -166,8 +177,9 @@ public class CommonTableExpressionOperator
     public void addInput(Page page)
     {
         /* Got a new page... Place it in the Queue! */
-        cteContext.addPage(page);
-        LOG.debug("CTE(" + cteContext.getName() + ")" + "[" + consumer + "-" + operatorInstaceId + "] Page added with " + page.getPositionCount() + " rows");
+        Page addPage = pagePreprocessor.apply(page);
+        cteContext.addPage(addPage);
+        LOG.debug("CTE(" + cteContext.getName() + ")" + "[" + consumer + "-" + operatorInstaceId + "] Page added with " + addPage.getPositionCount() + " rows");
     }
 
     /**
@@ -192,6 +204,13 @@ public class CommonTableExpressionOperator
             }
         }
 
+        return null;
+    }
+
+    @Override
+    public Page pollMarker()
+    {
+        //TODO-cp-I2TJ3G: Operator currently not supported for Snapshot
         return null;
     }
 
@@ -232,8 +251,8 @@ public class CommonTableExpressionOperator
     @Override
     public void finish()
     {
-        if (isProducer) {
-            cteContext.setProducerState(consumer, operatorInstaceId, false);
+        if (isFeeder) {
+            cteContext.setFeederState(consumer, operatorInstaceId, false);
         }
         LOG.debug("CTE(" + cteContext.getName() + ")[" + consumer + "-" + operatorInstaceId + "] Operator Finished (deferred)");
     }

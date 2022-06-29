@@ -1,5 +1,5 @@
 /*
- * Copyright (C) 2018-2020. Huawei Technologies Co., Ltd. All rights reserved.
+ * Copyright (C) 2018-2021. Huawei Technologies Co., Ltd. All rights reserved.
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
  * You may obtain a copy of the License at
@@ -28,6 +28,7 @@ import io.prestosql.spi.security.RoleGrant;
 import io.prestosql.spi.statistics.ComputedStatistics;
 import io.prestosql.spi.statistics.TableStatistics;
 import io.prestosql.spi.statistics.TableStatisticsMetadata;
+import io.prestosql.spi.type.Type;
 
 import javax.annotation.Nullable;
 
@@ -329,18 +330,18 @@ public class CachedConnectorMetadata
 
     @Override
     public TableStatistics getTableStatistics(ConnectorSession session, ConnectorTableHandle tableHandle,
-            Constraint constraint)
+            Constraint constraint, boolean includeColumnStatistics)
     {
         Optional<MetadataCache> cacheOpt = getOrCreateCache(session);
 
         if (!cacheOpt.isPresent()) {
-            return logAndDelegate("getTableStatistics", () -> delegate.getTableStatistics(session, tableHandle, constraint));
+            return logAndDelegate("getTableStatistics", () -> delegate.getTableStatistics(session, tableHandle, constraint, includeColumnStatistics));
         }
 
         try {
             return cacheOpt.get().getTableStatistics().get(tableHandle.getSchemaPrefixedTableName(), () -> {
                 TableStatistics tableStatistics =
-                        logAndDelegate("getTableStatistics", () -> delegate.getTableStatistics(session, tableHandle, constraint));
+                        logAndDelegate("getTableStatistics", () -> delegate.getTableStatistics(session, tableHandle, constraint, includeColumnStatistics));
 
                 if (tableStatistics == null) {
                     throw new Exception();
@@ -350,7 +351,7 @@ public class CachedConnectorMetadata
             });
         }
         catch (Exception e) {
-            return logAndDelegate("getTableStatistics", () -> delegate.getTableStatistics(session, tableHandle, constraint));
+            return logAndDelegate("getTableStatistics", () -> delegate.getTableStatistics(session, tableHandle, constraint, includeColumnStatistics));
         }
     }
 
@@ -516,9 +517,15 @@ public class CachedConnectorMetadata
     }
 
     @Override
-    public ColumnHandle getUpdateRowIdColumnHandle(ConnectorSession session, ConnectorTableHandle tableHandle)
+    public ColumnHandle getDeleteRowIdColumnHandle(ConnectorSession session, ConnectorTableHandle tableHandle)
     {
-        return delegate.getUpdateRowIdColumnHandle(session, tableHandle);
+        return delegate.getDeleteRowIdColumnHandle(session, tableHandle);
+    }
+
+    @Override
+    public ColumnHandle getUpdateRowIdColumnHandle(ConnectorSession session, ConnectorTableHandle tableHandle, List<ColumnHandle> updatedColumns)
+    {
+        return delegate.getUpdateRowIdColumnHandle(session, tableHandle, updatedColumns);
     }
 
     @Override
@@ -531,6 +538,18 @@ public class CachedConnectorMetadata
     public void finishDelete(ConnectorSession session, ConnectorTableHandle tableHandle, Collection<Slice> fragments)
     {
         delegate.finishDelete(session, tableHandle, fragments);
+    }
+
+    @Override
+    public ConnectorTableHandle beginUpdate(ConnectorSession session, ConnectorTableHandle tableHandle, List<Type> updatedColumnTypes)
+    {
+        return delegate.beginUpdate(session, tableHandle, updatedColumnTypes);
+    }
+
+    @Override
+    public void finishUpdate(ConnectorSession session, ConnectorTableHandle tableHandle, Collection<Slice> fragments)
+    {
+        delegate.finishUpdate(session, tableHandle, fragments);
     }
 
     @Override
@@ -654,6 +673,12 @@ public class CachedConnectorMetadata
     }
 
     @Override
+    public OptionalLong executeUpdate(ConnectorSession session, ConnectorTableHandle handle)
+    {
+        return delegate.executeUpdate(session, handle);
+    }
+
+    @Override
     public Optional<ConnectorResolvedIndex> resolveIndex(ConnectorSession session, ConnectorTableHandle tableHandle,
             Set<ColumnHandle> indexableColumns,
             Set<ColumnHandle> outputColumns,
@@ -714,14 +739,14 @@ public class CachedConnectorMetadata
 
     @Override
     public void grantTablePrivileges(ConnectorSession session, SchemaTableName tableName, Set<Privilege> privileges,
-                                     PrestoPrincipal grantee, boolean grantOption)
+            PrestoPrincipal grantee, boolean grantOption)
     {
         delegate.grantTablePrivileges(session, tableName, privileges, grantee, grantOption);
     }
 
     @Override
     public void revokeTablePrivileges(ConnectorSession session, SchemaTableName tableName, Set<Privilege> privileges,
-                                      PrestoPrincipal grantee, boolean grantOption)
+            PrestoPrincipal grantee, boolean grantOption)
     {
         delegate.revokeTablePrivileges(session, tableName, privileges, grantee, grantOption);
     }
@@ -810,6 +835,18 @@ public class CachedConnectorMetadata
     public boolean isExecutionPlanCacheSupported(ConnectorSession session, ConnectorTableHandle handle)
     {
         return this.delegate.isExecutionPlanCacheSupported(session, handle);
+    }
+
+    @Override
+    public long getTableModificationTime(ConnectorSession session, ConnectorTableHandle tableHandle)
+    {
+        return this.delegate.getTableModificationTime(session, tableHandle);
+    }
+
+    @Override
+    public boolean isPreAggregationSupported(ConnectorSession session)
+    {
+        return this.delegate.isPreAggregationSupported(session);
     }
 
     class MetadataCache

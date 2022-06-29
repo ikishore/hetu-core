@@ -56,7 +56,10 @@ import static io.prestosql.execution.TaskTestUtils.createTestingPlanner;
 import static io.prestosql.execution.TaskTestUtils.updateTask;
 import static io.prestosql.execution.buffer.OutputBuffers.BufferType.PARTITIONED;
 import static io.prestosql.execution.buffer.OutputBuffers.createInitialEmptyOutputBuffers;
+import static io.prestosql.metadata.MetadataManager.createTestMetadataManager;
+import static io.prestosql.testing.TestingPagesSerdeFactory.TESTING_SERDE_FACTORY;
 import static io.prestosql.testing.TestingSession.testSessionBuilder;
+import static io.prestosql.testing.TestingSnapshotUtils.NOOP_SNAPSHOT_UTILS;
 import static java.util.concurrent.Executors.newScheduledThreadPool;
 import static java.util.concurrent.TimeUnit.SECONDS;
 import static org.testng.Assert.assertEquals;
@@ -92,7 +95,8 @@ public class TestSqlTask
                 taskExecutor,
                 planner,
                 createTestSplitMonitor(),
-                new TaskManagerConfig());
+                new TaskManagerConfig(),
+                createTestMetadataManager());
     }
 
     @AfterClass(alwaysRun = true)
@@ -115,8 +119,7 @@ public class TestSqlTask
                         .withNoMoreBufferIds(),
                 OptionalInt.empty(),
                 Optional.empty(),
-                null,
-                null);
+                null, null);
         assertEquals(taskInfo.getTaskStatus().getState(), TaskState.RUNNING);
 
         taskInfo = sqlTask.getTaskInfo();
@@ -129,8 +132,7 @@ public class TestSqlTask
                         .withNoMoreBufferIds(),
                 OptionalInt.empty(),
                 Optional.empty(),
-                null,
-                null);
+                null, null);
         assertEquals(taskInfo.getTaskStatus().getState(), TaskState.FINISHED);
 
         taskInfo = sqlTask.getTaskInfo();
@@ -149,8 +151,7 @@ public class TestSqlTask
                 createInitialEmptyOutputBuffers(PARTITIONED).withBuffer(OUT, 0).withNoMoreBufferIds(),
                 OptionalInt.empty(),
                 Optional.empty(),
-                null,
-                null);
+                null, null);
         assertEquals(taskInfo.getTaskStatus().getState(), TaskState.RUNNING);
 
         taskInfo = sqlTask.getTaskInfo();
@@ -190,8 +191,7 @@ public class TestSqlTask
                         .withNoMoreBufferIds(),
                 OptionalInt.empty(),
                 Optional.empty(),
-                null,
-                null);
+                null, null);
         assertEquals(taskInfo.getTaskStatus().getState(), TaskState.RUNNING);
         assertNull(taskInfo.getStats().getEndTime());
 
@@ -199,7 +199,7 @@ public class TestSqlTask
         assertEquals(taskInfo.getTaskStatus().getState(), TaskState.RUNNING);
         assertNull(taskInfo.getStats().getEndTime());
 
-        taskInfo = sqlTask.cancel();
+        taskInfo = sqlTask.cancel(TaskState.CANCELED);
         assertEquals(taskInfo.getTaskStatus().getState(), TaskState.CANCELED);
         assertNotNull(taskInfo.getStats().getEndTime());
 
@@ -220,8 +220,7 @@ public class TestSqlTask
                 createInitialEmptyOutputBuffers(PARTITIONED).withBuffer(OUT, 0).withNoMoreBufferIds(),
                 OptionalInt.empty(),
                 Optional.empty(),
-                null,
-                null);
+                null, null);
         assertEquals(taskInfo.getTaskStatus().getState(), TaskState.RUNNING);
 
         taskInfo = sqlTask.getTaskInfo();
@@ -274,7 +273,7 @@ public class TestSqlTask
         ListenableFuture<BufferResult> bufferResult = sqlTask.getTaskResults(OUT, 0, new DataSize(1, MEGABYTE));
         assertFalse(bufferResult.isDone());
 
-        sqlTask.cancel();
+        sqlTask.cancel(TaskState.CANCELED);
         assertEquals(sqlTask.getTaskInfo().getTaskStatus().getState(), TaskState.CANCELED);
 
         // buffer future will complete.. the event is async so wait a bit for event to propagate
@@ -314,6 +313,7 @@ public class TestSqlTask
     private SqlTask createInitialTask()
     {
         TaskId taskId = new TaskId("query", 0, nextTaskId.incrementAndGet());
+        String instanceId = "0-query_test_instance_id";
         URI location = URI.create("fake://task/" + taskId);
 
         QueryContext queryContext = new QueryContext(new QueryId("query"),
@@ -324,13 +324,15 @@ public class TestSqlTask
                 taskNotificationExecutor,
                 driverYieldExecutor,
                 new DataSize(1, MEGABYTE),
-                new SpillSpaceTracker(new DataSize(1, GIGABYTE)));
+                new SpillSpaceTracker(new DataSize(1, GIGABYTE)),
+                NOOP_SNAPSHOT_UTILS);
 
         queryContext.addTaskContext(new TaskStateMachine(taskId, taskNotificationExecutor), testSessionBuilder().build(), false, false, OptionalInt.empty(),
-                Optional.empty());
+                Optional.empty(), TESTING_SERDE_FACTORY);
 
         return createSqlTask(
                 taskId,
+                instanceId,
                 location,
                 "fake",
                 queryContext,
@@ -339,6 +341,6 @@ public class TestSqlTask
                 Functions.identity(),
                 new DataSize(32, MEGABYTE),
                 new CounterStat(),
-                new EmptyMockMetadata());
+                createTestMetadataManager());
     }
 }

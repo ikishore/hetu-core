@@ -96,6 +96,7 @@ class StatementClientV1
     private final Duration requestTimeoutNanos;
     private final String user;
     private final String clientCapabilities;
+    private final boolean timeInMilliseconds;
 
     private final AtomicReference<State> state = new AtomicReference<>(State.RUNNING);
 
@@ -111,6 +112,7 @@ class StatementClientV1
         this.requestTimeoutNanos = session.getClientRequestTimeout();
         this.user = session.getUser();
         this.clientCapabilities = Joiner.on(",").join(ClientCapabilities.values());
+        this.timeInMilliseconds = session.isTimeInMilliseconds();
 
         Request request = buildQueryRequest(session, query);
 
@@ -247,21 +249,25 @@ class StatementClientV1
         return timeZone;
     }
 
+    @Override
     public boolean isRunning()
     {
         return state.get() == State.RUNNING;
     }
 
+    @Override
     public boolean isClientAborted()
     {
         return state.get() == State.CLIENT_ABORTED;
     }
 
+    @Override
     public boolean isClientError()
     {
         return state.get() == State.CLIENT_ERROR;
     }
 
+    @Override
     public boolean isFinished()
     {
         return state.get() == State.FINISHED;
@@ -466,9 +472,9 @@ class StatementClientV1
             deallocatedPreparedStatements.add(urlDecode(entry));
         }
 
-        String startedTransactionId = headers.get(PrestoHeaders.PRESTO_STARTED_TRANSACTION_ID);
-        if (startedTransactionId != null) {
-            this.startedTransactionId.set(startedTransactionId);
+        String transactionId = headers.get(PrestoHeaders.PRESTO_STARTED_TRANSACTION_ID);
+        if (transactionId != null) {
+            this.startedTransactionId.set(transactionId);
         }
         if (headers.get(PrestoHeaders.PRESTO_CLEAR_TRANSACTION_ID) != null) {
             clearTransactionId.set(true);
@@ -486,6 +492,12 @@ class StatementClientV1
         if (uri != null) {
             httpDelete(uri);
         }
+    }
+
+    @Override
+    public boolean isTimeInMilliseconds()
+    {
+        return timeInMilliseconds;
     }
 
     @Override

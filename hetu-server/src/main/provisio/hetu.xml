@@ -4,9 +4,11 @@
 
     <!-- Notices -->
     <fileSet to="/">
-        <directory path="${basedir}">
+        <directory path="${basedir}/../">
+            <include>README.md</include>
+        </directory>
+        <directory path="${basedir}/../license/">
             <include>NOTICE</include>
-            <include>README.txt</include>
             <include>THIRD_PARTY_OPEN_SOURCE_SOFTWARE_NOTICE</include>
         </directory>
     </fileSet>
@@ -132,6 +134,12 @@
         </artifact>
     </artifactSet>
 
+    <artifactSet to="plugin/greenplum">
+        <artifact id="${project.groupId}:hetu-greenplum:zip:${project.version}">
+            <unpack />
+        </artifact>
+    </artifactSet>
+
     <artifactSet to="plugin/sqlserver">
         <artifact id="${project.groupId}:presto-sqlserver:zip:${project.version}">
             <unpack />
@@ -194,6 +202,12 @@
         </artifact>
     </artifactSet>
 
+    <artifactSet to="plugin/hetu-function-namespace-managers">
+        <artifact id="${project.groupId}:hetu-function-namespace-managers:zip:${project.version}">
+            <unpack />
+        </artifact>
+    </artifactSet>
+    
     <artifactSet to="plugin/tpch">
         <artifact id="${project.groupId}:presto-tpch:zip:${project.version}">
             <unpack />
@@ -242,11 +256,11 @@
         </artifact>
     </artifactSet>
 
-    <artifactSet to="plugin/carbondata">
-        <artifact id="${project.groupId}:hetu-carbondata:zip:${project.version}">
-            <unpack />
-        </artifact>
-    </artifactSet>
+<!--    <artifactSet to="plugin/carbondata">-->
+<!--        <artifact id="${project.groupId}:hetu-carbondata:zip:${project.version}">-->
+<!--            <unpack />-->
+<!--        </artifact>-->
+<!--    </artifactSet>-->
 
     <artifactSet to="plugin/hetu-opengauss">
         <artifact id="${project.groupId}:hetu-opengauss:zip:${project.version}">
@@ -298,6 +312,17 @@
 
     <artifactSet to="plugin/hetu-heuristic-index">
         <artifact id="${project.groupId}:hetu-heuristic-index:zip:${project.version}">
+            <unpack />
+        </artifact>
+    </artifactSet>
+
+    <artifactSet to="plugin/clickhouse">
+        <artifact id="${project.groupId}:hetu-clickhouse:zip:${project.version}">
+            <unpack />
+        </artifact>
+    </artifactSet>
+    <artifactSet to="plugin/kylin">
+        <artifact id="${project.groupId}:hetu-kylin:zip:${project.version}">
             <unpack />
         </artifact>
     </artifactSet>

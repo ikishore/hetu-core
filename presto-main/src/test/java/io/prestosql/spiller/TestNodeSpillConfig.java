@@ -34,7 +34,10 @@ public class TestNodeSpillConfig
                 .setMaxSpillPerNode(new DataSize(100, GIGABYTE))
                 .setQueryMaxSpillPerNode(new DataSize(100, GIGABYTE))
                 .setSpillCompressionEnabled(false)
-                .setSpillEncryptionEnabled(false));
+                .setSpillEncryptionEnabled(false)
+                .setSpillDirectSerdeEnabled(false)
+                .setSpillPrefetchReadPages(1)
+                .setSpillUseKryoSerialization(false));
     }
 
     @Test
@@ -45,13 +48,19 @@ public class TestNodeSpillConfig
                 .put("experimental.query-max-spill-per-node", "15 MB")
                 .put("experimental.spill-compression-enabled", "true")
                 .put("experimental.spill-encryption-enabled", "true")
+                .put("experimental.spill-direct-serde-enabled", "true")
+                .put("experimental.spill-prefetch-read-pages", "25")
+                .put("experimental.spill-use-kryo-serialization", "true")
                 .build();
 
         NodeSpillConfig expected = new NodeSpillConfig()
                 .setMaxSpillPerNode(new DataSize(10, MEGABYTE))
                 .setQueryMaxSpillPerNode(new DataSize(15, MEGABYTE))
                 .setSpillCompressionEnabled(true)
-                .setSpillEncryptionEnabled(true);
+                .setSpillEncryptionEnabled(true)
+                .setSpillDirectSerdeEnabled(true)
+                .setSpillPrefetchReadPages(25)
+                .setSpillUseKryoSerialization(true);
 
         assertFullMapping(properties, expected);
     }

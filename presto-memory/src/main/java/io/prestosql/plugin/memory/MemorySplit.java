@@ -23,7 +23,6 @@ import java.util.List;
 import java.util.Objects;
 import java.util.OptionalLong;
 
-import static com.google.common.base.MoreObjects.toStringHelper;
 import static com.google.common.base.Preconditions.checkState;
 import static java.util.Objects.requireNonNull;
 
@@ -31,8 +30,7 @@ public class MemorySplit
         implements ConnectorSplit
 {
     private final long table;
-    private final int totalPartsPerWorker; // how many concurrent reads there will be from one worker
-    private final int partNumber; // part of the pages on one worker that this splits is responsible
+    private final int logicalPartNum; // the order of the logicalPart (equivalent to a split) in each node, starting from 0 (1 split, 0 is the available index)
     private final HostAddress address;
     private final long expectedRows;
     private final OptionalLong limit;
@@ -40,19 +38,15 @@ public class MemorySplit
     @JsonCreator
     public MemorySplit(
             @JsonProperty("table") long table,
-            @JsonProperty("partNumber") int partNumber,
-            @JsonProperty("totalPartsPerWorker") int totalPartsPerWorker,
+            @JsonProperty("logicalPartNum") int logicalPartNum,
             @JsonProperty("address") HostAddress address,
             @JsonProperty("expectedRows") long expectedRows,
             @JsonProperty("limit") OptionalLong limit)
     {
-        checkState(partNumber >= 0, "partNumber must be >= 0");
-        checkState(totalPartsPerWorker >= 1, "totalPartsPerWorker must be >= 1");
-        checkState(totalPartsPerWorker > partNumber, "totalPartsPerWorker must be > partNumber");
+        checkState(logicalPartNum > 0, "logicalPartNum be > 0");
 
         this.table = requireNonNull(table, "table is null");
-        this.partNumber = partNumber;
-        this.totalPartsPerWorker = totalPartsPerWorker;
+        this.logicalPartNum = logicalPartNum;
         this.address = requireNonNull(address, "address is null");
         this.expectedRows = expectedRows;
         this.limit = limit;
@@ -65,15 +59,9 @@ public class MemorySplit
     }
 
     @JsonProperty
-    public int getTotalPartsPerWorker()
+    public int getLogicalPartNum()
     {
-        return totalPartsPerWorker;
-    }
-
-    @JsonProperty
-    public int getPartNumber()
-    {
-        return partNumber;
+        return logicalPartNum;
     }
 
     @Override
@@ -123,23 +111,21 @@ public class MemorySplit
         }
         MemorySplit other = (MemorySplit) obj;
         return Objects.equals(this.table, other.table) &&
-                Objects.equals(this.totalPartsPerWorker, other.totalPartsPerWorker) &&
-                Objects.equals(this.partNumber, other.partNumber);
+                Objects.equals(this.logicalPartNum, other.logicalPartNum);
     }
 
     @Override
     public int hashCode()
     {
-        return Objects.hash(table, totalPartsPerWorker, partNumber);
+        return Objects.hash(table, logicalPartNum);
     }
 
     @Override
     public String toString()
     {
-        return toStringHelper(this)
-                .add("tableHandle", table)
-                .add("partNumber", partNumber)
-                .add("totalPartsPerWorker", totalPartsPerWorker)
-                .toString();
+        return "MemorySplit{" +
+                "table=" + table +
+                ", logicalPart number=" + logicalPartNum +
+                '}';
     }
 }

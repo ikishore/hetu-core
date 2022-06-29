@@ -126,7 +126,6 @@ import static org.apache.hadoop.hive.metastore.conf.MetastoreConf.getTimeVar;
 public class SemiTransactionalHiveMetastore
 {
     private static final Logger log = Logger.get(SemiTransactionalHiveMetastore.class);
-    private static final int PARTITION_COMMIT_BATCH_SIZE = 8;
 
     private final HiveMetastore delegate;
     private final HiveMetastoreClosure closure;
@@ -141,6 +140,7 @@ public class SemiTransactionalHiveMetastore
     private final ListeningExecutorService hiveMetastoreClientService;
 
     private boolean throwOnCleanupFailure;
+    private int partitionCommitBatchSize;
 
     @GuardedBy("this")
     private final Map<SchemaTableName, Action<TableAndMore>> tableActions = new HashMap<>();
@@ -181,7 +181,8 @@ public class SemiTransactionalHiveMetastore
             boolean skipTargetCleanupOnRollback,
             Optional<Duration> hiveTransactionHeartbeatInterval,
             ScheduledExecutorService heartbeatService,
-            ScheduledExecutorService hiveMetastoreClientService)
+            ScheduledExecutorService hiveMetastoreClientService,
+            int hmsWriteBatchSize)
     {
         this.hdfsEnvironment = requireNonNull(hdfsEnvironment, "hdfsEnvironment is null");
         this.delegate = requireNonNull(delegate, "delegate is null");
@@ -194,6 +195,7 @@ public class SemiTransactionalHiveMetastore
         this.configuredTransactionHeartbeatInterval = requireNonNull(hiveTransactionHeartbeatInterval, "hiveTransactionHeartbeatInterval is null");
         this.hiveMetastoreClientService = MoreExecutors.listeningDecorator(hiveMetastoreClientService);
         this.closure = new HiveMetastoreClosure(delegate);
+        this.partitionCommitBatchSize = hmsWriteBatchSize;
     }
 
     public synchronized List<String> getAllDatabases()
@@ -260,10 +262,9 @@ public class SemiTransactionalHiveMetastore
         }
     }
 
-    public synchronized Map<String, PartitionStatistics> getPartitionStatistics(HiveIdentity identity, String databaseName, String tableName, Set<String> partitionNames)
+    public synchronized Map<String, PartitionStatistics> getPartitionStatistics(HiveIdentity identity, String databaseName, String tableName, Set<String> partitionNames, Optional<Table> table)
     {
         checkReadable();
-        Optional<Table> table = getTable(identity, databaseName, tableName);
         if (!table.isPresent()) {
             return ImmutableMap.of();
         }
@@ -606,21 +607,21 @@ public class SemiTransactionalHiveMetastore
 
     public synchronized Optional<List<String>> getPartitionNames(HiveIdentity identity, String databaseName, String tableName)
     {
-        return doGetPartitionNames(identity, databaseName, tableName, Optional.empty());
+        Optional<Table> table = getTable(identity, databaseName, tableName);
+        return doGetPartitionNames(identity, databaseName, tableName, Optional.empty(), table);
     }
 
-    public synchronized Optional<List<String>> getPartitionNamesByParts(HiveIdentity identity, String databaseName, String tableName, List<String> parts)
+    public synchronized Optional<List<String>> getPartitionNamesByParts(HiveIdentity identity, String databaseName, String tableName, List<String> parts, Table table)
     {
-        return doGetPartitionNames(identity, databaseName, tableName, Optional.of(parts));
+        return doGetPartitionNames(identity, databaseName, tableName, Optional.of(parts), Optional.of(table));
     }
 
     @GuardedBy("this")
-    private Optional<List<String>> doGetPartitionNames(HiveIdentity identity, String databaseName, String tableName, Optional<List<String>> parts)
+    private Optional<List<String>> doGetPartitionNames(HiveIdentity identity, String databaseName, String tableName, Optional<List<String>> parts, Optional<Table> table)
     {
         checkHoldsLock();
 
         checkReadable();
-        Optional<Table> table = getTable(identity, databaseName, tableName);
         if (!table.isPresent()) {
             return Optional.empty();
         }
@@ -781,6 +782,8 @@ public class SemiTransactionalHiveMetastore
         HdfsContext hdfsContext = new HdfsContext(session, databaseName, tableName);
         HiveIdentity identity = new HiveIdentity(session);
         boolean canUpdateStats = canUpdateStats(session, acidWriteType);
+        this.partitionCommitBatchSize = HiveSessionProperties.getMetastoreWriteBatchSize(session);
+
         if (oldPartitionAction == null) {
             partitionActionsOfTable.put(
                     partition.getValues(),
@@ -1080,6 +1083,7 @@ public class SemiTransactionalHiveMetastore
                 case EMPTY:
                     //release locks if any.
                     abortTransaction();
+                    // $FALL-THROUGH$
                 case EXCLUSIVE_OPERATION_BUFFERED:
                     break;
                 case SHARED_OPERATION_BUFFERED:
@@ -1388,6 +1392,11 @@ public class SemiTransactionalHiveMetastore
         }
     }
 
+    public void refreshMetastoreCache()
+    {
+        delegate.refreshMetastoreCache();
+    }
+
     private class Committer
     {
         private final AtomicBoolean fileRenameCancelled = new AtomicBoolean(false);
@@ -1663,7 +1672,7 @@ public class SemiTransactionalHiveMetastore
             PartitionAdder partitionAdder = partitionAdders.computeIfAbsent(
                     partition.getSchemaTableName(),
                     ignored -> new PartitionAdder(partitionAndMore.getIdentity(), partition.getDatabaseName(), partition.getTableName(), delegate,
-                            PARTITION_COMMIT_BATCH_SIZE, updateStatisticsOperations));
+                            partitionCommitBatchSize, updateStatisticsOperations));
 
             if (pathExists(hdfsContext, hdfsEnvironment, currentPath)) {
                 if (!targetPath.equals(currentPath)) {
@@ -1769,6 +1778,7 @@ public class SemiTransactionalHiveMetastore
                 }
                 catch (Throwable t) {
                     // ignore
+                    log.debug("Get future(%s) error", future.toString());
                 }
             }
         }
@@ -1829,14 +1839,14 @@ public class SemiTransactionalHiveMetastore
 
         private void updatePartitionsStatistics(HiveIdentity identity, HiveMetastore metastore, SchemaTableName schemaTableName, List<UpdateStatisticsOperation> partitionUpdateStatisticsOperations)
         {
-            List<String> partitionNames = new ArrayList<>();
-            List<Function<PartitionStatistics, PartitionStatistics>> updateFunctionList = new ArrayList<>();
+            List<String> localPartitionNames = new ArrayList<>();
+            Map<String, Function<PartitionStatistics, PartitionStatistics>> partNamesUpdateFunctionMap = new HashMap<>();
             for (UpdateStatisticsOperation operation : partitionUpdateStatisticsOperations) {
-                partitionNames.add(operation.partitionName.get());
-                updateFunctionList.add(operation::updateStatistics);
+                partNamesUpdateFunctionMap.put(operation.partitionName.get(), operation::updateStatistics);
+                localPartitionNames.add(operation.partitionName.get());
             }
-            if (partitionNames.size() == updateFunctionList.size() && partitionUpdateStatisticsOperations.size() > 0) {
-                metastore.updatePartitionsStatistics(identity, schemaTableName.getSchemaName(), schemaTableName.getTableName(), partitionNames, updateFunctionList);
+            if (localPartitionNames.size() == partNamesUpdateFunctionMap.size() && partitionUpdateStatisticsOperations.size() > 0) {
+                metastore.updatePartitionsStatistics(identity, schemaTableName.getSchemaName(), schemaTableName.getTableName(), partNamesUpdateFunctionMap);
             }
         }
 
@@ -2087,8 +2097,9 @@ public class SemiTransactionalHiveMetastore
         }
     }
 
-    private static boolean isSameOrParent(Path parent, Path child)
+    private static boolean isSameOrParent(Path parent, Path inputCchild)
     {
+        Path child = inputCchild;
         int parentDepth = parent.depth();
         int childDepth = child.depth();
         if (parentDepth > childDepth) {
@@ -2124,10 +2135,11 @@ public class SemiTransactionalHiveMetastore
             HdfsContext context,
             Path currentPath,
             Path targetPath,
-            List<String> fileNames,
+            List<String> inputFileNames,
             List<DirectoryCleanUpTask> cleanUpTasksForAbort,
             boolean useDirectExecutor)
     {
+        List<String> fileNames = inputFileNames;
         FileSystem fileSystem;
         try {
             fileSystem = hdfsEnvironment.getFileSystem(context, currentPath);
@@ -2141,7 +2153,7 @@ public class SemiTransactionalHiveMetastore
 
         //In case of concurrent vacuums on same partitioned table,
         // different partitions must be renamed in same sequence to avoid conflicts. So rename synchronously
-        Executor renameExecutor = (useDirectExecutor) ? MoreExecutors.directExecutor() : executor;
+        Executor localRenameExecutor = (useDirectExecutor) ? MoreExecutors.directExecutor() : executor;
         for (String fileName : fileNames) {
             Path source = new Path(currentPath, fileName);
             Path target = new Path(targetPath, fileName);
@@ -2164,7 +2176,7 @@ public class SemiTransactionalHiveMetastore
                 catch (IOException e) {
                     throw new PrestoException(HiveErrorCode.HIVE_FILESYSTEM_ERROR, format("Error moving data files from %s to final location %s", source, target), e);
                 }
-            }, renameExecutor));
+            }, localRenameExecutor));
         }
     }
 
@@ -2310,6 +2322,12 @@ public class SemiTransactionalHiveMetastore
         // don't delete hidden presto directories
         if (directory.getName().startsWith(".presto")) {
             return new RecursiveDeleteResult(false, ImmutableList.of());
+        }
+
+        if (directory.getName().startsWith(".staging")) {
+            if (deleteIfExists(fileSystem, directory, true)) {
+                return new RecursiveDeleteResult(true, ImmutableList.of());
+            }
         }
 
         FileStatus[] allFiles;
@@ -2738,14 +2756,14 @@ public class SemiTransactionalHiveMetastore
             // This method augments the location field of the partition to the staging location.
             // This way, if the partition is accessed in an ongoing transaction, staged data
             // can be found and accessed.
-            Partition partition = this.partition;
-            String currentLocation = this.currentLocation.toString();
-            if (!currentLocation.equals(partition.getStorage().getLocation())) {
-                partition = Partition.builder(partition)
-                        .withStorage(storage -> storage.setLocation(currentLocation))
+            Partition localPartition = this.partition;
+            String localCurrentLocation = this.currentLocation.toString();
+            if (!localCurrentLocation.equals(localPartition.getStorage().getLocation())) {
+                localPartition = Partition.builder(localPartition)
+                        .withStorage(storage -> storage.setLocation(localCurrentLocation))
                         .build();
             }
-            return partition;
+            return localPartition;
         }
 
         public boolean isUpdateStats()
@@ -3018,6 +3036,7 @@ public class SemiTransactionalHiveMetastore
                     // Deleting the table when aborting commit has the risk of deleting table not added in this transaction.
                     // Not deleting the table may leave garbage behind. The former is much more dangerous than the latter.
                     // Therefore, the table is not considered added.
+                    log.debug("Create table error(dataBaseName=%s tableName=%s)", newTable.getDatabaseName(), newTable.getTableName());
                 }
 
                 if (!done) {
@@ -3314,6 +3333,8 @@ public class SemiTransactionalHiveMetastore
                 catch (PartitionNotFoundException e) {
                     // Maybe some one deleted the partition we added.
                     // Anyways, we are good because the partition is not there anymore.
+                    log.debug("Drop partition error(schemaName=%s tableName=%s), may be partition is not there anymore",
+                            schemaName, tableName);
                 }
                 catch (Throwable t) {
                     partitionsFailedToRollback.add(createdPartitionValue);

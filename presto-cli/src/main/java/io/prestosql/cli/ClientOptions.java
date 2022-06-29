@@ -116,6 +116,9 @@ public class ClientOptions
     @Option(name = "--debug", title = "debug", description = "Enable debug information")
     public boolean debug;
 
+    @Option(name = "--timeInMilliseconds", title = "timeInMilliseconds", description = "Enable elapsed time with milliseconds")
+    public boolean timeInMilliseconds;
+
     @Option(name = "--progress", title = "progress", description = "Show query progress in batch mode")
     public boolean progress;
 
@@ -148,6 +151,9 @@ public class ClientOptions
 
     @Option(name = "--ignore-errors", title = "ignore errors", description = "Continue processing in batch mode when an error occurs (default is to exit immediately)")
     public boolean ignoreErrors;
+
+    @Option(name = "--max-batch-process-size", title = "Maximum Batch Process Size (Rows)", description = "Maximum Batch Process Size as the number of Rows which can be processed")
+    public String maxBatchProcessSize = "50000000";
 
     public enum OutputFormat
     {
@@ -193,17 +199,19 @@ public class ClientOptions
                 emptyMap(),
                 toExtraCredentials(extraCredentials),
                 null,
-                clientRequestTimeout);
+                clientRequestTimeout,
+                timeInMilliseconds);
     }
 
     public static URI parseServer(String server)
     {
-        server = server.toLowerCase(ENGLISH);
-        if (server.startsWith("http://") || server.startsWith("https://")) {
-            return URI.create(server);
+        String newServer = server;
+        newServer = newServer.toLowerCase(ENGLISH);
+        if (newServer.startsWith("http://") || newServer.startsWith("https://")) {
+            return URI.create(newServer);
         }
 
-        HostAndPort host = HostAndPort.fromString(server);
+        HostAndPort host = HostAndPort.fromString(newServer);
         try {
             return new URI("http", null, host.getHost(), host.getPortOrDefault(80), null, null, null);
         }
@@ -247,6 +255,11 @@ public class ClientOptions
             builder.put(credential.getName(), credential.getValue());
         }
         return builder.build();
+    }
+
+    public String getMaxBatchProcessSize()
+    {
+        return maxBatchProcessSize;
     }
 
     public static final class ClientResourceEstimate

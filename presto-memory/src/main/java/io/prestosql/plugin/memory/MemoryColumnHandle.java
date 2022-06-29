@@ -15,23 +15,43 @@ package io.prestosql.plugin.memory;
 
 import com.fasterxml.jackson.annotation.JsonCreator;
 import com.fasterxml.jackson.annotation.JsonProperty;
+import io.airlift.json.JsonCodec;
 import io.prestosql.spi.connector.ColumnHandle;
+import io.prestosql.spi.connector.ColumnMetadata;
 import io.prestosql.spi.type.Type;
+import io.prestosql.spi.type.TypeManager;
+import io.prestosql.spi.type.TypeSignature;
 
+import java.io.IOException;
+import java.io.ObjectInputStream;
+import java.io.ObjectOutputStream;
+import java.io.Serializable;
 import java.util.Objects;
 
+import static java.util.Objects.requireNonNull;
+
 public final class MemoryColumnHandle
-        implements ColumnHandle
+        implements ColumnHandle, Serializable
 {
-    private final int columnIndex;
-    private final Type type;
+    private static final long serialVersionUID = 7527394454813793397L;
+    private static final JsonCodec<TypeSignature> TYPE_SIGNATURE_JSON_CODEC = JsonCodec.jsonCodec(TypeSignature.class);
+    private String columnName;
+    private int columnIndex;
+    private TypeSignature typeSignature;
+    private transient Type typeCache;
+    private boolean isPartitionKey;
 
     @JsonCreator
-    public MemoryColumnHandle(@JsonProperty("columnIndex") int columnIndex,
-                              @JsonProperty("type") Type type)
+    public MemoryColumnHandle(
+            @JsonProperty("columnName") String columnName,
+            @JsonProperty("columnIndex") int columnIndex,
+            @JsonProperty("typeSignature") TypeSignature typeSignature,
+            @JsonProperty("isPartitionKey") boolean isPartitionKey)
     {
-        this.columnIndex = columnIndex;
-        this.type = type;
+        this.columnName = requireNonNull(columnName, "columnName is null");
+        this.columnIndex = requireNonNull(columnIndex, "columnIndex is null");
+        this.typeSignature = requireNonNull(typeSignature, "typeSignature is null");
+        this.isPartitionKey = requireNonNull(isPartitionKey, "isPartitionKey is null");
     }
 
     @JsonProperty
@@ -41,15 +61,60 @@ public final class MemoryColumnHandle
     }
 
     @JsonProperty
-    public Type getType()
+    @Override
+    public String getColumnName()
     {
-        return type;
+        return columnName;
+    }
+
+    @JsonProperty
+    public TypeSignature getTypeSignature()
+    {
+        return typeSignature;
+    }
+
+    @Override
+    @JsonProperty("isPartitionKey")
+    public boolean isPartitionKey()
+    {
+        return isPartitionKey;
+    }
+
+    public Type getType(TypeManager typeManager)
+    {
+        if (typeCache == null) {
+            typeCache = typeManager.getType(getTypeSignature());
+        }
+        return typeCache;
+    }
+
+    public ColumnMetadata getMetadata(TypeManager typeManager)
+    {
+        return new ColumnMetadata(columnName, getType(typeManager));
+    }
+
+    private void readObject(ObjectInputStream in)
+            throws ClassNotFoundException, IOException
+    {
+        this.columnName = in.readUTF();
+        this.columnIndex = in.readInt();
+        this.typeSignature = TYPE_SIGNATURE_JSON_CODEC.fromJson(in.readUTF());
+        this.isPartitionKey = in.readBoolean();
+    }
+
+    private void writeObject(ObjectOutputStream out)
+            throws IOException
+    {
+        out.writeUTF(columnName);
+        out.writeInt(columnIndex);
+        out.writeUTF(TYPE_SIGNATURE_JSON_CODEC.toJson(typeSignature));
+        out.writeBoolean(isPartitionKey);
     }
 
     @Override
     public int hashCode()
     {
-        return Objects.hash(columnIndex);
+        return Objects.hash(columnName, columnIndex, typeSignature, typeCache, isPartitionKey);
     }
 
     @Override
@@ -61,8 +126,8 @@ public final class MemoryColumnHandle
         if (obj == null || getClass() != obj.getClass()) {
             return false;
         }
-        MemoryColumnHandle other = (MemoryColumnHandle) obj;
-        return Objects.equals(this.columnIndex, other.columnIndex);
+        MemoryColumnHandle that = (MemoryColumnHandle) obj;
+        return columnIndex == that.columnIndex && isPartitionKey == that.isPartitionKey && columnName.equals(that.columnName) && typeSignature.equals(that.typeSignature) && typeCache.equals(that.typeCache);
     }
 
     @Override

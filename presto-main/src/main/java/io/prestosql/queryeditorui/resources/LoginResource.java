@@ -49,12 +49,13 @@ public class LoginResource
             @FormParam("redirectPath") String redirectPath,
             @Context SecurityContext securityContext)
     {
-        username = emptyToNull(username);
-        password = emptyToNull(password);
-        redirectPath = emptyToNull(redirectPath);
-        Optional<NewCookie> newCookie = uiAuthenticator.checkLoginCredentials(username, password, securityContext.isSecure());
+        String localPassword = password;
+        String inputUsername = emptyToNull(username);
+        localPassword = emptyToNull(localPassword);
+        String inputRedirectPath = emptyToNull(redirectPath);
+        Optional<NewCookie> newCookie = uiAuthenticator.checkLoginCredentials(inputUsername, localPassword, securityContext.isSecure());
         if (newCookie.isPresent()) {
-            return UiAuthenticator.redirectFromSuccessfulLoginResponse(redirectPath)
+            return UiAuthenticator.redirectFromSuccessfulLoginResponse(inputRedirectPath)
                     .cookie(newCookie.get()).build();
         }
         // authentication failed, redirect back to the login page

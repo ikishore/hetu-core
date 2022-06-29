@@ -16,9 +16,11 @@ package io.prestosql.plugin.memory;
 import com.google.common.annotations.VisibleForTesting;
 import com.google.common.collect.ImmutableList;
 import io.airlift.slice.Slice;
+import io.prestosql.plugin.memory.data.MemoryTableManager;
 import io.prestosql.spi.HostAddress;
 import io.prestosql.spi.NodeManager;
 import io.prestosql.spi.Page;
+import io.prestosql.spi.PrestoException;
 import io.prestosql.spi.connector.ConnectorInsertTableHandle;
 import io.prestosql.spi.connector.ConnectorOutputTableHandle;
 import io.prestosql.spi.connector.ConnectorPageSink;
@@ -28,75 +30,146 @@ import io.prestosql.spi.connector.ConnectorTransactionHandle;
 
 import javax.inject.Inject;
 
+import java.io.FileNotFoundException;
 import java.util.Collection;
+import java.util.Collections;
+import java.util.List;
+import java.util.Map;
 import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.atomic.AtomicInteger;
+import java.util.stream.Collectors;
 
 import static com.google.common.base.Preconditions.checkState;
+import static io.prestosql.plugin.memory.MemoryErrorCode.MISSING_DATA;
+import static io.prestosql.spi.StandardErrorCode.GENERIC_USER_ERROR;
 import static java.util.Objects.requireNonNull;
 import static java.util.concurrent.CompletableFuture.completedFuture;
 
 public class MemoryPageSinkProvider
         implements ConnectorPageSinkProvider
 {
-    private final MemoryPagesStore pagesStore;
+    private final MemoryTableManager pagesStore;
     private final HostAddress currentHostAddress;
+    private final ConcurrentHashMap<Long, AtomicInteger> tableSinkCount;
 
     @Inject
-    public MemoryPageSinkProvider(MemoryPagesStore pagesStore, NodeManager nodeManager)
+    public MemoryPageSinkProvider(MemoryTableManager pagesStore, NodeManager nodeManager)
     {
         this(pagesStore, requireNonNull(nodeManager, "nodeManager is null").getCurrentNode().getHostAndPort());
     }
 
     @VisibleForTesting
-    public MemoryPageSinkProvider(MemoryPagesStore pagesStore, HostAddress currentHostAddress)
+    public MemoryPageSinkProvider(MemoryTableManager pagesStore, HostAddress currentHostAddress)
     {
         this.pagesStore = requireNonNull(pagesStore, "pagesStore is null");
         this.currentHostAddress = requireNonNull(currentHostAddress, "currentHostAddress is null");
+        this.tableSinkCount = new ConcurrentHashMap<>();
     }
 
+    /**
+     * This method is used for CTAS (CREATE TABLE AS)
+     */
     @Override
     public ConnectorPageSink createPageSink(ConnectorTransactionHandle transactionHandle, ConnectorSession session, ConnectorOutputTableHandle outputTableHandle)
     {
-        MemoryOutputTableHandle memoryOutputTableHandle = (MemoryOutputTableHandle) outputTableHandle;
+        // MemoryWriteTableHandle is used for both CTAS and inserts
+        MemoryWriteTableHandle memoryOutputTableHandle = (MemoryWriteTableHandle) outputTableHandle;
         long tableId = memoryOutputTableHandle.getTable();
         checkState(memoryOutputTableHandle.getActiveTableIds().contains(tableId));
 
-        pagesStore.cleanUp(memoryOutputTableHandle.getActiveTableIds());
-        pagesStore.initialize(tableId);
-        return new MemoryPageSink(pagesStore, currentHostAddress, tableId);
+        AtomicInteger sinkCount = tableSinkCount.computeIfAbsent(tableId, (k) -> new AtomicInteger(0));
+        sinkCount.incrementAndGet();
+
+        pagesStore.refreshTables(memoryOutputTableHandle.getActiveTableIds());
+        pagesStore.initialize(tableId,
+                memoryOutputTableHandle.isCompressionEnabled(),
+                memoryOutputTableHandle.isAsyncProcessingEnabled(),
+                memoryOutputTableHandle.getColumns(),
+                memoryOutputTableHandle.getSortedBy(),
+                memoryOutputTableHandle.getPartitionedBy(),
+                memoryOutputTableHandle.getIndexColumns());
+
+        try {
+            pagesStore.validateSpillRoot();
+        }
+        catch (Exception e) {
+            throw new PrestoException(GENERIC_USER_ERROR, "Failed writing data to memory.spill-path, ensure directory has correct permissions and free space is available.", e);
+        }
+
+        return new MemoryPageSink(pagesStore, currentHostAddress, tableId, sinkCount);
     }
 
+    /**
+     * This method is used when inserting data after table has already been created
+     */
     @Override
     public ConnectorPageSink createPageSink(ConnectorTransactionHandle transactionHandle, ConnectorSession session, ConnectorInsertTableHandle insertTableHandle)
     {
-        MemoryInsertTableHandle memoryInsertTableHandle = (MemoryInsertTableHandle) insertTableHandle;
-        long tableId = memoryInsertTableHandle.getTable();
-        checkState(memoryInsertTableHandle.getActiveTableIds().contains(tableId));
+        // MemoryWriteTableHandle is used for both CTAS and inserts
+        MemoryWriteTableHandle memoryOutputTableHandle = (MemoryWriteTableHandle) insertTableHandle;
+        long tableId = memoryOutputTableHandle.getTable();
+        checkState(memoryOutputTableHandle.getActiveTableIds().contains(tableId));
 
-        pagesStore.cleanUp(memoryInsertTableHandle.getActiveTableIds());
-        pagesStore.initialize(tableId);
-        return new MemoryPageSink(pagesStore, currentHostAddress, tableId);
+        AtomicInteger sinkCount = tableSinkCount.computeIfAbsent(tableId, (k) -> new AtomicInteger(0));
+        sinkCount.incrementAndGet();
+
+        pagesStore.refreshTables(memoryOutputTableHandle.getActiveTableIds());
+
+        // Try restore since table was created and may have data
+        // if restore fails, table was never initialized or data was lost from spill
+        // initialize anyways since coordinator sends how many rows to expect and so an error will be reported in the data loss case
+        try {
+            pagesStore.restoreTable(tableId);
+        }
+        catch (PrestoException pe) {
+            throw pe;
+        }
+        catch (FileNotFoundException e) {
+            //
+            pagesStore.initialize(tableId,
+                    memoryOutputTableHandle.isCompressionEnabled(),
+                    memoryOutputTableHandle.isAsyncProcessingEnabled(),
+                    memoryOutputTableHandle.getColumns(),
+                    memoryOutputTableHandle.getSortedBy(),
+                    memoryOutputTableHandle.getPartitionedBy(),
+                    memoryOutputTableHandle.getIndexColumns());
+        }
+        catch (Exception e) {
+            throw new PrestoException(MISSING_DATA, "Failed to find/restore table on a worker", e);
+        }
+
+        try {
+            pagesStore.validateSpillRoot();
+        }
+        catch (Exception e) {
+            throw new PrestoException(GENERIC_USER_ERROR, "Failed writing data to memory.spill-path, ensure directory has correct permissions and free space is available.", e);
+        }
+
+        return new MemoryPageSink(pagesStore, currentHostAddress, tableId, sinkCount);
     }
 
     private static class MemoryPageSink
             implements ConnectorPageSink
     {
-        private final MemoryPagesStore pagesStore;
+        private final MemoryTableManager tablesManager;
         private final HostAddress currentHostAddress;
         private final long tableId;
         private long addedRows;
+        private AtomicInteger sinkCount;
 
-        public MemoryPageSink(MemoryPagesStore pagesStore, HostAddress currentHostAddress, long tableId)
+        public MemoryPageSink(MemoryTableManager tablesManager, HostAddress currentHostAddress, long tableId, AtomicInteger sinkCount)
         {
-            this.pagesStore = requireNonNull(pagesStore, "pagesStore is null");
+            this.tablesManager = requireNonNull(tablesManager, "pagesStore is null");
             this.currentHostAddress = requireNonNull(currentHostAddress, "currentHostAddress is null");
             this.tableId = tableId;
+            this.sinkCount = sinkCount;
         }
 
         @Override
         public CompletableFuture<?> appendPage(Page page)
         {
-            pagesStore.add(tableId, page);
+            tablesManager.add(tableId, page);
             addedRows += page.getPositionCount();
             return NOT_BLOCKED;
         }
@@ -104,12 +177,25 @@ public class MemoryPageSinkProvider
         @Override
         public CompletableFuture<Collection<Slice>> finish()
         {
-            return completedFuture(ImmutableList.of(new MemoryDataFragment(currentHostAddress, addedRows).toSlice()));
+            // there could be multiple writers in parallel, wait until the last one
+            if (sinkCount.decrementAndGet() == 0) {
+                tablesManager.finishUpdatingTable(tableId);
+                // the JSON parser can't handle null keys in a map, so they must be skipped
+                // see LogicalPart#partitionPage and MemorySplitManager#getSplits for details
+                Map<String, List<Integer>> logicalPartPartitionMap =
+                        tablesManager.getTableLogicalPartPartitionMap(tableId).entrySet().stream()
+                        .filter(e -> e.getKey() != null)
+                        .collect(Collectors.toMap(Map.Entry::getKey, Map.Entry::getValue));
+                return completedFuture(ImmutableList.of(new MemoryDataFragment(currentHostAddress, addedRows, tablesManager.getTableLogicalPartCount(tableId), logicalPartPartitionMap).toSlice()));
+            }
+            return completedFuture(ImmutableList.of(new MemoryDataFragment(currentHostAddress, addedRows, 0, Collections.emptyMap()).toSlice()));
         }
 
         @Override
         public void abort()
         {
+            sinkCount.decrementAndGet();
+            tablesManager.cleanTable(tableId);
         }
     }
 }

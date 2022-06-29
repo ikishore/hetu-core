@@ -1,5 +1,5 @@
 /*
- * Copyright (C) 2018-2020. Huawei Technologies Co., Ltd. All rights reserved.
+ * Copyright (C) 2018-2021. Huawei Technologies Co., Ltd. All rights reserved.
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
  * You may obtain a copy of the License at
@@ -17,6 +17,7 @@ package io.hetu.core.statestore.hazelcast;
 import com.google.common.util.concurrent.UncheckedExecutionException;
 import com.hazelcast.client.HazelcastClient;
 import com.hazelcast.client.config.ClientConfig;
+import com.hazelcast.client.config.ClientConnectionStrategyConfig;
 import com.hazelcast.config.DiscoveryStrategyConfig;
 import com.hazelcast.config.SerializerConfig;
 import com.hazelcast.core.HazelcastInstance;
@@ -26,6 +27,9 @@ import io.hetu.core.security.authentication.kerberos.KerberosConfig;
 import io.hetu.core.security.networking.ssl.SslConfig;
 import io.prestosql.spi.PrestoException;
 import io.prestosql.spi.classloader.ThreadContextClassLoader;
+import io.prestosql.spi.metastore.model.CatalogEntity;
+import io.prestosql.spi.metastore.model.DatabaseEntity;
+import io.prestosql.spi.metastore.model.TableEntity;
 import io.prestosql.spi.seedstore.Seed;
 import io.prestosql.spi.seedstore.SeedStore;
 import io.prestosql.spi.statestore.CipherService;
@@ -51,6 +55,8 @@ import static io.hetu.core.statestore.hazelcast.HazelcastConstants.DISCOVERY_MOD
 import static io.hetu.core.statestore.hazelcast.HazelcastConstants.DISCOVERY_MULTICAST_STRATEGY_CLASS_NAME;
 import static io.hetu.core.statestore.hazelcast.HazelcastConstants.DISCOVERY_TCPIP_SEEDS;
 import static io.hetu.core.statestore.hazelcast.HazelcastConstants.HAZELCAST_SSL_ENABLED;
+import static io.hetu.core.statestore.hazelcast.HazelcastConstants.HEARTBEAT_INTERVAL_SECONDS;
+import static io.hetu.core.statestore.hazelcast.HazelcastConstants.HEARTBEAT_TIMEOUT_SECONDS;
 import static io.hetu.core.statestore.hazelcast.HazelcastConstants.JAAS_CONFIG_FILE;
 import static io.hetu.core.statestore.hazelcast.HazelcastConstants.KERBEROS_ENABLED;
 import static io.hetu.core.statestore.hazelcast.HazelcastConstants.KERBEROS_LOGIN_CONTEXT_NAME;
@@ -105,9 +111,22 @@ public class HazelcastStateStoreFactory
         }
 
         ClientConfig clientConfig = new ClientConfig();
+        ClientConnectionStrategyConfig connectionStrategy = clientConfig.getConnectionStrategyConfig();
+        connectionStrategy.setReconnectMode(ClientConnectionStrategyConfig.ReconnectMode.OFF);
+
         // Add serialization for Slice
         SerializerConfig sc = new SerializerConfig().setImplementation(new HazelCastSliceSerializer()).setTypeClass(Slice.class);
         clientConfig.getSerializationConfig().addSerializerConfig(sc);
+
+        SerializerConfig catalogEntity = new SerializerConfig().setImplementation(new HazelcastCatalogSerializer()).setTypeClass(CatalogEntity.class);
+        clientConfig.getSerializationConfig().addSerializerConfig(catalogEntity);
+
+        SerializerConfig dataEntity = new SerializerConfig().setImplementation(new HazelcastDatabaseEntitySerializer()).setTypeClass(DatabaseEntity.class);
+        clientConfig.getSerializationConfig().addSerializerConfig(dataEntity);
+
+        SerializerConfig tableEntity = new SerializerConfig().setImplementation(new HazelcastTableEntitySerializer()).setTypeClass(TableEntity.class);
+        clientConfig.getSerializationConfig().addSerializerConfig(tableEntity);
+
         clientConfig.setClusterName(clusterId);
 
         // set security config
@@ -131,8 +150,14 @@ public class HazelcastStateStoreFactory
         }
 
         // Set heartbeat config
-        clientConfig.setProperty(CLIENT_HEARTBEAT_TIMEOUT, String.valueOf(HazelcastConstants.HEARTBEAT_TIMEOUT_SECONDS * 1000));
-        clientConfig.setProperty(CLIENT_HEARTBEAT_INTERVAL, String.valueOf(HazelcastConstants.HEARTBEAT_INTERVAL_SECONDS * 1000));
+        final String heartbeatInterval = properties.get(HEARTBEAT_INTERVAL_SECONDS);
+        final String heartbeatTimeout = properties.get(HEARTBEAT_TIMEOUT_SECONDS);
+        if (heartbeatInterval != null) {
+            clientConfig.setProperty(CLIENT_HEARTBEAT_INTERVAL, String.valueOf(Integer.parseInt(heartbeatInterval) * 1000));
+        }
+        if (heartbeatTimeout != null) {
+            clientConfig.setProperty(CLIENT_HEARTBEAT_TIMEOUT, String.valueOf(Integer.parseInt(heartbeatTimeout) * 1000));
+        }
 
         final String discoveryMode = properties.get(DISCOVERY_MODE_CONFIG_NAME);
 

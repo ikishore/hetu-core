@@ -21,6 +21,7 @@ import io.airlift.slice.SliceOutput;
 import io.airlift.units.DataSize;
 import io.prestosql.rcfile.binary.BinaryRcFileEncoding;
 import io.prestosql.spi.block.Block;
+import org.joda.time.DateTimeZone;
 import org.testng.annotations.Test;
 
 import java.io.IOException;
@@ -225,23 +226,24 @@ public class TestRcFileReaderManual
         // to simplify the testing:
         //     change negative offsets to 0
         //     truncate length so it is not off the end of the file
-
-        if (offset < 0) {
+        int newOffset = offset;
+        int len = length;
+        if (newOffset < 0) {
             // adjust length to new offset
-            length += offset;
-            offset = 0;
+            len += newOffset;
+            newOffset = 0;
         }
-        if (offset + length > data.length()) {
-            length = data.length() - offset;
+        if (newOffset + len > data.length()) {
+            len = data.length() - newOffset;
         }
 
         RcFileReader reader = new RcFileReader(
                 new SliceRcFileDataSource(data),
-                new BinaryRcFileEncoding(),
+                new BinaryRcFileEncoding(DateTimeZone.UTC),
                 ImmutableMap.of(0, SMALLINT),
                 new BogusRcFileCodecFactory(),
-                offset,
-                length,
+                newOffset,
+                len,
                 new DataSize(8, MEGABYTE));
 
         ImmutableList.Builder<Integer> values = ImmutableList.builder();

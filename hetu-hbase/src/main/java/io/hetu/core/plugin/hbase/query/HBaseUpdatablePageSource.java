@@ -1,5 +1,5 @@
 /*
- * Copyright (C) 2018-2020. Huawei Technologies Co., Ltd. All rights reserved.
+ * Copyright (C) 2018-2021. Huawei Technologies Co., Ltd. All rights reserved.
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
  * You may obtain a copy of the License at
@@ -47,17 +47,17 @@ public class HBaseUpdatablePageSource
 {
     private static final Logger LOG = Logger.get(HBaseUpdatablePageSource.class);
 
-    private final HBaseConnection hBaseConnection;
+    private final HBaseConnection hbaseConnection;
 
     private final RecordPageSource inner;
 
     private final HBaseRecordSet recordSet;
 
-    public HBaseUpdatablePageSource(HBaseRecordSet recordSet)
+    public HBaseUpdatablePageSource(HBaseRecordSet recordSet, HBaseConnection hbaseConnection)
     {
         this.recordSet = recordSet;
         this.inner = new RecordPageSource(recordSet);
-        this.hBaseConnection = recordSet.getHBaseConnection();
+        this.hbaseConnection = hbaseConnection;
     }
 
     @Override
@@ -74,7 +74,7 @@ public class HBaseUpdatablePageSource
                         .findAny();
         StringRowSerializer serializer = new StringRowSerializer();
 
-        try (Table table = hBaseConnection.getConn().getTable(tableName)) {
+        try (Table table = hbaseConnection.getConn().getTable(tableName)) {
             List<Delete> deletes = new ArrayList<>();
             Delete delete;
             for (int index = 0; index < rowIds.getPositionCount(); index++) {

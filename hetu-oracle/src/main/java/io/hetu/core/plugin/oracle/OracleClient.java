@@ -1,5 +1,5 @@
 /*
- * Copyright (C) 2018-2020. Huawei Technologies Co., Ltd. All rights reserved.
+ * Copyright (C) 2018-2021. Huawei Technologies Co., Ltd. All rights reserved.
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
  * You may obtain a copy of the License at
@@ -15,9 +15,9 @@
 package io.hetu.core.plugin.oracle;
 
 import com.google.common.base.CharMatcher;
+import com.google.common.base.VerifyException;
 import com.google.common.collect.ImmutableList;
 import com.google.common.collect.ImmutableMap;
-import com.google.common.collect.ImmutableSet;
 import io.airlift.log.Logger;
 import io.airlift.slice.Slice;
 import io.hetu.core.plugin.oracle.config.RoundingMode;
@@ -25,8 +25,11 @@ import io.hetu.core.plugin.oracle.config.UnsupportedTypeHandling;
 import io.hetu.core.plugin.oracle.optimization.OracleQueryGenerator;
 import io.prestosql.plugin.jdbc.BaseJdbcClient;
 import io.prestosql.plugin.jdbc.BaseJdbcConfig;
+import io.prestosql.plugin.jdbc.BlockWriteFunction;
+import io.prestosql.plugin.jdbc.BooleanWriteFunction;
 import io.prestosql.plugin.jdbc.ColumnMapping;
 import io.prestosql.plugin.jdbc.ConnectionFactory;
+import io.prestosql.plugin.jdbc.DoubleWriteFunction;
 import io.prestosql.plugin.jdbc.JdbcColumnHandle;
 import io.prestosql.plugin.jdbc.JdbcIdentity;
 import io.prestosql.plugin.jdbc.JdbcTableHandle;
@@ -34,15 +37,23 @@ import io.prestosql.plugin.jdbc.JdbcTypeHandle;
 import io.prestosql.plugin.jdbc.LongWriteFunction;
 import io.prestosql.plugin.jdbc.SliceWriteFunction;
 import io.prestosql.plugin.jdbc.StatsCollecting;
+import io.prestosql.plugin.jdbc.WriteFunction;
 import io.prestosql.plugin.jdbc.WriteMapping;
+import io.prestosql.plugin.jdbc.WriteNullFunction;
+import io.prestosql.plugin.jdbc.optimization.JdbcConverterContext;
 import io.prestosql.plugin.jdbc.optimization.JdbcPushDownModule;
 import io.prestosql.plugin.jdbc.optimization.JdbcPushDownParameter;
 import io.prestosql.plugin.jdbc.optimization.JdbcQueryGeneratorResult;
 import io.prestosql.spi.PrestoException;
 import io.prestosql.spi.SuppressFBWarnings;
+import io.prestosql.spi.block.Block;
 import io.prestosql.spi.connector.ColumnHandle;
 import io.prestosql.spi.connector.ConnectorSession;
+import io.prestosql.spi.connector.ConnectorTableHandle;
 import io.prestosql.spi.connector.SchemaTableName;
+import io.prestosql.spi.function.FunctionMetadataManager;
+import io.prestosql.spi.function.StandardFunctionResolution;
+import io.prestosql.spi.relation.DeterminismEvaluator;
 import io.prestosql.spi.relation.RowExpressionService;
 import io.prestosql.spi.sql.QueryGenerator;
 import io.prestosql.spi.type.AbstractType;
@@ -54,7 +65,6 @@ import io.prestosql.spi.type.Type;
 import io.prestosql.spi.type.TypeSignature;
 import io.prestosql.spi.type.VarcharType;
 
-import javax.annotation.Nullable;
 import javax.inject.Inject;
 
 import java.math.BigDecimal;
@@ -69,16 +79,19 @@ import java.sql.Timestamp;
 import java.sql.Types;
 import java.time.Instant;
 import java.time.LocalDateTime;
-import java.time.ZoneId;
 import java.util.ArrayList;
 import java.util.Collection;
 import java.util.Collections;
+import java.util.HashMap;
 import java.util.List;
 import java.util.Locale;
 import java.util.Map;
 import java.util.Optional;
+import java.util.OptionalLong;
 
-import static com.google.common.collect.Iterables.getOnlyElement;
+import static com.google.common.base.Strings.isNullOrEmpty;
+import static com.google.common.base.Verify.verify;
+import static com.google.common.collect.ImmutableList.toImmutableList;
 import static io.airlift.slice.Slices.utf8Slice;
 import static io.prestosql.plugin.jdbc.JdbcErrorCode.JDBC_ERROR;
 import static io.prestosql.plugin.jdbc.StandardColumnMappings.bigintColumnMapping;
@@ -117,6 +130,7 @@ import static io.prestosql.spi.type.TimestampType.TIMESTAMP;
 import static io.prestosql.spi.type.TimestampWithTimeZoneType.TIMESTAMP_WITH_TIME_ZONE;
 import static io.prestosql.spi.type.TinyintType.TINYINT;
 import static io.prestosql.spi.type.VarbinaryType.VARBINARY;
+import static io.prestosql.spi.type.VarcharType.VARCHAR;
 import static io.prestosql.spi.type.VarcharType.createUnboundedVarcharType;
 import static io.prestosql.spi.type.VarcharType.createVarcharType;
 import static java.lang.Byte.toUnsignedInt;
@@ -186,6 +200,8 @@ public class OracleClient
 
     private static final int MAX_NVARCHAR2_LENGTH = 4000;
 
+    private static final int ROWID_LENGTH = 18;
+
     private final int numberDefaultScale;
 
     private final RoundingMode roundingMode;
@@ -214,7 +230,9 @@ public class OracleClient
             @StatsCollecting ConnectionFactory connectionFactory)
     {
         // the empty "" is to not use a quote to create queries
-        super(config, "\"", connectionFactory);
+        //support both auto case trans between hetu to data source
+        //and mixed cases table attributes DDL in data source side
+        super(config.internalsetCaseInsensitiveNameMatching(true), "\"", connectionFactory);
         this.pushDownModule = config.getPushDownModule();
         this.numberDefaultScale = oracleConfig.getNumberDefaultScale();
         this.roundingMode = requireNonNull(oracleConfig.getRoundingMode(), "oracle rounding mode cannot be null");
@@ -267,7 +285,6 @@ public class OracleClient
     /**
      * timestamp with time zone
      *
-     * @param connectorSession connectorSession
      * @return LongWriteFunction
      * @deprecated This method uses {@link java.sql.Timestamp} and the class cannot
      * represent date-time value when JVM zone had
@@ -277,26 +294,9 @@ public class OracleClient
      * supports {@link LocalDateTime}, use
      */
     @Deprecated
-    public static LongWriteFunction timestampWithTimeZoneWriteFunctionUsingSqlTimestamp(
-            ConnectorSession connectorSession)
+    public static LongWriteFunction timestampWithTimeZoneWriteFunctionUsingSqlTimestamp()
     {
-        if (connectorSession.isLegacyTimestamp()) {
-            ZoneId sessionZone = ZoneId.of(connectorSession.getTimeZoneKey().getId());
-            return (statement, index, value) -> setTimestampWithTimeZoneLegacy(statement, index, value, sessionZone);
-        }
         return (statement, index, value) -> setTimestampWithTimeZone(statement, index, value);
-    }
-
-    private static void setTimestampWithTimeZoneLegacy(PreparedStatement statement, int index, long value,
-            ZoneId sessionZone)
-    {
-        try {
-            statement.setTimestamp(index, new Timestamp(DateTimeEncoding.unpackMillisUtc(
-                    fromHetuLegacyTimestamp(value, sessionZone).atZone(sessionZone).toInstant().toEpochMilli())));
-        }
-        catch (SQLException e) {
-            throw new PrestoException(JDBC_ERROR, "Hetu Oracle connector failed to set Timestamp With Time Zone Legacy");
-        }
     }
 
     private static void setTimestampWithTimeZone(PreparedStatement statement, int index, long value)
@@ -310,30 +310,9 @@ public class OracleClient
         }
     }
 
-    private static LocalDateTime fromHetuLegacyTimestamp(long value, ZoneId sessionZone)
-    {
-        return Instant.ofEpochMilli(value).atZone(sessionZone).toLocalDateTime();
-    }
-
     private static LocalDateTime fromHetuTimestamp(long value)
     {
         return Instant.ofEpochMilli(value).atZone(UTC).toLocalDateTime();
-    }
-
-    @Override
-    protected Collection<String> listSchemas(Connection connection)
-    {
-        try (ResultSet resultSet = connection.getMetaData().getSchemas()) {
-            ImmutableSet.Builder<String> schemaNames = ImmutableSet.builder();
-            while (resultSet.next()) {
-                String schemaName = resultSet.getString(1).toLowerCase(Locale.ENGLISH);
-                schemaNames.add(schemaName);
-            }
-            return schemaNames.build();
-        }
-        catch (SQLException e) {
-            throw new RuntimeException("Hetu Oracle connector failed to list schemas");
-        }
     }
 
     private String[] getTableTypes()
@@ -351,43 +330,6 @@ public class OracleClient
         return connection.getMetaData()
                 .getTables(connection.getCatalog(), schemaName.orElse(null), tableName.orElse(null),
                         getTableTypes());
-    }
-
-    @Nullable
-    @Override
-    public Optional<JdbcTableHandle> getTableHandle(JdbcIdentity identity, SchemaTableName schemaTableName)
-    {
-        try (Connection connection = connectionFactory.openConnection(identity)) {
-            DatabaseMetaData metadata = connection.getMetaData();
-            String jdbcSchemaName = schemaTableName.getSchemaName();
-            String jdbcTableName = schemaTableName.getTableName();
-            if (metadata.storesUpperCaseIdentifiers()) {
-                jdbcSchemaName = jdbcSchemaName.toUpperCase(Locale.ENGLISH);
-                jdbcTableName = jdbcTableName.toUpperCase(Locale.ENGLISH);
-            }
-            try (ResultSet resultSet = getTables(connection, Optional.of(jdbcSchemaName), Optional.of(jdbcTableName))) {
-                List<JdbcTableHandle> tableHandles = new ArrayList<>(1);
-                while (resultSet.next()) {
-                    if (jdbcTableName.equals(resultSet.getString(Constants.TABLE_NAME).toUpperCase(Locale.ENGLISH))) {
-                        tableHandles.add(new JdbcTableHandle(schemaTableName, resultSet.getString("TABLE_CAT"),
-                                resultSet.getString("TABLE_SCHEM"), resultSet.getString(Constants.TABLE_NAME)));
-                    }
-                }
-                if (tableHandles.isEmpty()) {
-                    return Optional.empty();
-                }
-                if (tableHandles.size() > 1) {
-                    throw new PrestoException(NOT_SUPPORTED, "Multiple tables matched: " + schemaTableName);
-                }
-                return Optional.of(getOnlyElement(tableHandles));
-            }
-            catch (SQLException e) {
-                return Optional.empty();
-            }
-        }
-        catch (SQLException e) {
-            throw new RuntimeException("Hetu oracle connector failed to get table handle");
-        }
     }
 
     @SuppressFBWarnings("SQL_PREPARED_STATEMENT_GENERATED_FROM_NONCONSTANT_STRING")
@@ -498,6 +440,7 @@ public class OracleClient
      * @param tableName tableName
      * @param newTable newTable
      */
+    @Override
     protected void renameTable(JdbcIdentity identity, String catalogName, String schemaName, String tableName,
             SchemaTableName newTable)
     {
@@ -547,6 +490,11 @@ public class OracleClient
                 columnMapping = Optional.of(varcharColumnMapping(createUnboundedVarcharType()));
                 break;
 
+            case OracleTypes.ROWID:
+                int length = min(ROWID_LENGTH, CharType.MAX_LENGTH);
+                columnMapping = Optional.of(charColumnMapping(createCharType(length)));
+                break;
+
             case OracleTypes.BLOB:
             case OracleTypes.RAW:
             case OracleTypes.LONG_RAW:
@@ -554,7 +502,7 @@ public class OracleClient
                 break;
 
             case OracleTypes.TIMESTAMP:
-                columnMapping = Optional.of(timestampColumnMappingUsingSqlTimestamp(session));
+                columnMapping = Optional.of(timestampColumnMappingUsingSqlTimestamp());
                 break;
 
             // the following two data type is not supported because of oracle.sql.TIMESTAMPTZ
@@ -676,14 +624,14 @@ public class OracleClient
             return WriteMapping.sliceMapping("BLOB", varbinaryWriteFunction());
         }
         else if (TIMESTAMP.equals(type)) {
-            return WriteMapping.longMapping("TIMESTAMP", timestampWriteFunctionUsingSqlTimestamp(session));
+            return WriteMapping.longMapping("TIMESTAMP", timestampWriteFunctionUsingSqlTimestamp());
         }
         else if (TIMESTAMP_WITH_TIME_ZONE.equals(type)) {
             return WriteMapping.longMapping("TIMESTAMP(3) WITH TIME ZONE",
-                    timestampWithTimeZoneWriteFunctionUsingSqlTimestamp(session));
+                    timestampWithTimeZoneWriteFunctionUsingSqlTimestamp());
         }
         else if (DATE.equals(type)) {
-            return WriteMapping.longMapping("DATE", timestampWriteFunctionUsingSqlTimestamp(session));
+            return WriteMapping.longMapping("DATE", timestampWriteFunctionUsingSqlTimestamp());
         }
         else {
             throw new PrestoException(NOT_SUPPORTED, "Unsupported column type: " + type.getDisplayName());
@@ -691,10 +639,10 @@ public class OracleClient
     }
 
     @Override
-    public Optional<QueryGenerator<JdbcQueryGeneratorResult>> getQueryGenerator(RowExpressionService rowExpressionService)
+    public Optional<QueryGenerator<JdbcQueryGeneratorResult, JdbcConverterContext>> getQueryGenerator(DeterminismEvaluator determinismEvaluator, RowExpressionService rowExpressionService, FunctionMetadataManager functionManager, StandardFunctionResolution functionResolution)
     {
-        JdbcPushDownParameter pushDownParameter = new JdbcPushDownParameter(getIdentifierQuote(), this.caseInsensitiveNameMatching, pushDownModule);
-        return Optional.of(new OracleQueryGenerator(rowExpressionService, pushDownParameter));
+        JdbcPushDownParameter pushDownParameter = new JdbcPushDownParameter(getIdentifierQuote(), this.caseInsensitiveNameMatching, pushDownModule, functionResolution);
+        return Optional.of(new OracleQueryGenerator(determinismEvaluator, rowExpressionService, functionManager, functionResolution, pushDownParameter));
     }
 
     private ColumnMapping decimalColumnMapping(DecimalType decimalType)
@@ -721,8 +669,293 @@ public class OracleClient
      *
      * @return String
      */
+    @Override
     protected String generateTemporaryTableName()
     {
         return super.generateTemporaryTableName().substring(0, TEMPORARY_TABLE_NAME_MAX_LENGTH);
+    }
+
+    @Override
+    public ColumnHandle getDeleteRowIdColumnHandle(ConnectorSession session, ConnectorTableHandle tableHandle)
+    {
+        JdbcTypeHandle jdbcTypeHandle = new JdbcTypeHandle(Types.ROWID, Optional.of("rowid"), 18, 0, Optional.empty());
+        return new JdbcColumnHandle("ROWID", jdbcTypeHandle, VARCHAR, true);
+    }
+
+    @Override
+    public Optional<ConnectorTableHandle> applyDelete(ConnectorSession session, ConnectorTableHandle handle)
+    {
+        if (pushDownModule.equals(JdbcPushDownModule.DEFAULT)) {
+            return Optional.empty();
+        }
+        return Optional.of(handle);
+    }
+
+    private String extractSubQuery(String subQuery)
+    {
+        String query = subQuery.substring(subQuery.indexOf("WHERE"));
+        int count = 1;
+        int lastIndex = 0;
+        for (int i = query.indexOf("(") + 1; i < query.length(); i++) {
+            if (String.valueOf(query.charAt(i)).equals("(")) {
+                count++;
+            }
+            if (String.valueOf(query.charAt(i)).equals(")")) {
+                count--;
+            }
+            if (count == 0) {
+                lastIndex = i;
+                break;
+            }
+        }
+        return query.substring(0, lastIndex + 1);
+    }
+
+    @Override
+    public OptionalLong executeDelete(ConnectorSession session, ConnectorTableHandle handle)
+    {
+        JdbcIdentity identity = JdbcIdentity.from(session);
+        JdbcTableHandle oracleHandle = (JdbcTableHandle) handle;
+        try (Connection connection = connectionFactory.openConnection(identity)) {
+            String sql = "DELETE FROM " + oracleHandle.getSchemaPrefixedTableName();
+            if (oracleHandle.getGeneratedSql().isPresent()) {
+                String subQuery = oracleHandle.getGeneratedSql().get().getSql();
+                sql = String.format("%s %s", sql, extractSubQuery(subQuery));
+                try (PreparedStatement statement = connection.prepareStatement(sql)) {
+                    return OptionalLong.of(statement.executeUpdate());
+                }
+            }
+            else {
+                try (PreparedStatement statement = connection.prepareStatement(sql)) {
+                    log.debug("Execute: %s", sql);
+                    return OptionalLong.of(statement.executeUpdate());
+                }
+            }
+        }
+        catch (SQLException e) {
+            throw new PrestoException(JDBC_ERROR, e);
+        }
+    }
+
+    @Override
+    public ConnectorTableHandle beginDelete(ConnectorSession session, ConnectorTableHandle tableHandle)
+    {
+        JdbcTableHandle jdbcTableHandle = (JdbcTableHandle) tableHandle;
+        jdbcTableHandle.setDeleteOrUpdate(true);
+        return jdbcTableHandle;
+    }
+
+    @Override
+    public void finishDelete(ConnectorSession session, ConnectorTableHandle tableHandle, Collection<Slice> fragments)
+    {
+    }
+
+    @Override
+    public ConnectorTableHandle beginUpdate(ConnectorSession session, ConnectorTableHandle tableHandle, List<Type> updatedColumnTypes)
+    {
+        JdbcTableHandle jdbcTableHandle = (JdbcTableHandle) tableHandle;
+        jdbcTableHandle.setUpdatedColumnTypes(updatedColumnTypes);
+        jdbcTableHandle.setDeleteOrUpdate(true);
+        return jdbcTableHandle;
+    }
+
+    private void setStatement(ConnectorSession session, ConnectorTableHandle tableHandle, PreparedStatement statement, Block block, int position, int channel)
+            throws SQLException
+    {
+        JdbcTableHandle jdbcTableHandle = (JdbcTableHandle) tableHandle;
+        List<Type> updatedColumnTypes = jdbcTableHandle.getUpdatedColumnTypes();
+
+        List<WriteMapping> writeMappings = updatedColumnTypes.stream()
+                .map(type ->
+                {
+                    WriteMapping writeMapping = toWriteMapping(session, type);
+                    WriteFunction writeFunction = writeMapping.getWriteFunction();
+                    verify(
+                            type.getJavaType() == writeFunction.getJavaType(),
+                            "openLooKeng type %s is not compatible with write function %s accepting %s",
+                            type,
+                            writeFunction,
+                            writeFunction.getJavaType());
+                    return writeMapping;
+                })
+                .collect(toImmutableList());
+
+        List<WriteFunction> columnWriters = writeMappings.stream()
+                .map(WriteMapping::getWriteFunction)
+                .collect(toImmutableList());
+
+        List<WriteNullFunction> nullWriters = writeMappings.stream()
+                .map(WriteMapping::getWriteNullFunction)
+                .collect(toImmutableList());
+
+        int parameterIndex = channel + 1;
+
+        if (block.isNull(position)) {
+            nullWriters.get(channel).setNull(statement, parameterIndex);
+            return;
+        }
+
+        Type type = jdbcTableHandle.getUpdatedColumnTypes().get(channel);
+        Class<?> javaType = type.getJavaType();
+        WriteFunction writeFunction = columnWriters.get(channel);
+        if (javaType == boolean.class) {
+            ((BooleanWriteFunction) writeFunction).set(statement, parameterIndex, type.getBoolean(block, position));
+        }
+        else if (javaType == long.class) {
+            ((LongWriteFunction) writeFunction).set(statement, parameterIndex, type.getLong(block, position));
+        }
+        else if (javaType == double.class) {
+            ((DoubleWriteFunction) writeFunction).set(statement, parameterIndex, type.getDouble(block, position));
+        }
+        else if (javaType == Slice.class) {
+            ((SliceWriteFunction) writeFunction).set(statement, parameterIndex, type.getSlice(block, position));
+        }
+        else if (javaType == Block.class) {
+            ((BlockWriteFunction) writeFunction).set(statement, parameterIndex, (Block) type.getObject(block, position));
+        }
+        else {
+            throw new VerifyException(format("Unexpected type %s with java type %s", type, javaType.getName()));
+        }
+    }
+
+    @Override
+    public void finishUpdate(ConnectorSession session, ConnectorTableHandle tableHandle, Collection<Slice> fragments)
+    {
+    }
+
+    private Map<String, String> getColumnNameMap(ConnectorSession session, JdbcTableHandle tableHandle)
+    {
+        HashMap<String, String> columnNameMap = new HashMap<>(); //<columnName in lower case, columnName in datasource>
+        List<JdbcColumnHandle> columnList = getColumns(session, tableHandle);
+
+        for (JdbcColumnHandle columnHandle : columnList) {
+            String columnName = columnHandle.getColumnName();
+            columnNameMap.put(columnName.toLowerCase(ENGLISH), columnName);
+        }
+
+        return columnNameMap;
+    }
+
+    private String buildRemoteSchemaTableName(JdbcTableHandle tableHandle)
+    {
+        StringBuilder remoteSchemaTable = new StringBuilder();
+
+        if (!isNullOrEmpty(tableHandle.getSchemaName())) {
+            remoteSchemaTable.append(quoted(tableHandle.getSchemaName())).append(".");
+        }
+
+        remoteSchemaTable.append(quoted(tableHandle.getTableName()));
+
+        return remoteSchemaTable.toString();
+    }
+
+    @Override
+    public String buildDeleteSql(ConnectorTableHandle handle)
+    {
+        JdbcTableHandle tableHandle = (JdbcTableHandle) handle;
+        return format(
+                "DELETE FROM %s WHERE ROWID=%s", buildRemoteSchemaTableName(tableHandle), "?");
+    }
+
+    private List<String> getColumnNameFromDataSource(ConnectorSession session, JdbcTableHandle tableHandle, List<String> columns)
+    {
+        Map<String, String> columnNameMap = getColumnNameMap(session, tableHandle);
+        List<String> updatedColumns = new ArrayList<>();
+
+        for (String columnName : columns) {
+            String originName = columnNameMap.get(columnName.toLowerCase(Locale.ENGLISH));
+            updatedColumns.add((originName != null) ? originName : columnName);
+        }
+
+        return updatedColumns;
+    }
+
+    @Override
+    public String buildUpdateSql(ConnectorSession session, ConnectorTableHandle handle, int setNum, List<String> updatedColumns)
+    {
+        JdbcTableHandle tableHandle = (JdbcTableHandle) handle;
+        StringBuilder sqlBuilder = new StringBuilder();
+        sqlBuilder.append(format("UPDATE %s SET ", buildRemoteSchemaTableName(tableHandle)));
+        List<String> columnList = getColumnNameFromDataSource(session, tableHandle, updatedColumns);
+        for (int i = 0; i < setNum; i++) {
+            sqlBuilder.append(quoted(columnList.get(i)));
+            sqlBuilder.append(" = ? ");
+            if (i != setNum - 1) {
+                sqlBuilder.append(", ");
+            }
+        }
+        sqlBuilder.append("WHERE ROWID=?");
+        return sqlBuilder.toString();
+    }
+
+    @Override
+    public void setDeleteSql(PreparedStatement statement, Block rowIds, int position)
+    {
+        String rowId = rowIds.getString(position, position, 18);
+        try {
+            statement.setString(1, rowId);
+        }
+        catch (SQLException e) {
+            throw new PrestoException(JDBC_ERROR, e);
+        }
+    }
+
+    @Override
+    public void setUpdateSql(ConnectorSession session, ConnectorTableHandle tableHandle, PreparedStatement statement, List<Block> columnValueAndRowIdBlock, int position, List<String> updatedColumns)
+    {
+        Block rowIds = columnValueAndRowIdBlock.get(columnValueAndRowIdBlock.size() - 1);
+
+        try {
+            for (int i = 0; i < updatedColumns.size(); i++) {
+                setStatement(session, tableHandle, statement, columnValueAndRowIdBlock.get(i), position, i);
+            }
+            String rowId = rowIds.getString(position, position, 18);
+            statement.setString(updatedColumns.size() + 1, rowId);
+        }
+        catch (SQLException e) {
+            throw new PrestoException(JDBC_ERROR, e);
+        }
+    }
+
+    @Override
+    public ColumnHandle getUpdateRowIdColumnHandle(ConnectorSession session, ConnectorTableHandle tableHandle, List<ColumnHandle> updatedColumns)
+    {
+        JdbcTypeHandle jdbcTypeHandle = new JdbcTypeHandle(Types.ROWID, Optional.of("rowid"), 18, 0, Optional.empty());
+        return new JdbcColumnHandle("ROWID", jdbcTypeHandle, VARCHAR, true);
+    }
+
+    @Override
+    public void renameColumn(JdbcIdentity identity, JdbcTableHandle handle, JdbcColumnHandle jdbcColumn, String inputNewColumnName)
+    {
+        String newColumnName = inputNewColumnName;
+        try (Connection connection = connectionFactory.openConnection(identity)) {
+            if (connection.getMetaData().storesUpperCaseIdentifiers()) {
+                newColumnName = newColumnName.toUpperCase(ENGLISH);
+            }
+            String sql = format(
+                    "ALTER TABLE %s RENAME COLUMN %s TO %s",
+                    quoted(handle.getCatalogName(), handle.getSchemaName(), handle.getTableName()),
+                    quoted(jdbcColumn.getColumnName()),
+                    quoted(newColumnName));
+            execute(connection, sql);
+        }
+        catch (SQLException e) {
+            throw new PrestoException(JDBC_ERROR, e);
+        }
+    }
+
+    @Override
+    public void dropColumn(JdbcIdentity identity, JdbcTableHandle handle, JdbcColumnHandle column)
+    {
+        try (Connection connection = connectionFactory.openConnection(identity)) {
+            String sql = format(
+                    "ALTER TABLE %s DROP COLUMN %s",
+                    quoted(handle.getCatalogName(), handle.getSchemaName(), handle.getTableName()),
+                    quoted(column.getColumnName()));
+            execute(connection, sql);
+        }
+        catch (SQLException e) {
+            throw new PrestoException(JDBC_ERROR, e);
+        }
     }
 }

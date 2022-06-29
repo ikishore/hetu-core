@@ -163,6 +163,7 @@ public class CarbondataPageSinkProvider
                 ImmutableMap.of(), handle.getAdditionalConf(), false);
     }
 
+    @Override
     public ConnectorPageSink createPageSink(ConnectorTransactionHandle transaction, ConnectorSession session, ConnectorOutputTableHandle tableHandle)
     {
         CarbondataOutputTableHandle handle = (CarbondataOutputTableHandle) tableHandle;
@@ -183,7 +184,6 @@ public class CarbondataPageSinkProvider
                 vacuumTableHandle.getTableStorageFormat(),
                 vacuumTableHandle.getPartitionStorageFormat(),
                 vacuumTableHandle.isFullVacuum(),
-                //vacuumTableHandle.isMerge(),
                 vacuumTableHandle.isUnifyVacuum(),
                 null);
         return createPageSink(hiveVacuumTableHandle, session, HiveACIDWriteType.VACUUM, ImmutableMap.of(), vacuumTableHandle.getAdditionalConf(), false);

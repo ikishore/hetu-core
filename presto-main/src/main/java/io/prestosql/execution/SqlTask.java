@@ -15,6 +15,7 @@ package io.prestosql.execution;
 
 import com.google.common.base.Function;
 import com.google.common.collect.ImmutableList;
+import com.google.common.collect.ImmutableMap;
 import com.google.common.collect.ImmutableSet;
 import com.google.common.util.concurrent.Futures;
 import com.google.common.util.concurrent.ListenableFuture;
@@ -24,6 +25,7 @@ import io.airlift.stats.CounterStat;
 import io.airlift.units.DataSize;
 import io.airlift.units.Duration;
 import io.prestosql.Session;
+import io.prestosql.SystemSessionProperties;
 import io.prestosql.execution.StateMachine.StateChangeListener;
 import io.prestosql.execution.buffer.BufferResult;
 import io.prestosql.execution.buffer.LazyOutputBuffer;
@@ -32,25 +34,17 @@ import io.prestosql.execution.buffer.OutputBuffers;
 import io.prestosql.execution.buffer.OutputBuffers.OutputBufferId;
 import io.prestosql.memory.QueryContext;
 import io.prestosql.metadata.Metadata;
-import io.prestosql.operator.CommonTableExecutionContext;
-import io.prestosql.operator.PipelineContext;
-import io.prestosql.operator.PipelineStatus;
-import io.prestosql.operator.RouterContext;
-import io.prestosql.operator.TaskContext;
-import io.prestosql.operator.TaskStats;
+import io.prestosql.operator.*;
+import io.prestosql.snapshot.RestoreResult;
+import io.prestosql.snapshot.SnapshotInfo;
+import io.prestosql.snapshot.TaskSnapshotManager;
 import io.prestosql.spi.plan.PlanNodeId;
 import io.prestosql.sql.planner.PlanFragment;
 import org.joda.time.DateTime;
 
 import javax.annotation.Nullable;
-
 import java.net.URI;
-import java.util.List;
-import java.util.Map;
-import java.util.Optional;
-import java.util.OptionalInt;
-import java.util.Set;
-import java.util.UUID;
+import java.util.*;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicLong;
@@ -63,8 +57,7 @@ import static com.google.common.util.concurrent.MoreExecutors.directExecutor;
 import static io.airlift.units.DataSize.Unit.BYTE;
 import static io.airlift.units.DataSize.succinctBytes;
 import static io.prestosql.connector.DataCenterUtility.loadDCCatalogForUpdateTask;
-import static io.prestosql.execution.TaskState.ABORTED;
-import static io.prestosql.execution.TaskState.FAILED;
+import static io.prestosql.execution.TaskState.*;
 import static io.prestosql.util.Failures.toFailures;
 import static java.util.Objects.requireNonNull;
 import static java.util.concurrent.TimeUnit.MILLISECONDS;
@@ -75,6 +68,9 @@ public class SqlTask
 
     private final TaskId taskId;
     private final String taskInstanceId;
+    // confirmationInstanceId is generated from the task, and is used confirm in ContinuousTaskStatusFetcher that
+    // we are continuing to talk to the same task
+    private final String confirmationInstanceId;
     private final URI location;
     private final String nodeId;
     private final TaskStateMachine taskStateMachine;
@@ -89,9 +85,11 @@ public class SqlTask
     private final AtomicReference<TaskHolder> taskHolderReference = new AtomicReference<>(new TaskHolder());
     private final AtomicBoolean needsPlan = new AtomicBoolean(true);
     private final Metadata metadata;
+    private boolean isSnapshotEnabled;
 
     public static SqlTask createSqlTask(
             TaskId taskId,
+            String instanceId,
             URI location,
             String nodeId,
             QueryContext queryContext,
@@ -102,13 +100,14 @@ public class SqlTask
             CounterStat failedTasks,
             Metadata metadata)
     {
-        SqlTask sqlTask = new SqlTask(taskId, location, nodeId, queryContext, sqlTaskExecutionFactory, taskNotificationExecutor, maxBufferSize, metadata);
+        SqlTask sqlTask = new SqlTask(taskId, instanceId, location, nodeId, queryContext, sqlTaskExecutionFactory, taskNotificationExecutor, maxBufferSize, metadata);
         sqlTask.initialize(onDone, failedTasks);
         return sqlTask;
     }
 
     private SqlTask(
             TaskId taskId,
+            String instanceId,
             URI location,
             String nodeId,
             QueryContext queryContext,
@@ -118,7 +117,8 @@ public class SqlTask
             Metadata metadata)
     {
         this.taskId = requireNonNull(taskId, "taskId is null");
-        this.taskInstanceId = UUID.randomUUID().toString();
+        this.taskInstanceId = requireNonNull(instanceId, "instanceId is null");
+        this.confirmationInstanceId = UUID.randomUUID().toString();
         this.location = requireNonNull(location, "location is null");
         this.nodeId = requireNonNull(nodeId, "nodeId is null");
         this.queryContext = requireNonNull(queryContext, "queryContext is null");
@@ -129,13 +129,14 @@ public class SqlTask
 
         outputBuffer = new LazyOutputBuffer(
                 taskId,
-                taskInstanceId,
                 taskNotificationExecutor,
                 maxBufferSize,
                 // Pass a memory context supplier instead of a memory context to the output buffer,
                 // because we haven't created the task context that holds the the memory context yet.
-                () -> queryContext.getTaskContextByTaskId(taskId).localSystemMemoryContext());
+                () -> queryContext.getTaskContext(taskInstanceId).localSystemMemoryContext());
         taskStateMachine = new TaskStateMachine(taskId, taskNotificationExecutor);
+
+        log.debug("Created new SqlTask object for task %s, with instanceId %s", taskId, taskInstanceId);
     }
 
     // this is a separate method to ensure that the `this` reference is not leaked during construction
@@ -171,7 +172,7 @@ public class SqlTask
                 }
 
                 // make sure buffers are cleaned up
-                if (newState == FAILED || newState == ABORTED) {
+                if (newState == FAILED || newState == ABORTED || newState == CANCELED_TO_RESUME) {
                     // don't close buffers for a failed query
                     // closed buffers signal to upstream tasks that everything finished cleanly
                     outputBuffer.fail();
@@ -251,8 +252,11 @@ public class SqlTask
         Set<Lifespan> completedDriverGroups = ImmutableSet.of();
         long fullGcCount = 0;
         Duration fullGcTime = new Duration(0, MILLISECONDS);
-        if (taskHolder.getFinalTaskInfo() != null) {
-            TaskStats taskStats = taskHolder.getFinalTaskInfo().getStats();
+        Map<Long, SnapshotInfo> snapshotCaptureResult = ImmutableMap.of();
+        Optional<RestoreResult> snapshotRestoreResult = Optional.empty();
+        TaskInfo finalTaskInfo = taskHolder.getFinalTaskInfo();
+        if (finalTaskInfo != null) {
+            TaskStats taskStats = finalTaskInfo.getStats();
             queuedPartitionedDrivers = taskStats.getQueuedPartitionedDrivers();
             runningPartitionedDrivers = taskStats.getRunningPartitionedDrivers();
             physicalWrittenDataSize = taskStats.getPhysicalWrittenDataSize();
@@ -261,6 +265,12 @@ public class SqlTask
             revocableMemoryReservation = taskStats.getRevocableMemoryReservation();
             fullGcCount = taskStats.getFullGcCount();
             fullGcTime = taskStats.getFullGcTime();
+
+            if (isSnapshotEnabled) {
+                // Add snapshot result
+                snapshotCaptureResult = finalTaskInfo.getTaskStatus().getSnapshotCaptureResult();
+                snapshotRestoreResult = finalTaskInfo.getTaskStatus().getSnapshotRestoreResult();
+            }
         }
         else if (taskHolder.getTaskExecution() != null) {
             long physicalWrittenBytes = 0;
@@ -278,10 +288,17 @@ public class SqlTask
             completedDriverGroups = taskContext.getCompletedDriverGroups();
             fullGcCount = taskContext.getFullGcCount();
             fullGcTime = taskContext.getFullGcTime();
+
+            if (isSnapshotEnabled) {
+                // Add snapshot result
+                TaskSnapshotManager snapshotManager = taskHolder.taskExecution.getTaskContext().getSnapshotManager();
+                snapshotCaptureResult = snapshotManager.getSnapshotCaptureResult();
+                snapshotRestoreResult = Optional.ofNullable(snapshotManager.getSnapshotRestoreResult());
+            }
         }
 
         return new TaskStatus(taskStateMachine.getTaskId(),
-                taskInstanceId,
+                confirmationInstanceId,
                 versionNumber,
                 state,
                 location,
@@ -296,7 +313,9 @@ public class SqlTask
                 systemMemoryReservation,
                 revocableMemoryReservation,
                 fullGcCount,
-                fullGcTime);
+                fullGcTime,
+                snapshotCaptureResult,
+                snapshotRestoreResult);
     }
 
     private TaskStats getTaskStats(TaskHolder taskHolder)
@@ -333,6 +352,7 @@ public class SqlTask
         Set<PlanNodeId> noMoreSplits = getNoMoreSplits(taskHolder);
 
         TaskStatus taskStatus = createTaskStatus(taskHolder);
+
         return new TaskInfo(
                 taskStatus,
                 lastHeartbeat.get(),
@@ -371,10 +391,8 @@ public class SqlTask
     }
 
     public TaskInfo updateTask(Session session, Optional<PlanFragment> fragment, List<TaskSource> sources, OutputBuffers outputBuffers, OptionalInt totalPartitions, Optional<PlanNodeId> consumer,
-                                    Map<String, CommonTableExecutionContext> cteCtx, Map<String, RouterContext> routerCtx)
+                               Map<String, CommonTableExecutionContext> cteCtx, Map<String, RouterContext> routerCtx)
     {
-        //System.out.println("Task:" + this);
-
         try {
             // The LazyOutput buffer does not support write methods, so the actual
             // output buffer must be established before drivers are created (e.g.
@@ -393,9 +411,10 @@ public class SqlTask
                 if (taskExecution == null) {
                     checkState(fragment.isPresent(), "fragment must be present");
                     loadDCCatalogForUpdateTask(metadata, sources);
-                    taskExecution = sqlTaskExecutionFactory.create(session, queryContext, taskStateMachine, outputBuffer, fragment.get(), sources, totalPartitions, consumer, cteCtx, routerCtx);
+                    taskExecution = sqlTaskExecutionFactory.create(taskInstanceId, session, queryContext, taskStateMachine, outputBuffer, fragment.get(), sources, totalPartitions, consumer, cteCtx, routerCtx);
                     taskHolderReference.compareAndSet(taskHolder, new TaskHolder(taskExecution));
                     needsPlan.set(false);
+                    isSnapshotEnabled = SystemSessionProperties.isSnapshotEnabled(session);
                 }
             }
 
@@ -446,15 +465,9 @@ public class SqlTask
         taskStateMachine.failed(cause);
     }
 
-    public TaskInfo cancel()
+    public TaskInfo cancel(TaskState targetState)
     {
-        taskStateMachine.cancel();
-        return getTaskInfo();
-    }
-
-    public TaskInfo abort()
-    {
-        taskStateMachine.abort();
+        taskStateMachine.cancel(targetState);
         return getTaskInfo();
     }
 
@@ -537,5 +550,10 @@ public class SqlTask
     public QueryContext getQueryContext()
     {
         return queryContext;
+    }
+
+    public boolean isSnapshotEnabled()
+    {
+        return isSnapshotEnabled;
     }
 }

@@ -1,5 +1,5 @@
 /*
- * Copyright (C) 2018-2020. Huawei Technologies Co., Ltd. All rights reserved.
+ * Copyright (C) 2018-2021. Huawei Technologies Co., Ltd. All rights reserved.
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
  * You may obtain a copy of the License at
@@ -20,7 +20,6 @@ import io.airlift.bootstrap.LifeCycleManager;
 import io.airlift.log.Logger;
 import io.airlift.units.Duration;
 import io.prestosql.execution.QueryManager;
-import io.prestosql.execution.TaskInfo;
 import io.prestosql.execution.TaskManager;
 import io.prestosql.execution.scheduler.NodeSchedulerConfig;
 import io.prestosql.metadata.NodeState;
@@ -177,11 +176,12 @@ public class NodeStateChangeHandler
         }, gracePeriod.toMillis(), MILLISECONDS);
     }
 
-    private List<TaskInfo> getActiveTasks()
+    private List<String> getActiveTasks()
     {
-        return sqlTaskManager.getAllTaskInfo()
+        return sqlTaskManager.getAllTasks()
                 .stream()
-                .filter(taskInfo -> !taskInfo.getTaskStatus().getState().isDone())
+                .filter(task -> !task.getTaskInfo().getTaskStatus().getState().isDone())
+                .map(task -> task.getTaskInstanceId())
                 .collect(toImmutableList());
     }
 
@@ -196,12 +196,12 @@ public class NodeStateChangeHandler
     private void waitAllTasksToFinish(boolean allowInterrupt)
             throws InterruptedException
     {
-        List<TaskInfo> activeTasks = getActiveTasks();
+        List<String> activeTasks = getActiveTasks();
         while (activeTasks.size() > 0) {
             CountDownLatch countDownLatch = new CountDownLatch(activeTasks.size());
 
-            for (TaskInfo taskInfo : activeTasks) {
-                sqlTaskManager.addStateChangeListener(taskInfo.getTaskStatus().getTaskId(), newState -> {
+            for (String instanceId : activeTasks) {
+                sqlTaskManager.addStateChangeListener(instanceId, newState -> {
                     if (newState.isDone()) {
                         countDownLatch.countDown();
                     }

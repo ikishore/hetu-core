@@ -21,6 +21,7 @@ import io.prestosql.spi.block.Block;
 import io.prestosql.spi.connector.ConnectorSession;
 import io.prestosql.spi.connector.RecordCursor;
 import io.prestosql.spi.type.Type;
+import org.joda.time.DateTime;
 
 import java.sql.Connection;
 import java.sql.PreparedStatement;
@@ -52,9 +53,14 @@ public class JdbcRecordCursor
     private final PreparedStatement statement;
     private final ResultSet resultSet;
     private boolean closed;
+    private DateTime start;
+    private DateTime connected;
+    private DateTime executed;
+    private long fetchCnt;
 
     public JdbcRecordCursor(JdbcClient jdbcClient, ConnectorSession session, JdbcSplit split, JdbcTableHandle table, List<JdbcColumnHandle> columnHandles)
     {
+        start = DateTime.now();
         this.jdbcClient = requireNonNull(jdbcClient, "jdbcClient is null");
 
         this.columnHandles = columnHandles.toArray(new JdbcColumnHandle[0]);
@@ -67,6 +73,7 @@ public class JdbcRecordCursor
 
         try {
             connection = jdbcClient.getConnection(JdbcIdentity.from(session), split);
+            connected = DateTime.now();
 
             for (int i = 0; i < this.columnHandles.length; i++) {
                 ColumnMapping columnMapping = jdbcClient.toPrestoType(session, connection, columnHandles.get(i).getJdbcTypeHandle())
@@ -97,6 +104,7 @@ public class JdbcRecordCursor
             statement = jdbcClient.buildSql(session, connection, split, table, columnHandles);
             log.debug("Executing: %s", statement.toString());
             resultSet = statement.executeQuery();
+            executed = DateTime.now();
         }
         catch (SQLException | RuntimeException e) {
             throw handleSqlException(e);
@@ -129,6 +137,7 @@ public class JdbcRecordCursor
         }
 
         try {
+            fetchCnt++;
             return resultSet.next();
         }
         catch (SQLException | RuntimeException e) {
@@ -223,17 +232,34 @@ public class JdbcRecordCursor
             return;
         }
         closed = true;
+        DateTime toClose = DateTime.now();
 
         // use try with resources to close everything properly
-        try (Connection connection = this.connection;
-                Statement statement = this.statement;
-                ResultSet resultSet = this.resultSet) {
-            if (connection != null) {
-                jdbcClient.abortReadConnection(connection);
+        try (Statement stat = this.statement;
+                ResultSet result = this.resultSet) {
+            checkState(closed, "just for check style handle");
+        }
+        catch (SQLException e) {
+            // ignore exception from close
+            log.warn(e.toString());
+        }
+
+        try (Connection conn = this.connection) {
+            if (conn != null) {
+                jdbcClient.abortReadConnection(conn);
+
+                DateTime closedTime = DateTime.now();
+                log.debug("connect open cost %dms, execute cost %dms, fetch data cost %dms, connect close cost %dms, total cost %dms, fetch rows %d.",
+                        connected.getMillis() - start.getMillis(),
+                        executed.getMillis() - connected.getMillis(),
+                        toClose.getMillis() - executed.getMillis(),
+                        closedTime.getMillis() - toClose.getMillis(),
+                        closedTime.getMillis() - start.getMillis(), fetchCnt - 1);
             }
         }
         catch (SQLException e) {
             // ignore exception from close
+            log.warn(e.toString());
         }
     }
 

@@ -58,7 +58,6 @@ import java.util.Optional;
 import static io.airlift.units.DataSize.Unit.MEGABYTE;
 import static io.prestosql.memory.context.AggregatedMemoryContext.newSimpleAggregatedMemoryContext;
 import static io.prestosql.metadata.MetadataManager.createTestMetadataManager;
-import static io.prestosql.orc.OrcTester.HIVE_STORAGE_TIME_ZONE;
 import static io.prestosql.orc.OrcWriteValidation.OrcWriteValidationMode.BOTH;
 import static io.prestosql.orc.TestingOrcPredicate.ORC_ROW_GROUP_SIZE;
 import static io.prestosql.orc.TestingOrcPredicate.ORC_STRIPE_SIZE;
@@ -83,6 +82,7 @@ public class TestStructColumnReader
 
     @BeforeMethod
     public void setUp()
+            throws IOException
     {
         tempFile = new TempFile();
     }
@@ -242,7 +242,6 @@ public class TestStructColumnReader
                         .withDictionaryMaxMemory(new DataSize(32, MEGABYTE)),
                 false,
                 ImmutableMap.of(),
-                HIVE_STORAGE_TIME_ZONE,
                 true,
                 BOTH,
                 new OrcWriterStats(), Optional.empty(), Optional.empty());
@@ -273,7 +272,7 @@ public class TestStructColumnReader
             throws IOException
     {
         DataSize dataSize = new DataSize(1, MEGABYTE);
-        OrcDataSource orcDataSource = new FileOrcDataSource(tempFile.getFile(), dataSize, dataSize, dataSize, true);
+        OrcDataSource orcDataSource = new FileOrcDataSource(tempFile.getFile(), dataSize, dataSize, dataSize, true, tempFile.getFile().lastModified());
         OrcReader orcReader = new OrcReader(orcDataSource, dataSize, dataSize, dataSize);
 
         OrcRecordReader recordReader = orcReader.createRecordReader(
@@ -298,7 +297,7 @@ public class TestStructColumnReader
                     new NamedTypeSignature(Optional.of(new RowFieldName(fieldName, false)),
                             TEST_DATA_TYPE.getTypeSignature())));
         }
-        return METADATA.getParameterizedType(StandardTypes.ROW, typeSignatureParameters.build());
+        return METADATA.getFunctionAndTypeManager().getParameterizedType(StandardTypes.ROW, typeSignatureParameters.build());
     }
 
     private Type getTypeNullName(int numFields)
@@ -309,6 +308,6 @@ public class TestStructColumnReader
             typeSignatureParameters.add(TypeSignatureParameter.of(
                     new NamedTypeSignature(Optional.empty(), TEST_DATA_TYPE.getTypeSignature())));
         }
-        return METADATA.getParameterizedType(StandardTypes.ROW, typeSignatureParameters.build());
+        return METADATA.getFunctionAndTypeManager().getParameterizedType(StandardTypes.ROW, typeSignatureParameters.build());
     }
 }

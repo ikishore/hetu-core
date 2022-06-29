@@ -13,46 +13,67 @@
  */
 package io.prestosql.plugin.memory;
 
+import com.fasterxml.jackson.annotation.JsonCreator;
+import com.fasterxml.jackson.annotation.JsonProperty;
 import com.google.common.collect.ImmutableList;
 import com.google.common.collect.ImmutableMap;
+import io.airlift.json.JsonCodec;
 import io.prestosql.spi.HostAddress;
 import io.prestosql.spi.connector.ColumnHandle;
-import io.prestosql.spi.connector.ConnectorTableMetadata;
+import io.prestosql.spi.connector.ColumnMetadata;
 import io.prestosql.spi.connector.SchemaTableName;
+import io.prestosql.spi.type.TypeManager;
 
+import java.util.Base64;
 import java.util.List;
 import java.util.Map;
 import java.util.stream.Collectors;
 
+import static io.airlift.json.JsonCodec.jsonCodec;
 import static java.util.Objects.requireNonNull;
 
 public class TableInfo
 {
+    // Codec object to serialize/deserialize this class. Stored in metadata.
+    private static final JsonCodec<TableInfo> TABLE_INFO_JSON_CODEC = jsonCodec(TableInfo.class);
+
     private final long id;
     private final String schemaName;
     private final String tableName;
-    private final List<ColumnInfo> columns;
+    private final List<MemoryColumnHandle> columns;
     private final Map<HostAddress, MemoryDataFragment> dataFragments;
+    private final long modificationTime;
 
-    public TableInfo(long id, String schemaName, String tableName, List<ColumnInfo> columns, Map<HostAddress, MemoryDataFragment> dataFragments)
+    @JsonCreator
+    public TableInfo(
+            @JsonProperty("id") long id,
+            @JsonProperty("schemaName") String schemaName,
+            @JsonProperty("tableName") String tableName,
+            @JsonProperty("columns") List<MemoryColumnHandle> columns,
+            @JsonProperty("dataFragments") Map<HostAddress, MemoryDataFragment> dataFragments,
+            @JsonProperty("modificationTime") long modificationTime)
     {
         this.id = requireNonNull(id, "handle is null");
         this.schemaName = requireNonNull(schemaName, "schemaName is null");
         this.tableName = requireNonNull(tableName, "tableName is null");
         this.columns = ImmutableList.copyOf(columns);
         this.dataFragments = ImmutableMap.copyOf(dataFragments);
+        this.modificationTime = modificationTime;
     }
 
+    @JsonProperty
     public long getId()
     {
         return id;
     }
 
+    @JsonProperty
     public String getSchemaName()
     {
         return schemaName;
     }
 
+    @JsonProperty
     public String getTableName()
     {
         return tableName;
@@ -63,30 +84,46 @@ public class TableInfo
         return new SchemaTableName(schemaName, tableName);
     }
 
-    public ConnectorTableMetadata getMetadata()
+    public List<ColumnMetadata> getColumns(TypeManager typeManager)
     {
-        return new ConnectorTableMetadata(
-                new SchemaTableName(schemaName, tableName),
-                columns.stream()
-                        .map(ColumnInfo::getMetadata)
-                        .collect(Collectors.toList()));
+        return columns.stream()
+                .map(columnInfo -> columnInfo.getMetadata(typeManager))
+                .collect(Collectors.toList());
     }
 
-    public List<ColumnInfo> getColumns()
+    @JsonProperty
+    public List<MemoryColumnHandle> getColumns()
     {
         return columns;
     }
 
-    public ColumnInfo getColumn(ColumnHandle handle)
+    public MemoryColumnHandle getColumn(ColumnHandle handle)
     {
         return columns.stream()
-                .filter(column -> column.getHandle().equals(handle))
+                .filter(column -> column.equals(handle))
                 .findFirst()
                 .get();
     }
 
+    @JsonProperty
     public Map<HostAddress, MemoryDataFragment> getDataFragments()
     {
         return dataFragments;
+    }
+
+    @JsonProperty
+    public long getModificationTime()
+    {
+        return modificationTime;
+    }
+
+    public String serialize()
+    {
+        return Base64.getEncoder().encodeToString(TABLE_INFO_JSON_CODEC.toJsonBytes(this));
+    }
+
+    public static TableInfo deserialize(String serializedTableInfo)
+    {
+        return TABLE_INFO_JSON_CODEC.fromJson(Base64.getDecoder().decode(serializedTableInfo));
     }
 }

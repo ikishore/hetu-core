@@ -28,14 +28,18 @@ import java.util.concurrent.TimeUnit;
 
 public class ExchangeClientConfig
 {
+    public static final boolean DETECT_TIMEOUT_FAILURES = true;
+    public static final int MAX_RETRY_COUNT = 100;
     private DataSize maxBufferSize = new DataSize(32, Unit.MEGABYTE);
     private int concurrentRequestMultiplier = 3;
-    private Duration minErrorDuration = new Duration(1, TimeUnit.MINUTES);
+    private final Duration minErrorDuration = new Duration(1, TimeUnit.MINUTES);
     private Duration maxErrorDuration = new Duration(5, TimeUnit.MINUTES);
     private DataSize maxResponseSize = new HttpClientConfig().getMaxContentLength();
     private int clientThreads = 25;
     private int pageBufferClientMaxCallbackThreads = 25;
     private boolean acknowledgePages = true;
+    private int maxRetryCount = MAX_RETRY_COUNT;
+    private boolean detectTimeoutFailures = true;
 
     @NotNull
     public DataSize getMaxBufferSize()
@@ -83,11 +87,36 @@ public class ExchangeClientConfig
         return maxErrorDuration;
     }
 
+    @Config("exchange.is-timeout-failure-detection-enabled")
+    public ExchangeClientConfig setDetectTimeoutFailures(boolean b)
+    {
+        this.detectTimeoutFailures = b;
+        return this;
+    }
+
+    public boolean getDetectTimeoutFailures()
+    {
+        return this.detectTimeoutFailures;
+    }
+
     @Config("exchange.max-error-duration")
     public ExchangeClientConfig setMaxErrorDuration(Duration maxErrorDuration)
     {
         this.maxErrorDuration = maxErrorDuration;
         return this;
+    }
+
+    @Config("exchange.max-retry-count")
+    public ExchangeClientConfig setMaxRetryCount(int maxRetryCount)
+    {
+        this.maxRetryCount = maxRetryCount;
+        return this;
+    }
+
+    @Min(100)
+    public int getMaxRetryCount()
+    {
+        return this.maxRetryCount;
     }
 
     @NotNull

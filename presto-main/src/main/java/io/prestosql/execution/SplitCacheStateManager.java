@@ -1,5 +1,5 @@
 /*
- * Copyright (C) 2018-2020. Huawei Technologies Co., Ltd. All rights reserved.
+ * Copyright (C) 2018-2021. Huawei Technologies Co., Ltd. All rights reserved.
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
  * You may obtain a copy of the License at
@@ -50,9 +50,7 @@ public class SplitCacheStateManager
     @Inject
     public SplitCacheStateManager(StateStoreProvider provider, Metadata metadata)
     {
-        this.provider = provider;
-        this.metadata = metadata;
-        this.splitCacheMap = SplitCacheMap.getInstance();
+        this(provider, metadata, SplitCacheMap.getInstance());
     }
 
     public SplitCacheStateManager(StateStoreProvider provider, Metadata metadata, SplitCacheMap splitCacheMap)
@@ -74,7 +72,7 @@ public class SplitCacheStateManager
             return;
         }
 
-        BlockEncodingSerde blockEncodingSerde = metadata.getBlockEncodingSerde();
+        BlockEncodingSerde blockEncodingSerde = metadata.getFunctionAndTypeManager().getBlockEncodingSerde();
         ObjectMapper mapper = new ObjectMapperProvider().get().registerModule(new SimpleModule()
                 .addDeserializer(Type.class, new TypeDeserializer(metadata))
                 .addSerializer(Block.class, new BlockJsonSerde.Serializer(blockEncodingSerde))

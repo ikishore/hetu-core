@@ -1,5 +1,5 @@
 /*
- * Copyright (C) 2018-2020. Huawei Technologies Co., Ltd. All rights reserved.
+ * Copyright (C) 2018-2021. Huawei Technologies Co., Ltd. All rights reserved.
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
  * You may obtain a copy of the License at
@@ -93,8 +93,9 @@ public class JdbcPlanOptimizerUtils
         throw new PrestoException(JDBC_QUERY_GENERATOR_FAILURE, "unhandled type: " + type);
     }
 
-    public static String quote(String quote, String name)
+    public static String quote(String quote, String inputName)
     {
+        String name = inputName;
         name = name.replace(quote, quote + quote);
         return quote + name + quote;
     }

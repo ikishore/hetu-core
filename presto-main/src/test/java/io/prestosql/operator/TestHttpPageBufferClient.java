@@ -14,6 +14,8 @@
 package io.prestosql.operator;
 
 import com.google.common.collect.ImmutableListMultimap;
+import com.google.common.collect.ImmutableSet;
+import io.airlift.discovery.client.ServiceDescriptor;
 import io.airlift.http.client.HttpStatus;
 import io.airlift.http.client.Request;
 import io.airlift.http.client.Response;
@@ -25,6 +27,8 @@ import io.airlift.units.DataSize.Unit;
 import io.airlift.units.Duration;
 import io.hetu.core.transport.execution.buffer.PagesSerde;
 import io.hetu.core.transport.execution.buffer.SerializedPage;
+import io.prestosql.failuredetector.FailureDetector;
+import io.prestosql.failuredetector.NoOpFailureDetector;
 import io.prestosql.operator.HttpPageBufferClient.ClientCallback;
 import io.prestosql.spi.HostAddress;
 import io.prestosql.spi.Page;
@@ -36,6 +40,7 @@ import java.net.URI;
 import java.util.ArrayList;
 import java.util.Collections;
 import java.util.List;
+import java.util.Set;
 import java.util.concurrent.BrokenBarrierException;
 import java.util.concurrent.CyclicBarrier;
 import java.util.concurrent.ExecutorService;
@@ -52,10 +57,10 @@ import static io.airlift.concurrent.Threads.daemonThreadsNamed;
 import static io.airlift.testing.Assertions.assertContains;
 import static io.airlift.testing.Assertions.assertInstanceOf;
 import static io.prestosql.PrestoMediaTypes.PRESTO_PAGES;
-import static io.prestosql.execution.buffer.TestingPagesSerdeFactory.testingPagesSerde;
 import static io.prestosql.spi.StandardErrorCode.PAGE_TOO_LARGE;
 import static io.prestosql.spi.StandardErrorCode.PAGE_TRANSPORT_ERROR;
 import static io.prestosql.spi.StandardErrorCode.PAGE_TRANSPORT_TIMEOUT;
+import static io.prestosql.testing.TestingPagesSerdeFactory.testingPagesSerde;
 import static io.prestosql.util.Failures.WORKER_NODE_ERROR;
 import static java.util.concurrent.Executors.newScheduledThreadPool;
 import static org.testng.Assert.assertEquals;
@@ -101,14 +106,17 @@ public class TestHttpPageBufferClient
         TestingClientCallback callback = new TestingClientCallback(requestComplete);
 
         URI location = URI.create("http://localhost:8080");
+        String instanceId = "testing instance id";
         HttpPageBufferClient client = new HttpPageBufferClient(new TestingHttpClient(processor, scheduler),
                 expectedMaxSize,
                 new Duration(1, TimeUnit.MINUTES),
                 true,
-                location,
+                new TaskLocation(location, instanceId),
                 callback,
                 scheduler,
-                pageBufferClientCallbackExecutor);
+                pageBufferClientCallbackExecutor,
+                false,
+                null, new NoOpFailureDetector(), false, 10);
 
         assertStatus(client, location, "queued", 0, 0, 0, 0, "not scheduled");
 
@@ -186,14 +194,17 @@ public class TestHttpPageBufferClient
         TestingClientCallback callback = new TestingClientCallback(requestComplete);
 
         URI location = URI.create("http://localhost:8080");
+        String instanceId = "testing instance id";
         HttpPageBufferClient client = new HttpPageBufferClient(new TestingHttpClient(processor, scheduler),
                 new DataSize(10, Unit.MEGABYTE),
                 new Duration(1, TimeUnit.MINUTES),
                 true,
-                location,
+                new TaskLocation(location, instanceId),
                 callback,
                 scheduler,
-                pageBufferClientCallbackExecutor);
+                pageBufferClientCallbackExecutor,
+                false,
+                null, new NoOpFailureDetector(), false, 10);
 
         assertStatus(client, location, "queued", 0, 0, 0, 0, "not scheduled");
 
@@ -226,14 +237,17 @@ public class TestHttpPageBufferClient
         TestingClientCallback callback = new TestingClientCallback(requestComplete);
 
         URI location = URI.create("http://localhost:8080");
+        String instanceId = "testing instance id";
         HttpPageBufferClient client = new HttpPageBufferClient(new TestingHttpClient(processor, scheduler),
                 new DataSize(10, Unit.MEGABYTE),
                 new Duration(1, TimeUnit.MINUTES),
                 true,
-                location,
+                new TaskLocation(location, instanceId),
                 callback,
                 scheduler,
-                pageBufferClientCallbackExecutor);
+                pageBufferClientCallbackExecutor,
+                false,
+                null, new NoOpFailureDetector(), false, 10);
 
         assertStatus(client, location, "queued", 0, 0, 0, 0, "not scheduled");
 
@@ -295,14 +309,17 @@ public class TestHttpPageBufferClient
         TestingClientCallback callback = new TestingClientCallback(requestComplete);
 
         URI location = URI.create("http://localhost:8080");
+        String instanceId = "testing instance id";
         HttpPageBufferClient client = new HttpPageBufferClient(new TestingHttpClient(processor, scheduler),
                 new DataSize(10, Unit.MEGABYTE),
                 new Duration(1, TimeUnit.MINUTES),
                 true,
-                location,
+                new TaskLocation(location, instanceId),
                 callback,
                 scheduler,
-                pageBufferClientCallbackExecutor);
+                pageBufferClientCallbackExecutor,
+                false,
+                null, new NoOpFailureDetector(), false, 10);
 
         assertStatus(client, location, "queued", 0, 0, 0, 0, "not scheduled");
 
@@ -318,6 +335,7 @@ public class TestHttpPageBufferClient
             requestComplete.await(10, TimeUnit.SECONDS);
         }
         catch (BrokenBarrierException ignored) {
+            // the exception could be ignored
         }
         try {
             afterRequest.await(10, TimeUnit.SECONDS);
@@ -349,15 +367,18 @@ public class TestHttpPageBufferClient
         TestingClientCallback callback = new TestingClientCallback(requestComplete);
 
         URI location = URI.create("http://localhost:8080");
+        String instanceId = "testing instance id";
         HttpPageBufferClient client = new HttpPageBufferClient(new TestingHttpClient(processor, scheduler),
                 new DataSize(10, Unit.MEGABYTE),
                 new Duration(30, TimeUnit.SECONDS),
                 true,
-                location,
+                new TaskLocation(location, instanceId),
                 callback,
                 scheduler,
                 ticker,
-                pageBufferClientCallbackExecutor);
+                pageBufferClientCallbackExecutor,
+                false,
+                null, new NoOpFailureDetector(), true, 10);
 
         assertStatus(client, location, "queued", 0, 0, 0, 0, "not scheduled");
 
@@ -399,6 +420,107 @@ public class TestHttpPageBufferClient
     }
 
     @Test
+    public void testMaxRetryFailedRemoteHostGone()
+            throws Exception
+    {
+        TestingTicker ticker = new TestingTicker();
+        AtomicReference<Duration> tickerIncrement = new AtomicReference<>(new Duration(0, TimeUnit.SECONDS));
+
+        TestingHttpClient.Processor processor = (input) -> {
+            Duration delta = tickerIncrement.get();
+            ticker.increment(delta.toMillis(), TimeUnit.MILLISECONDS);
+            throw new RuntimeException("Foo");
+        };
+
+        CyclicBarrier requestComplete = new CyclicBarrier(2);
+        TestingClientCallback callback = new TestingClientCallback(requestComplete);
+
+        URI location = URI.create("http://localhost:8080");
+        String instanceId = "testing instance id";
+        HttpPageBufferClient client = new HttpPageBufferClient(new TestingHttpClient(processor, scheduler),
+                new DataSize(10, Unit.MEGABYTE),
+                new Duration(300, TimeUnit.SECONDS),
+                true,
+                new TaskLocation(location, instanceId),
+                callback,
+                scheduler,
+                ticker,
+                pageBufferClientCallbackExecutor,
+                false,
+                null, new MockNodeCrashFailureDetector(), false, 100);
+
+        assertStatus(client, location, "queued", 0, 0, 0, 0, "not scheduled");
+
+        for (int i = 0; i < 101; i++) {
+            client.scheduleRequest();
+            requestComplete.await(10, TimeUnit.SECONDS);
+            tickerIncrement.set(new Duration(1, TimeUnit.SECONDS));
+        }
+        assertEquals(callback.getPages().size(), 0);
+        assertEquals(callback.getCompletedRequests(), 101);
+        assertEquals(callback.getFinishedBuffers(), 0);
+        assertEquals(callback.getFailedBuffers(), 2);
+        assertInstanceOf(callback.getFailure(), PageTransportTimeoutException.class);
+        assertContains(callback.getFailure().getMessage(), WORKER_NODE_ERROR + " (http://localhost:8080/0 - 100 failures,");
+        assertStatus(client, location, "queued", 0, 101, 101, 101, "not scheduled");
+    }
+
+    @Test
+    public void testMaxRetryFailedRemoteHostAliveThenTimeout()
+            throws Exception
+    {
+        TestingTicker ticker = new TestingTicker();
+        AtomicReference<Duration> tickerIncrement = new AtomicReference<>(new Duration(0, TimeUnit.SECONDS));
+
+        TestingHttpClient.Processor processor = (input) -> {
+            Duration delta = tickerIncrement.get();
+            ticker.increment(delta.toMillis(), TimeUnit.MILLISECONDS);
+            throw new RuntimeException("Foo");
+        };
+
+        CyclicBarrier requestComplete = new CyclicBarrier(2);
+        TestingClientCallback callback = new TestingClientCallback(requestComplete);
+
+        URI location = URI.create("http://localhost:8080");
+        String instanceId = "testing instance id";
+        HttpPageBufferClient client = new HttpPageBufferClient(new TestingHttpClient(processor, scheduler),
+                new DataSize(10, Unit.MEGABYTE),
+                new Duration(300, TimeUnit.SECONDS),
+                true,
+                new TaskLocation(location, instanceId),
+                callback,
+                scheduler,
+                ticker,
+                pageBufferClientCallbackExecutor,
+                false,
+                null, new MockActiveFailureDetector(), false, 100);
+
+        assertStatus(client, location, "queued", 0, 0, 0, 0, "not scheduled");
+
+        for (int i = 0; i < 101; i++) {
+            client.scheduleRequest();
+            requestComplete.await(10, TimeUnit.SECONDS);
+            tickerIncrement.set(new Duration(1, TimeUnit.SECONDS));
+        }
+        assertEquals(callback.getPages().size(), 0);
+        assertEquals(callback.getCompletedRequests(), 101);
+        assertEquals(callback.getFinishedBuffers(), 0);
+        assertEquals(callback.getFailedBuffers(), 0);
+
+        assertStatus(client, location, "queued", 0, 101, 101, 101, "not scheduled");
+
+        tickerIncrement.set(new Duration(301, TimeUnit.SECONDS));
+        client.scheduleRequest();
+        requestComplete.await(10, TimeUnit.SECONDS);
+
+        assertEquals(callback.getCompletedRequests(), 102);
+        assertEquals(callback.getFinishedBuffers(), 0);
+        assertEquals(callback.getFailedBuffers(), 1);
+        assertInstanceOf(callback.getFailure(), PageTransportTimeoutException.class);
+        assertContains(callback.getFailure().getMessage(), WORKER_NODE_ERROR + " (http://localhost:8080/0 - 102 failures,");
+    }
+
+    @Test
     public void testErrorCodes()
     {
         assertEquals(new PageTooLargeException().getErrorCode(), PAGE_TOO_LARGE.toErrorCode());
@@ -429,6 +551,38 @@ public class TestHttpPageBufferClient
     {
         assertEquals(actualPage.getPositionCount(), expectedPage.getPositionCount());
         assertEquals(actualPage.getChannelCount(), expectedPage.getChannelCount());
+    }
+
+    private static class MockNodeCrashFailureDetector
+            implements FailureDetector
+    {
+        @Override
+        public Set<ServiceDescriptor> getFailed()
+        {
+            return ImmutableSet.of();
+        }
+
+        @Override
+        public State getState(HostAddress hostAddress)
+        {
+            return State.GONE;
+        }
+    }
+
+    private static class MockActiveFailureDetector
+            implements FailureDetector
+    {
+        @Override
+        public Set<ServiceDescriptor> getFailed()
+        {
+            return ImmutableSet.of();
+        }
+
+        @Override
+        public State getState(HostAddress hostAddress)
+        {
+            return State.ALIVE;
+        }
     }
 
     private static class TestingClientCallback

@@ -20,6 +20,7 @@ import com.google.common.util.concurrent.ListenableFuture;
 import io.airlift.stats.CounterStat;
 import io.airlift.units.DataSize;
 import io.airlift.units.Duration;
+import io.hetu.core.transport.execution.buffer.PagesSerde;
 import io.prestosql.Session;
 import io.prestosql.execution.Lifespan;
 import io.prestosql.execution.TaskId;
@@ -81,6 +82,8 @@ public class DriverContext
     private final List<OperatorContext> operatorContexts = new CopyOnWriteArrayList<>();
     private final Lifespan lifespan;
     private final int driverId;
+
+    private PagesSerde serde;
 
     public DriverContext(
             PipelineContext pipelineContext,
@@ -318,9 +321,9 @@ public class DriverContext
         long totalCpuTime = overallTiming.getCpuNanos();
 
         long totalBlockedTime = blockedWallNanos.get();
-        BlockedMonitor blockedMonitor = this.blockedMonitor.get();
-        if (blockedMonitor != null) {
-            totalBlockedTime += blockedMonitor.getBlockedTime();
+        BlockedMonitor blockedMonitorInfo = this.blockedMonitor.get();
+        if (blockedMonitorInfo != null) {
+            totalBlockedTime += blockedMonitorInfo.getBlockedTime();
         }
 
         List<OperatorStats> operators = getOperatorStats();
@@ -387,16 +390,16 @@ public class DriverContext
                 .mapToLong(DataSize::toBytes)
                 .sum();
 
-        long startNanos = this.startNanos.get();
-        if (startNanos < createNanos) {
-            startNanos = System.nanoTime();
+        long startNanosTime = this.startNanos.get();
+        if (startNanosTime < createNanos) {
+            startNanosTime = System.nanoTime();
         }
-        Duration queuedTime = new Duration(startNanos - createNanos, NANOSECONDS);
+        Duration queuedTime = new Duration(startNanosTime - createNanos, NANOSECONDS);
 
-        long endNanos = this.endNanos.get();
+        long endNanosTime = this.endNanos.get();
         Duration elapsedTime;
-        if (endNanos >= startNanos) {
-            elapsedTime = new Duration(endNanos - createNanos, NANOSECONDS);
+        if (endNanosTime >= startNanosTime) {
+            elapsedTime = new Duration(endNanosTime - createNanos, NANOSECONDS);
         }
         else {
             elapsedTime = new Duration(0, NANOSECONDS);
@@ -423,7 +426,7 @@ public class DriverContext
                 new Duration(totalScheduledTime, NANOSECONDS).convertToMostSuccinctTimeUnit(),
                 new Duration(totalCpuTime, NANOSECONDS).convertToMostSuccinctTimeUnit(),
                 new Duration(totalBlockedTime, NANOSECONDS).convertToMostSuccinctTimeUnit(),
-                blockedMonitor != null,
+                blockedMonitorInfo != null,
                 builder.build(),
                 physicalInputDataSize.convertToMostSuccinctDataSize(),
                 physicalInputPositions,
@@ -498,5 +501,15 @@ public class DriverContext
         {
             return nanosBetween(start, System.nanoTime());
         }
+    }
+
+    public PagesSerde getSerde()
+    {
+        if (serde == null) {
+            // Lazily create serde because some pipelines may not need it.
+            // Work within a driver is single-threaded, so no synchronization needed.
+            serde = pipelineContext.getTaskContext().getSerdeFactory().createPagesSerde();
+        }
+        return serde;
     }
 }

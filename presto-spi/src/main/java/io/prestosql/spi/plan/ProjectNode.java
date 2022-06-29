@@ -50,7 +50,7 @@ public class ProjectNode
     @Override
     public List<Symbol> getOutputSymbols()
     {
-        List<Symbol> symbols = new ArrayList<>(assignments.getOutputs());
+	List<Symbol> symbols = new ArrayList<>(assignments.getOutputs());
 
         Symbol query_set = null;
         int idx = -1;
@@ -69,6 +69,8 @@ public class ProjectNode
         }
 
         return symbols;
+
+        // without bqo -- return assignments.getOutputs();
     }
 
     @JsonProperty

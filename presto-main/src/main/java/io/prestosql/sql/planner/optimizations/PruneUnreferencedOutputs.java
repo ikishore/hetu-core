@@ -74,6 +74,7 @@ import io.prestosql.sql.planner.plan.TableFinishNode;
 import io.prestosql.sql.planner.plan.TableWriterNode;
 import io.prestosql.sql.planner.plan.TopNRankingNumberNode;
 import io.prestosql.sql.planner.plan.UnnestNode;
+import io.prestosql.sql.planner.plan.UpdateNode;
 
 import java.util.ArrayList;
 import java.util.Collection;
@@ -143,12 +144,6 @@ public class PruneUnreferencedOutputs
             expectedOutputSymbols.addAll(node.getPartitioningScheme().getPartitioning().getColumns());
             node.getOrderingScheme().ifPresent(orderingScheme -> expectedOutputSymbols.addAll(orderingScheme.getOrderBy()));
 
-            //System.out.println(" Prune Unreferenced Outputs: Visit Exchange: output symbols.size() "+expectedOutputSymbols.size());
-            //for (Symbol symbol : expectedOutputSymbols) {
-            //    System.out.print("\t" + symbol.toString() + " : " + symbol.tableName + ": " + symbol.attributeName);
-            //}
-
-
             List<List<Symbol>> inputsBySource = new ArrayList<>(node.getInputs().size());
             for (int i = 0; i < node.getInputs().size(); i++) {
                 inputsBySource.add(new ArrayList<>());
@@ -165,10 +160,6 @@ public class PruneUnreferencedOutputs
                 }
             }
 
-            //System.out.println(" Prune Unreferenced Outputs: Visit Exchange: output symbols.size() "+newOutputSymbols.size());
-            //for (Symbol symbol : newOutputSymbols) {
-            //    System.out.print("\t" + symbol.toString() + " : " + symbol.tableName + ": " + symbol.attributeName);
-            //}
             // newOutputSymbols contains all partition, sort and hash symbols so simply swap the output layout
             PartitioningScheme partitioningScheme = new PartitioningScheme(
                     node.getPartitioningScheme().getPartitioning(),
@@ -187,14 +178,6 @@ public class PruneUnreferencedOutputs
                         expectedInputs.build()));
             }
 
-            //System.out.println(" Prune Unreferenced Outputs: inputsBysource: ");
-            //for(List<Symbol> tempSymbols: inputsBySource) {
-             //   System.out.println("\n");
-               // for (Symbol symbol : tempSymbols) {
-                 //   System.out.print("\t" + symbol.toString() + " : " + symbol.tableName + ": " + symbol.attributeName);
-                //}
-            //}
-
             return new ExchangeNode(
                     node.getId(),
                     node.getType(),
@@ -202,7 +185,8 @@ public class PruneUnreferencedOutputs
                     partitioningScheme,
                     rewrittenSources.build(),
                     inputsBySource,
-                    node.getOrderingScheme());
+                    node.getOrderingScheme(),
+                    node.getAggregationType());
         }
 
         @Override
@@ -254,17 +238,12 @@ public class PruneUnreferencedOutputs
             }
             else {
                 outputSymbols = node.getOutputSymbols().stream()
-                        .filter(context.get()::contains) //BQO
-                        .distinct() //BQO
+                        .filter(context.get()::contains)
+                        .distinct()
                         .collect(toImmutableList());
             }
 
-            //System.out.println(" Prune Unreferenced Outputs: output symbols.size() "+outputSymbols.size());
-            //for (int i = 0; i < outputSymbols.size(); i++) {
-             //   Symbol symbol = outputSymbols.get(i);
-              //  System.out.print("\t" + symbol.toString() + " : " + symbol.tableName + ": " + symbol.attributeName);
-            //}
-                return new JoinNode(
+            return new JoinNode(
                     node.getId(),
                     node.getType(),
                     left,
@@ -408,7 +387,9 @@ public class PruneUnreferencedOutputs
                     ImmutableList.of(),
                     node.getStep(),
                     node.getHashSymbol(),
-                    node.getGroupIdSymbol());
+                    node.getGroupIdSymbol(),
+                    node.getAggregationType(),
+                    node.getFinalizeSymbol());
         }
 
         @Override
@@ -787,9 +768,8 @@ public class PruneUnreferencedOutputs
                     node.getId(),
                     source,
                     node.getRowCountSymbol(),
-                    node.getCubeName(),
-                    node.getDataPredicate(),
-                    node.isOverwrite());
+                    node.getMetadata(),
+                    node.getPredicateColumnsType());
         }
 
         @Override
@@ -797,6 +777,13 @@ public class PruneUnreferencedOutputs
         {
             PlanNode source = context.rewrite(node.getSource(), ImmutableSet.of(node.getRowId()));
             return new DeleteNode(node.getId(), source, node.getTarget(), node.getRowId(), node.getOutputSymbols());
+        }
+
+        @Override
+        public PlanNode visitUpdate(UpdateNode node, RewriteContext<Set<Symbol>> context)
+        {
+            PlanNode source = context.rewrite(node.getSource(), ImmutableSet.copyOf(node.getColumnValueAndRowIdSymbols()));
+            return new UpdateNode(node.getId(), source, node.getTarget(), node.getRowId(), node.getColumnValueAndRowIdSymbols(), node.getOutputSymbols(), node.getUpdateColumnExpression());
         }
 
         @Override

@@ -30,6 +30,10 @@ standalonePathSpecification
     : pathSpecification EOF
     ;
 
+standaloneRoutineBody
+    : routineBody EOF
+    ;
+
 statement
     : query                                                            #statementDefault
     | USE schema=identifier                                            #use
@@ -56,9 +60,11 @@ statement
     | SHOW CACHE qualifiedName?                            #showCache
     | CREATE CUBE (IF NOT EXISTS)? cubeName=qualifiedName
         ON tableName=qualifiedName
-        WITH '(' AGGREGATIONS EQ '(' aggregations ')' ',' GROUP EQ '(' cubeGroup ')' (',' cubeProperties)? ')'   #createCube
-    | INSERT INTO CUBE cubeName=qualifiedName WHERE expression     #insertCube
-    | INSERT OVERWRITE CUBE cubeName=qualifiedName WHERE expression     #insertOverwriteCube
+        WITH cubeProperties
+        (WHERE expression)? #createCube
+    | INSERT INTO CUBE cubeName=qualifiedName (WHERE expression)?     #insertCube
+    | INSERT OVERWRITE CUBE cubeName=qualifiedName (WHERE expression)?     #insertOverwriteCube
+    | RELOAD CUBE (IF EXISTS)? cubeName=qualifiedName                    #reloadCube
     | DROP CUBE (IF EXISTS)? cubeName=qualifiedName                    #dropCube
     | SHOW CUBES (FOR tableName=qualifiedName)?                                 #showCubes
     | CREATE INDEX (IF NOT EXISTS)? indexName=qualifiedName
@@ -69,7 +75,7 @@ statement
     | DROP INDEX (IF EXISTS)? indexName=qualifiedName
         (WHERE expression)?                                                     #dropIndex
     | ALTER INDEX (IF EXISTS)? from=qualifiedName RENAME TO to=qualifiedName    #renameIndex
-    | UPDATE INDEX (IF EXISTS)? qualifiedName (SET properties)?                 #updateIndex
+    | UPDATE INDEX (IF EXISTS)? qualifiedName                                   #updateIndex
     | SHOW INDEX (IF EXISTS)? qualifiedName?                                    #showIndex
     | INSERT INTO qualifiedName columnAliases? query                   #insertInto
     | INSERT OVERWRITE (TABLE)? qualifiedName columnAliases? query                   #insertOverwrite
@@ -114,8 +120,10 @@ statement
         (ON TABLE? qualifiedName)?                                     #showGrants
     | EXPLAIN ANALYZE? VERBOSE?
         ('(' explainOption (',' explainOption)* ')')? statement        #explain
+    | SHOW EXTERNAL FUNCTION qualifiedName types?                        #showExternalFunction
     | SHOW CREATE TABLE qualifiedName                                  #showCreateTable
     | SHOW CREATE VIEW qualifiedName                                   #showCreateView
+    | SHOW CREATE CUBE qualifiedName                                   #showCreateCube
     | SHOW TABLES ((FROM | IN) qualifiedName)?
         (LIKE pattern=string (ESCAPE escape=string)?)?                 #showTables
     | SHOW (SCHEMAS | DATABASES) ((FROM | IN) (cluster=identifier '.')? catalog=identifier)?
@@ -128,7 +136,8 @@ statement
     | SHOW ROLE GRANTS ((FROM | IN) identifier)?                       #showRoleGrants
     | DESCRIBE qualifiedName                                           #showColumns
     | DESC qualifiedName                                               #showColumns
-    | SHOW FUNCTIONS                                                   #showFunctions
+    | SHOW FUNCTIONS
+        (LIKE pattern=string (ESCAPE escape=string)?)?                 #showFunctions
     | SHOW SESSION                                                     #showSession
     | SET SESSION qualifiedName EQ expression                          #setSession
     | RESET SESSION qualifiedName                                      #resetSession
@@ -143,6 +152,9 @@ statement
     | SET PATH pathSpecification                                       #setPath
     | VACUUM TABLE qualifiedName (FULL (UNIFY)?)? (PARTITION partition=string)?
         (AND_WAIT)?                                                    #vacuumTable
+    | REFRESH META CACHE (FOR (cluster=identifier '.')? catalog=identifier)?                   #refreshMetadataCache
+    | SHOW VIEWS ((FROM | IN) qualifiedName)?
+        (LIKE? pattern=string (ESCAPE escape=string)?)?                #showViews
     ;
 
 assignmentList
@@ -175,7 +187,14 @@ likeClause
     ;
 
 cubeProperties
-    : property (',' property)*
+    : '(' (cubeProperty (',' cubeProperty)*)? ')'
+    ;
+
+cubeProperty
+    : AGGREGATIONS EQ '(' aggregations ')'
+    | GROUP EQ '(' cubeGroup ')'
+    | FILTER EQ '(' sourceFilter ')'
+    | property
     ;
 
 properties
@@ -184,6 +203,58 @@ properties
 
 property
     : identifier EQ expression
+    ;
+
+functionProperties
+    : '(' functionProperty (',' functionProperty)* ')'
+    ;
+
+functionProperty
+    : identifier EQ string
+    ;
+
+sqlParameterDeclaration
+    : identifier type
+    ;
+
+routineCharacteristics
+    : routineCharacteristic*
+    ;
+
+routineCharacteristic
+    : LANGUAGE language
+    | determinism
+    | nullCallClause
+    ;
+
+routineBody
+    : returnStatement
+    | externalBodyReference
+    ;
+
+returnStatement
+    : RETURN expression
+    ;
+
+externalBodyReference
+    : EXTERNAL (NAME externalRoutineName)?
+    ;
+
+language
+    : identifier
+    ;
+
+determinism
+    : DETERMINISTIC
+    | NOT DETERMINISTIC;
+
+nullCallClause
+    : RETURNS NULL ON NULL INPUT
+    | CALLED ON NULL INPUT
+    ;
+
+externalRoutineName
+    : identifier
     ;
 
 queryNoWith:
@@ -236,6 +307,10 @@ groupingSet
 
 cubeGroup
     : (identifier (',' identifier)*)?
+    ;
+
+sourceFilter
+    : expression
     ;
 
 namedQuery
@@ -348,7 +423,7 @@ primaryExpression
     | ROW '(' expression (',' expression)* ')'                                            #rowConstructor
     | qualifiedName '(' ASTERISK ')' filter? over?                                        #functionCall
     | qualifiedName '(' (setQuantifier? expression (',' expression)*)?
-        (ORDER BY sortItem (',' sortItem)*)? ')' filter? over?                            #functionCall
+        (ORDER BY sortItem (',' sortItem)*)? ')' filter? (nullTreatment? over)?           #functionCall
     | identifier '->' expression                                                          #lambda
     | '(' (identifier (',' identifier)*)? ')' '->' expression                             #lambda
     | '(' query ')'                                                                       #subqueryExpression
@@ -379,6 +454,11 @@ primaryExpression
 string
     : STRING                                #basicStringLiteral
     | UNICODE_STRING (UESCAPE STRING)?      #unicodeStringLiteral
+    ;
+
+nullTreatment
+    : IGNORE NULLS
+    | RESPECT NULLS
     ;
 
 timeZoneSpecifier
@@ -416,6 +496,10 @@ intervalField
 
 normalForm
     : NFD | NFC | NFKD | NFKC
+    ;
+
+types
+    : '(' (type (',' type)*)? ')'
     ;
 
 type
@@ -542,25 +626,25 @@ nonReserved
     // IMPORTANT: this rule must only contain tokens. Nested rules are not supported. See SqlParser.exitNonReserved
     : ADD | ADMIN | ALL | ANALYZE | ANY | ARRAY | ASC | AT
     | BERNOULLI
-    | CALL | CASCADE | CATALOGS | COLUMN | COLUMNS | COMMENT | COMMIT | COMMITTED | CURRENT
+    | CALL | CALLED | CASCADE | CATALOGS | COLUMN | COLUMNS | COMMENT | COMMIT | COMMITTED | CURRENT
     | DATA | DATABASE | DATABASES | DATE | DAY | DEFINER | DESC | DISTRIBUTED
-    | EXCLUDING | EXPLAIN
-    | FETCH | FILTER | FIRST | FOLLOWING | FORMAT | FUNCTIONS
+    | EXCLUDING | EXPLAIN | EXTERNAL
+    | FETCH | FILTER | FIRST | FOLLOWING | FORMAT | FUNCTION | FUNCTIONS
     | GRANT | GRANTED | GRANTS | GRAPHVIZ
     | HOUR
     | IF | INCLUDING | INPUT | INTERVAL | INVOKER | IO | ISOLATION
     | JSON
     | LAST | LATERAL | LEVEL | LIMIT | LOGICAL
     | MAP | MINUTE | MONTH
-    | NEXT | NFC | NFD | NFKC | NFKD | NO | NONE | NULLIF | NULLS
+    | NAME | NEXT | NFC | NFD | NFKC | NFKD | NO | NONE | NULLIF | NULLS
     | OFFSET | ONLY | OPTION | ORDINALITY | OUTPUT | OVER
     | PARTITION | PARTITIONS | PATH | POSITION | PRECEDING | PRIVILEGES | PROPERTIES
-    | RANGE | READ | RENAME | REPEATABLE | REPLACE | RESET | RESTRICT | REVOKE | ROLE | ROLES | ROLLBACK | ROW | ROWS
+    | RANGE | READ | RENAME | REPEATABLE | REPLACE | RESET | RESTRICT | RETURN | RETURNS | REVOKE | ROLE | ROLES | ROLLBACK | ROW | ROWS
     | SCHEMA | SCHEMAS | SECOND | SECURITY | SERIALIZABLE | SESSION | SET | SETS
     | SHOW | SOME | START | STATS | SUBSTRING | SYSTEM
     | TABLES | TABLESAMPLE | TEXT | TIES | TIME | TIMESTAMP | TO | TRANSACTION | TRY_CAST | TYPE
     | UNBOUNDED | UNCOMMITTED | USE | USER
-    | VALIDATE | VERBOSE | VIEW
+    | VALIDATE | VERBOSE | VIEW | VIEWS
     | WORK | WRITE
     | YEAR
     | ZONE
@@ -585,6 +669,7 @@ BETWEEN: 'BETWEEN';
 BY: 'BY';
 CACHE: 'CACHE';
 CALL: 'CALL';
+CALLED: 'CALLED';
 CASCADE: 'CASCADE';
 CASE: 'CASE';
 CAST: 'CAST';
@@ -614,6 +699,7 @@ DAY: 'DAY';
 DEALLOCATE: 'DEALLOCATE';
 DEFINER: 'DEFINER';
 DELETE: 'DELETE';
+DETERMINISTIC: 'DETERMINISTIC';
 UPDATE: 'UPDATE';
 DESC: 'DESC';
 DESCRIBE: 'DESCRIBE';
@@ -629,6 +715,7 @@ EXECUTE: 'EXECUTE';
 EXISTS: 'EXISTS';
 EXPLAIN: 'EXPLAIN';
 EXTRACT: 'EXTRACT';
+EXTERNAL: 'EXTERNAL';
 FALSE: 'FALSE';
 FETCH: 'FETCH';
 FILTER: 'FILTER';
@@ -638,6 +725,8 @@ FOR: 'FOR';
 FORMAT: 'FORMAT';
 FROM: 'FROM';
 FULL: 'FULL';
+FUNCTION: 'FUNCTION';
+FUNCPROPERTIES: 'FUNCPROPERTIES';
 FUNCTIONS: 'FUNCTIONS';
 GRANT: 'GRANT';
 GRANTED: 'GRANTED';
@@ -662,6 +751,7 @@ IS: 'IS';
 ISOLATION: 'ISOLATION';
 JSON: 'JSON';
 JOIN: 'JOIN';
+LANGUAGE: 'LANGUAGE';
 LAST: 'LAST';
 LATERAL: 'LATERAL';
 LEFT: 'LEFT';
@@ -675,6 +765,7 @@ MAP: 'MAP';
 UNIFY: 'UNIFY';
 MINUTE: 'MINUTE';
 MONTH: 'MONTH';
+NAME: 'NAME';
 NATURAL: 'NATURAL';
 NEXT: 'NEXT';
 NFC : 'NFC';
@@ -715,6 +806,8 @@ REPEATABLE: 'REPEATABLE';
 REPLACE: 'REPLACE';
 RESET: 'RESET';
 RESTRICT: 'RESTRICT';
+RETURN: 'RETURN';
+RETURNS: 'RETURNS';
 REVOKE: 'REVOKE';
 RIGHT: 'RIGHT';
 ROLE: 'ROLE';
@@ -764,6 +857,7 @@ VALIDATE: 'VALIDATE';
 VALUES: 'VALUES';
 VERBOSE: 'VERBOSE';
 VIEW: 'VIEW';
+VIEWS: 'VIEWS';
 WHEN: 'WHEN';
 WHERE: 'WHERE';
 WITH: 'WITH';
@@ -776,6 +870,9 @@ BITMAP: 'BITMAP';
 BLOOM: 'BLOOM';
 MINMAX: 'MINMAX';
 BTREE: 'BTREE';
+REFRESH: 'REFRESH';
+META: 'META';
+RELOAD: 'RELOAD';
 
 EQ  : '=';
 NEQ : '<>' | '!=';

@@ -22,6 +22,7 @@ import java.util.Map;
 
 import static io.prestosql.plugin.jdbc.optimization.JdbcPushDownModule.BASE_PUSHDOWN;
 import static io.prestosql.plugin.jdbc.optimization.JdbcPushDownModule.DEFAULT;
+import static io.prestosql.sql.builder.functioncall.FunctionCallConstants.REMOTE_FUNCTION_CATALOG_SCHEMA;
 import static java.util.concurrent.TimeUnit.MINUTES;
 import static java.util.concurrent.TimeUnit.SECONDS;
 
@@ -31,12 +32,15 @@ public class TestBaseJdbcConfig
     public void testDefaults()
     {
         ConfigAssertions.assertRecordedDefaults(ConfigAssertions.recordDefaults(BaseJdbcConfig.class)
+                .setPushDownExternalFunctionNamespace(null)
+                .setConnectorRegistryFunctionNamespace(null)
                 .setConnectionUrl(null)
                 .setConnectionUser(null)
                 .setConnectionPassword(null)
                 .setUserCredentialName(null)
                 .setPasswordCredentialName(null)
                 .setCaseInsensitiveNameMatching(false)
+                .setDmlStatementsCommitInATransaction(false)
                 .setFetchSize(0)
                 .setUseConnectionPool(false)
                 .setBlockWhenExhausted(false)
@@ -57,13 +61,19 @@ public class TestBaseJdbcConfig
                 .setMaxWaitMillis(-1L)
                 .setCaseInsensitiveNameMatchingCacheTtl(new Duration(1, MINUTES))
                 .setPushDownEnable(true)
-                .setPushDownModule(DEFAULT));
+                .setPushDownModule(DEFAULT)
+                .setTableSplitEnable(false)
+                .setTableSplitFields(null)
+                .setTableSplitStepCalcRefreshInterval(new Duration(5, MINUTES))
+                .setTableSplitStepCalcCalcThreads(4));
     }
 
     @Test
     public void testExplicitPropertyMappings()
     {
         Map<String, String> properties = new ImmutableMap.Builder<String, String>()
+                .put(REMOTE_FUNCTION_CATALOG_SCHEMA, "mem.testing|fs.testing")
+                .put("connector.externalfunction.namespace", "jdbc.v1")
                 .put("connection-url", "jdbc:h2:mem:config")
                 .put("connection-user", "user")
                 .put("connection-password", "password")
@@ -72,6 +82,7 @@ public class TestBaseJdbcConfig
                 .put("case-insensitive-name-matching", "true")
                 .put("case-insensitive-name-matching.cache-ttl", "1s")
                 .put("fetch-size", "1000")
+                .put("dml-statements-commit-in-a-transaction", "true")
                 .put("jdbc.connection.pool.lifo", "false")
                 .put("jdbc.connection.pool.fairness", "true")
                 .put("jdbc.connection.pool.maxWaitMillis", "1000")
@@ -90,9 +101,15 @@ public class TestBaseJdbcConfig
                 .put("jdbc.pushdown-enabled", "false")
                 .put("use-connection-pool", "true")
                 .put("jdbc.pushdown-module", "BASE_PUSHDOWN")
+                .put("jdbc.table-split-enabled", "true")
+                .put("jdbc.table-split-fields", "test_field")
+                .put("jdbc.table-split-stepCalc-refresh-interval", "20s")
+                .put("jdbc.table-split-stepCalc-threads", "2")
                 .build();
 
         BaseJdbcConfig expected = new BaseJdbcConfig()
+                .setPushDownExternalFunctionNamespace("mem.testing|fs.testing")
+                .setConnectorRegistryFunctionNamespace("jdbc.v1")
                 .setConnectionUrl("jdbc:h2:mem:config")
                 .setConnectionUser("user")
                 .setConnectionPassword("password")
@@ -100,6 +117,7 @@ public class TestBaseJdbcConfig
                 .setPasswordCredentialName("bar")
                 .setCaseInsensitiveNameMatching(true)
                 .setFetchSize(1000)
+                .setDmlStatementsCommitInATransaction(true)
                 .setUseConnectionPool(true)
                 .setBlockWhenExhausted(false)
                 .setFairness(true)
@@ -118,7 +136,11 @@ public class TestBaseJdbcConfig
                 .setMaxWaitMillis(1000)
                 .setCaseInsensitiveNameMatchingCacheTtl(new Duration(1, SECONDS))
                 .setPushDownEnable(false)
-                .setPushDownModule(BASE_PUSHDOWN);
+                .setPushDownModule(BASE_PUSHDOWN)
+                .setTableSplitEnable(true)
+                .setTableSplitFields("test_field")
+                .setTableSplitStepCalcRefreshInterval(new Duration(20, SECONDS))
+                .setTableSplitStepCalcCalcThreads(2);
 
         ConfigAssertions.assertFullMapping(properties, expected);
     }

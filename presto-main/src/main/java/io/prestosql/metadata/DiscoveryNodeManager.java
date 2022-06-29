@@ -131,7 +131,7 @@ public final class DiscoveryNodeManager
             URI uri = getHttpUri(service, httpsRequired);
             NodeVersion nodeVersion = getNodeVersion(service);
             if (uri != null && nodeVersion != null) {
-                InternalNode node = new InternalNode(service.getNodeId(), uri, nodeVersion, isCoordinator(service));
+                InternalNode node = new InternalNode(service.getNodeId(), uri, nodeVersion, isCoordinator(service), isWorker(service));
 
                 if (node.getNodeIdentifier().equals(currentNodeId)) {
                     checkState(
@@ -160,14 +160,37 @@ public final class DiscoveryNodeManager
         pollWorkers();
     }
 
+    @Override
+    public void refreshWorkerStates()
+    {
+        failureDetector.waitForServiceStateRefresh();
+        pollWorkers();
+        AllNodes allNodesOverDiscovery = getAllNodes();
+        Set<InternalNode> aliveNodes = ImmutableSet.<InternalNode>builder()
+                .addAll(allNodesOverDiscovery.getActiveNodes())
+                .addAll(allNodesOverDiscovery.getIsolatingNodes())
+                .addAll(allNodesOverDiscovery.getIsolatedNodes())
+                .addAll(allNodesOverDiscovery.getShuttingDownNodes())
+                .build();
+
+        ImmutableSet<String> aliveNodeIds = aliveNodes.stream()
+                .map(InternalNode::getNodeIdentifier)
+                .collect(toImmutableSet());
+
+        // Remove nodes that don't exist anymore
+        // Make a copy to materialize the set difference
+        Set<String> deadNodes = difference(nodeStates.keySet(), aliveNodeIds).immutableCopy();
+        nodeStates.keySet().removeAll(deadNodes);
+    }
+
     private void pollWorkers()
     {
-        AllNodes allNodes = getAllNodes();
+        AllNodes allNodesOverDiscovery = getAllNodes();
         Set<InternalNode> aliveNodes = ImmutableSet.<InternalNode>builder()
-                .addAll(allNodes.getActiveNodes())
-                .addAll(allNodes.getIsolatingNodes())
-                .addAll(allNodes.getIsolatedNodes())
-                .addAll(allNodes.getShuttingDownNodes())
+                .addAll(allNodesOverDiscovery.getActiveNodes())
+                .addAll(allNodesOverDiscovery.getIsolatingNodes())
+                .addAll(allNodesOverDiscovery.getIsolatedNodes())
+                .addAll(allNodesOverDiscovery.getShuttingDownNodes())
                 .build();
 
         ImmutableSet<String> aliveNodeIds = aliveNodes.stream()
@@ -240,7 +263,7 @@ public final class DiscoveryNodeManager
             NodeVersion nodeVersion = getNodeVersion(service);
             boolean coordinator = isCoordinator(service);
             if (uri != null && nodeVersion != null) {
-                InternalNode node = new InternalNode(service.getNodeId(), uri, nodeVersion, coordinator);
+                InternalNode node = new InternalNode(service.getNodeId(), uri, nodeVersion, coordinator, isWorker(service));
                 NodeState nodeState = getNodeState(node);
 
                 switch (nodeState) {
@@ -293,18 +316,18 @@ public final class DiscoveryNodeManager
         activeNodesByCatalogName = byConnectorIdBuilder.build();
         allNodesByCatalogName = byAllConnectorIdBuilder.build();
 
-        AllNodes allNodes = new AllNodes(activeNodesBuilder.build(), inactiveNodesBuilder.build(),
+        AllNodes allNodesBuild = new AllNodes(activeNodesBuilder.build(), inactiveNodesBuilder.build(),
                 shuttingDownNodesBuilder.build(), coordinatorsBuilder.build(),
                 isolatingNodesBuilder.build(), isolatedNodesBuilder.build());
         // only update if all nodes actually changed (note: this does not include the connectors registered with the nodes)
-        if (!allNodes.equals(this.allNodes)) {
+        if (!allNodesBuild.equals(this.allNodes)) {
             // assign allNodes to a local variable for use in the callback below
-            this.allNodes = allNodes;
+            this.allNodes = allNodesBuild;
             coordinators = coordinatorsBuilder.build();
 
             // notify listeners
-            List<Consumer<AllNodes>> listeners = ImmutableList.copyOf(this.listeners);
-            nodeStateEventExecutor.submit(() -> listeners.forEach(listener -> listener.accept(allNodes)));
+            List<Consumer<AllNodes>> listenersList = ImmutableList.copyOf(this.listeners);
+            nodeStateEventExecutor.submit(() -> listenersList.forEach(listener -> listener.accept(allNodesBuild)));
         }
     }
 
@@ -404,8 +427,8 @@ public final class DiscoveryNodeManager
     public synchronized void addNodeChangeListener(Consumer<AllNodes> listener)
     {
         listeners.add(requireNonNull(listener, "listener is null"));
-        AllNodes allNodes = this.allNodes;
-        nodeStateEventExecutor.submit(() -> listener.accept(allNodes));
+        AllNodes allNodesToListener = this.allNodes;
+        nodeStateEventExecutor.submit(() -> listener.accept(allNodesToListener));
     }
 
     @Override
@@ -422,6 +445,7 @@ public final class DiscoveryNodeManager
                 return new URI(url);
             }
             catch (URISyntaxException ignored) {
+                // could be ignored
             }
         }
         return null;
@@ -436,5 +460,10 @@ public final class DiscoveryNodeManager
     private static boolean isCoordinator(ServiceDescriptor service)
     {
         return Boolean.parseBoolean(service.getProperties().get("coordinator"));
+    }
+
+    private static boolean isWorker(ServiceDescriptor service)
+    {
+        return Boolean.parseBoolean(service.getProperties().get("worker"));
     }
 }

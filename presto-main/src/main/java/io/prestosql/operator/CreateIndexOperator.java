@@ -1,5 +1,5 @@
 /*
- * Copyright (C) 2018-2020. Huawei Technologies Co., Ltd. All rights reserved.
+ * Copyright (C) 2018-2021. Huawei Technologies Co., Ltd. All rights reserved.
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
  * You may obtain a copy of the License at
@@ -25,6 +25,8 @@ import io.prestosql.spi.heuristicindex.IndexClient;
 import io.prestosql.spi.heuristicindex.IndexWriter;
 import io.prestosql.spi.heuristicindex.Pair;
 import io.prestosql.spi.plan.PlanNodeId;
+import io.prestosql.spi.snapshot.MarkerPage;
+import io.prestosql.spi.snapshot.RestorableConfig;
 import io.prestosql.spi.type.Type;
 import io.prestosql.spi.type.TypeUtils;
 
@@ -46,6 +48,8 @@ import static com.google.common.base.Preconditions.checkState;
 import static io.prestosql.spi.heuristicindex.TypeUtils.getActualValue;
 import static java.util.Objects.requireNonNull;
 
+//TODO-cp-I38S9O: Operator currently not supported for Snapshot
+@RestorableConfig(unsupported = true)
 public class CreateIndexOperator
         implements Operator
 {
@@ -75,7 +79,7 @@ public class CreateIndexOperator
 
     private State state = State.NEEDS_INPUT;
 
-    // NEEDS_INPUT -> PERSISTING -> FINISHED_PERSISTING -> FINISHED
+    // States change sequence: from NEEDS_INPUT to PERSISTING, PERSISTING to FINISHED_PERSISTING, then FINISHED_PERSISTING to FINISHED
     private enum State
     {
         NEEDS_INPUT,
@@ -125,7 +129,7 @@ public class CreateIndexOperator
             }
         }
         catch (IOException e) {
-            throw new UncheckedIOException("Persisting index failed: ", e);
+            throw new UncheckedIOException("Persisting index failed: " + e.getMessage(), e);
         }
 
         synchronized (levelWriter) {
@@ -140,6 +144,7 @@ public class CreateIndexOperator
                 // update metadata
                 IndexClient indexClient = heuristicIndexerManager.getIndexClient();
                 try {
+                    createIndexMetadata.setIndexSize(heuristicIndexerManager.getIndexClient().getIndexSize(createIndexMetadata.getIndexName()));
                     IndexClient.RecordStatus recordStatus = indexClient.lookUpIndexRecord(createIndexMetadata);
                     LOG.debug("Current record status: %s", recordStatus);
 
@@ -179,6 +184,11 @@ public class CreateIndexOperator
     {
         checkState(needsInput(), "Operator is already finishing");
         requireNonNull(page, "page is null");
+
+        //TODO-cp-I38S9O: Operator currently not supported for Snapshot
+        if (page instanceof MarkerPage) {
+            throw new UnsupportedOperationException("Operator doesn't support snapshotting.");
+        }
 
         // if operator is still receiving input, it's not finished
         finished.putIfAbsent(this, false);
@@ -226,6 +236,15 @@ public class CreateIndexOperator
                     if (partition == null) {
                         throw new IllegalStateException("Partition level is not supported for non partitioned table.");
                     }
+                    if (!createIndexMetadata.getPartitions().isEmpty()) {
+                        for (String userPart : createIndexMetadata.getPartitions()) {
+                            String userPartCol = userPart.split("=")[0];
+                            String actualPartCol = partition.split("=")[0];
+                            if (!userPartCol.equals(actualPartCol)) {
+                                throw new IllegalArgumentException(String.format("Creating index on %s is not supported as it's not first-level partition", userPartCol));
+                            }
+                        }
+                    }
                     levelWriter.putIfAbsent(partition, heuristicIndexerManager.getIndexWriter(createIndexMetadata, connectorMetadata));
                     persistBy.putIfAbsent(levelWriter.get(partition), this);
                     levelWriter.get(partition).addData(values, connectorMetadata);
@@ -269,6 +288,13 @@ public class CreateIndexOperator
         return null;
     }
 
+    @Override
+    public Page pollMarker()
+    {
+        //TODO-cp-I38S9O: Operator currently not supported for Snapshot
+        return null;
+    }
+
     public static class CreateIndexOperatorFactory
             implements OperatorFactory
     {
@@ -300,8 +326,8 @@ public class CreateIndexOperator
         public Operator createOperator(DriverContext driverContext)
         {
             checkState(!closed, "Factory is already closed");
-            OperatorContext operatorContext = driverContext.addOperatorContext(operatorId, planNodeId, CreateIndexOperator.class.getSimpleName());
-            return new CreateIndexOperator(operatorContext, createIndexMetadata, heuristicIndexerManager, levelWriter, persistBy, finished);
+            OperatorContext addOperatorContext = driverContext.addOperatorContext(operatorId, planNodeId, CreateIndexOperator.class.getSimpleName());
+            return new CreateIndexOperator(addOperatorContext, createIndexMetadata, heuristicIndexerManager, levelWriter, persistBy, finished);
         }
 
         @Override
@@ -317,7 +343,7 @@ public class CreateIndexOperator
         }
     }
 
-    private static Object getNativeValue(Type type, Block block, int position)
+    static Object getNativeValue(Type type, Block block, int position)
     {
         Object obj = TypeUtils.readNativeValue(type, block, position);
         Class<?> javaType = type.getJavaType();
@@ -331,6 +357,7 @@ public class CreateIndexOperator
 
     /**
      * This is a hacky way to tell if the table is partitioned and get the partition of table
+     * by returning the first path segment containing "="
      * <p>
      * Should be replaced if a better solution is available
      *
@@ -338,7 +365,7 @@ public class CreateIndexOperator
      * @param tableName table name
      * @return partition name if table is partitioned. {@code null} if no partition is found in the path.
      */
-    private static String getPartitionName(String uri, String tableName)
+    static String getPartitionName(String uri, String tableName)
     {
         Path path = Paths.get(uri);
         String[] dataPathElements = path.toString().split("/");

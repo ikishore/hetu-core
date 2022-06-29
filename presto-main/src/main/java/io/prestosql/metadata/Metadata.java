@@ -15,11 +15,8 @@ package io.prestosql.metadata;
 
 import io.airlift.slice.Slice;
 import io.prestosql.Session;
-import io.prestosql.operator.aggregation.InternalAggregationFunction;
-import io.prestosql.operator.window.WindowFunctionSupplier;
+import io.prestosql.spi.PartialAndFinalAggregationType;
 import io.prestosql.spi.PrestoException;
-import io.prestosql.spi.block.BlockEncoding;
-import io.prestosql.spi.block.BlockEncodingSerde;
 import io.prestosql.spi.connector.CatalogName;
 import io.prestosql.spi.connector.CatalogSchemaName;
 import io.prestosql.spi.connector.ColumnHandle;
@@ -32,12 +29,10 @@ import io.prestosql.spi.connector.Constraint;
 import io.prestosql.spi.connector.ConstraintApplicationResult;
 import io.prestosql.spi.connector.LimitApplicationResult;
 import io.prestosql.spi.connector.ProjectionApplicationResult;
+import io.prestosql.spi.connector.QualifiedObjectName;
 import io.prestosql.spi.connector.SampleType;
 import io.prestosql.spi.connector.SystemTable;
 import io.prestosql.spi.expression.ConnectorExpression;
-import io.prestosql.spi.function.OperatorType;
-import io.prestosql.spi.function.ScalarFunctionImplementation;
-import io.prestosql.spi.function.Signature;
 import io.prestosql.spi.function.SqlFunction;
 import io.prestosql.spi.metadata.TableHandle;
 import io.prestosql.spi.predicate.TupleDomain;
@@ -48,13 +43,9 @@ import io.prestosql.spi.security.RoleGrant;
 import io.prestosql.spi.statistics.ComputedStatistics;
 import io.prestosql.spi.statistics.TableStatistics;
 import io.prestosql.spi.statistics.TableStatisticsMetadata;
-import io.prestosql.spi.type.ParametricType;
 import io.prestosql.spi.type.Type;
 import io.prestosql.spi.type.TypeSignature;
-import io.prestosql.spi.type.TypeSignatureParameter;
-import io.prestosql.sql.analyzer.TypeSignatureProvider;
 import io.prestosql.sql.planner.PartitioningHandle;
-import io.prestosql.sql.tree.QualifiedName;
 
 import java.util.Collection;
 import java.util.List;
@@ -114,9 +105,9 @@ public interface Metadata
     TableMetadata getTableMetadata(Session session, TableHandle tableHandle);
 
     /**
-     * Return statistics for specified table for given filtering contraint.
+     * Return statistics for specified table for given filtering contraint with a check either to include ColumnStatistics or not
      */
-    TableStatistics getTableStatistics(Session session, TableHandle tableHandle, Constraint constraint);
+    TableStatistics getTableStatistics(Session session, TableHandle tableHandle, Constraint constraint, boolean includeColumnStatistics);
 
     /**
      * Get the names that match the specified table prefix (never null).
@@ -212,6 +203,7 @@ public interface Metadata
 
     /**
      * For the Table UPDATE/DELETE Layouts if supported.
+     *
      * @return
      */
     default Optional<NewTableLayout> getUpdateLayout(Session session, TableHandle target)
@@ -256,9 +248,14 @@ public interface Metadata
     Optional<ConnectorOutputMetadata> finishInsert(Session session, InsertTableHandle tableHandle, Collection<Slice> fragments, Collection<ComputedStatistics> computedStatistics);
 
     /**
-     * Get the row ID column handle used with UpdatablePageSource.
+     * Get the row ID column handle used with UpdatablePageSource#deleteRows.
      */
-    ColumnHandle getUpdateRowIdColumnHandle(Session session, TableHandle tableHandle);
+    ColumnHandle getDeleteRowIdColumnHandle(Session session, TableHandle tableHandle);
+
+    /**
+     * Get the row ID column handle used with UpdatablePageSource#updateRows.
+     */
+    ColumnHandle getUpdateRowIdColumnHandle(Session session, TableHandle tableHandle, List<ColumnHandle> updatedColumns);
 
     /**
      * @return whether delete without table scan is supported
@@ -280,6 +277,8 @@ public interface Metadata
      */
     OptionalLong executeDelete(Session session, TableHandle tableHandle);
 
+    OptionalLong executeUpdate(Session session, TableHandle tableHandle);
+
     /**
      * Begin delete query
      */
@@ -288,7 +287,23 @@ public interface Metadata
     /**
      * Begin update query
      */
-    default UpdateTableHandle beginUpdate(Session session, TableHandle tableHandle)
+    default UpdateTableHandle beginUpdateAsInsert(Session session, TableHandle tableHandle)
+    {
+        throw new PrestoException(NOT_SUPPORTED, "update not supported yet for this connector!!");
+    }
+
+    /**
+     * Begin update query
+     */
+    default TableHandle beginUpdate(Session session, TableHandle tableHandle, List<Type> updatedColumnTypes)
+    {
+        throw new PrestoException(NOT_SUPPORTED, "update not supported yet for this connector!!");
+    }
+
+    /**
+     * Finish update query
+     */
+    default void finishUpdate(Session session, TableHandle tableHandle, Collection<Slice> fragments)
     {
         throw new PrestoException(NOT_SUPPORTED, "update not supported yet for this connector!!");
     }
@@ -301,7 +316,7 @@ public interface Metadata
         throw new PrestoException(NOT_SUPPORTED, "DeletAsInsert not supported yet for this connector!!");
     }
 
-    default Optional<ConnectorOutputMetadata> finishUpdate(Session session, UpdateTableHandle tableHandle, Collection<Slice> fragments, Collection<ComputedStatistics> computedStatistics)
+    default Optional<ConnectorOutputMetadata> finishUpdateAsInsert(Session session, UpdateTableHandle tableHandle, Collection<Slice> fragments, Collection<ComputedStatistics> computedStatistics)
     {
         throw new PrestoException(NOT_SUPPORTED, "update not supported yet for this connector!!");
     }
@@ -313,6 +328,7 @@ public interface Metadata
 
     /**
      * Begin update query
+     *
      * @return
      */
     default VacuumTableHandle beginVacuum(Session session, TableHandle tableHandle, boolean full, boolean merge, Optional<String> partition)
@@ -380,10 +396,10 @@ public interface Metadata
     Optional<ConstraintApplicationResult<TableHandle>> applyFilter(Session session, TableHandle table, Constraint constraint);
 
     default Optional<ConstraintApplicationResult<TableHandle>> applyFilter(Session session, TableHandle table,
-                                                                           Constraint constraint,
-                                                                           List<Constraint> disjunctConstraints,
-                                                                           Set<ColumnHandle> allColumnHandles,
-                                                                           boolean pushPartitionsOnly)
+            Constraint constraint,
+            List<Constraint> disjunctConstraints,
+            Set<ColumnHandle> allColumnHandles,
+            boolean pushPartitionsOnly)
     {
         return applyFilter(session, table, constraint);
     }
@@ -463,60 +479,20 @@ public interface Metadata
 
     Type getType(TypeSignature signature);
 
-    default Type getParameterizedType(String baseTypeName, List<TypeSignatureParameter> typeParameters)
-    {
-        return getType(new TypeSignature(baseTypeName, typeParameters));
-    }
-
-    Collection<Type> getTypes();
-
-    Collection<ParametricType> getParametricTypes();
-
     void verifyComparableOrderableContract();
 
-    //
-    // Functions
-    //
+    List<SqlFunction> listFunctions(Optional<Session> session);
 
-    void addFunctions(List<? extends SqlFunction> functions);
-
-    List<SqlFunction> listFunctions();
-
-    FunctionInvokerProvider getFunctionInvokerProvider();
-
-    Signature resolveFunction(QualifiedName name, List<TypeSignatureProvider> parameterTypes);
-
-    Signature resolveOperator(OperatorType operatorType, List<? extends Type> argumentTypes)
-            throws OperatorNotFoundException;
-
-    Signature getCoercion(TypeSignature fromType, TypeSignature toType);
-
-    /**
-     * Is the named function an aggregation function?  This does not need type parameters
-     * because overloads between aggregation and other function types are not allowed.
-     */
-    boolean isAggregationFunction(QualifiedName name);
+    List<SqlFunction> listFunctionsWithoutFilterOut(Optional<Session> session);
 
     default LongSupplier getTableLastModifiedTimeSupplier(Session session, TableHandle tableHandle)
     {
         return null;
     }
 
-    WindowFunctionSupplier getWindowFunctionImplementation(Signature signature);
-
-    InternalAggregationFunction getAggregateFunctionImplementation(Signature signature);
-
-    ScalarFunctionImplementation getScalarFunctionImplementation(Signature signature);
+    FunctionAndTypeManager getFunctionAndTypeManager();
 
     ProcedureRegistry getProcedureRegistry();
-
-    //
-    // Blocks
-    //
-
-    BlockEncoding getBlockEncoding(String encodingName);
-
-    BlockEncodingSerde getBlockEncodingSerde();
 
     //
     // Properties
@@ -550,12 +526,51 @@ public interface Metadata
     boolean isHeuristicIndexSupported(Session session, QualifiedObjectName tableName);
 
     /**
+     * Whether this table can be used as input for snapshot-enabled query executions
+     *
+     * @param session Presto session
+     * @param table Connector specific table handle
+     */
+    boolean isSnapshotSupportedAsInput(Session session, TableHandle table);
+
+    /**
+     * Whether this table can be used as output for snapshot-enabled query executions
+     *
+     * @param session Presto session
+     * @param table Connector specific table handle
+     */
+    boolean isSnapshotSupportedAsOutput(Session session, TableHandle table);
+
+    /**
+     * Whether new table with specified format can be used as output for snapshot-enabled
+     *
+     * @param session Presto session
+     * @param catalogName Catalog name
+     * @param tableProperties Table properties
+     */
+    boolean isSnapshotSupportedAsNewTable(Session session, CatalogName catalogName, Map<String, Object> tableProperties);
+
+    /**
+     * Snapshot: Remove any previous changes from previous execution attempt, to prepare for query resume
+     */
+    void resetInsertForRerun(Session session, InsertTableHandle tableHandle, OptionalLong snapshotIndex);
+
+    /**
+     * Snapshot: Remove any previous changes from previous execution attempt, to prepare for query resume
+     */
+    void resetCreateForRerun(Session session, OutputTableHandle tableHandle, OptionalLong snapshotIndex);
+
+    /**
      * Cube pre-aggregation is applicable only for supported connectors.
      *
      * @param session Hetu session
      * @param catalogName catalog name
      * @return true, if underlying connector supports pre-aggregation
-     *         false, otherwise
+     * false, otherwise
      */
     boolean isPreAggregationSupported(Session session, CatalogName catalogName);
+
+    PartialAndFinalAggregationType validateAndGetSortAggregationType(Session session, TableHandle tableHandle, List<String> keyNames);
+
+    void refreshMetadataCache(Session session, Optional<String> catalogName);
 }

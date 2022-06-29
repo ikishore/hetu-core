@@ -18,14 +18,19 @@ import io.prestosql.operator.DriverContext;
 import io.prestosql.operator.Operator;
 import io.prestosql.operator.OperatorContext;
 import io.prestosql.operator.OperatorFactory;
+import io.prestosql.operator.SinkOperator;
 import io.prestosql.spi.Page;
 import io.prestosql.spi.plan.PlanNodeId;
+import io.prestosql.spi.snapshot.MarkerPage;
+import io.prestosql.spi.snapshot.RestorableConfig;
 
 import static com.google.common.base.Preconditions.checkState;
 import static java.util.Objects.requireNonNull;
 
+//TODO-cp-I38S9O: Operator currently not supported for Snapshot
+@RestorableConfig(unsupported = true)
 public class PageBufferOperator
-        implements Operator
+        implements SinkOperator
 {
     public static class PageBufferOperatorFactory
             implements OperatorFactory
@@ -44,8 +49,8 @@ public class PageBufferOperator
         @Override
         public Operator createOperator(DriverContext driverContext)
         {
-            OperatorContext operatorContext = driverContext.addOperatorContext(operatorId, planNodeId, PageBufferOperator.class.getSimpleName());
-            return new PageBufferOperator(operatorContext, pageBuffer);
+            OperatorContext tmpOperatorContext = driverContext.addOperatorContext(operatorId, planNodeId, PageBufferOperator.class.getSimpleName());
+            return new PageBufferOperator(tmpOperatorContext, pageBuffer);
         }
 
         @Override
@@ -116,16 +121,16 @@ public class PageBufferOperator
     {
         requireNonNull(page, "page is null");
         checkState(blocked == NOT_BLOCKED, "output is already blocked");
+
+        //TODO-cp-I38S9O: Operator currently not supported for Snapshot
+        if (page instanceof MarkerPage) {
+            throw new UnsupportedOperationException("Operator doesn't support snapshotting.");
+        }
+
         ListenableFuture<?> future = pageBuffer.add(page);
         if (!future.isDone()) {
             this.blocked = future;
         }
         operatorContext.recordOutput(page.getSizeInBytes(), page.getPositionCount());
-    }
-
-    @Override
-    public Page getOutput()
-    {
-        return null;
     }
 }

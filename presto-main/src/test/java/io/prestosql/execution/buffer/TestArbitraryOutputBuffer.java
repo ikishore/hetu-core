@@ -14,56 +14,75 @@
 package io.prestosql.execution.buffer;
 
 import com.google.common.collect.ImmutableList;
+import com.google.common.collect.Sets;
 import com.google.common.util.concurrent.ListenableFuture;
 import io.airlift.units.DataSize;
 import io.airlift.units.Duration;
+import io.hetu.core.transport.execution.buffer.SerializedPage;
 import io.prestosql.execution.StateMachine;
 import io.prestosql.execution.buffer.OutputBuffers.OutputBufferId;
 import io.prestosql.memory.context.SimpleLocalMemoryContext;
+import io.prestosql.operator.TaskContext;
+import io.prestosql.snapshot.MultiInputRestorable;
 import io.prestosql.spi.Page;
+import io.prestosql.spi.snapshot.MarkerPage;
+import io.prestosql.spi.snapshot.SnapshotTestUtil;
 import io.prestosql.spi.type.BigintType;
 import org.testng.annotations.AfterClass;
 import org.testng.annotations.BeforeClass;
+import org.testng.annotations.DataProvider;
 import org.testng.annotations.Test;
 
 import java.util.ArrayList;
+import java.util.Arrays;
+import java.util.Collections;
+import java.util.HashMap;
 import java.util.List;
+import java.util.Map;
+import java.util.Optional;
+import java.util.Set;
 import java.util.concurrent.ScheduledExecutorService;
+import java.util.stream.Collectors;
 
 import static io.airlift.concurrent.Threads.daemonThreadsNamed;
 import static io.airlift.units.DataSize.Unit.BYTE;
+import static io.prestosql.SessionTestUtils.TEST_SNAPSHOT_SESSION;
 import static io.prestosql.execution.buffer.BufferResult.emptyResults;
 import static io.prestosql.execution.buffer.BufferState.OPEN;
 import static io.prestosql.execution.buffer.BufferState.TERMINAL_BUFFER_STATES;
 import static io.prestosql.execution.buffer.BufferTestUtils.MAX_WAIT;
 import static io.prestosql.execution.buffer.BufferTestUtils.NO_WAIT;
-import static io.prestosql.execution.buffer.BufferTestUtils.PAGES_SERDE;
 import static io.prestosql.execution.buffer.BufferTestUtils.acknowledgeBufferResult;
+import static io.prestosql.execution.buffer.BufferTestUtils.addPage;
 import static io.prestosql.execution.buffer.BufferTestUtils.assertBufferResultEquals;
 import static io.prestosql.execution.buffer.BufferTestUtils.assertFinished;
 import static io.prestosql.execution.buffer.BufferTestUtils.assertFutureIsDone;
 import static io.prestosql.execution.buffer.BufferTestUtils.createBufferResult;
 import static io.prestosql.execution.buffer.BufferTestUtils.createPage;
+import static io.prestosql.execution.buffer.BufferTestUtils.enqueuePage;
 import static io.prestosql.execution.buffer.BufferTestUtils.getFuture;
 import static io.prestosql.execution.buffer.BufferTestUtils.sizeOfPages;
 import static io.prestosql.execution.buffer.OutputBuffers.BROADCAST_PARTITION_ID;
 import static io.prestosql.execution.buffer.OutputBuffers.BufferType.ARBITRARY;
+import static io.prestosql.execution.buffer.OutputBuffers.BufferType.BROADCAST;
+import static io.prestosql.execution.buffer.OutputBuffers.BufferType.PARTITIONED;
 import static io.prestosql.execution.buffer.OutputBuffers.createInitialEmptyOutputBuffers;
 import static io.prestosql.memory.context.AggregatedMemoryContext.newSimpleAggregatedMemoryContext;
 import static io.prestosql.spi.type.BigintType.BIGINT;
+import static io.prestosql.testing.TestingTaskContext.createTaskContext;
 import static java.util.concurrent.Executors.newScheduledThreadPool;
 import static org.testng.Assert.assertEquals;
 import static org.testng.Assert.assertFalse;
+import static org.testng.Assert.assertNotNull;
 import static org.testng.Assert.assertTrue;
 import static org.testng.Assert.fail;
 
 public class TestArbitraryOutputBuffer
 {
-    private static final String TASK_INSTANCE_ID = "task-instance-id";
-
     private static final ImmutableList<BigintType> TYPES = ImmutableList.of(BIGINT);
     private static final OutputBufferId FIRST = new OutputBufferId(0);
     private static final OutputBufferId SECOND = new OutputBufferId(1);
+    private static final OutputBufferId THIRD = new OutputBufferId(2);
 
     private ScheduledExecutorService stateNotificationExecutor;
 
@@ -110,7 +129,7 @@ public class TestArbitraryOutputBuffer
             addPage(buffer, createPage(i));
         }
 
-        outputBuffers = createInitialEmptyOutputBuffers(ARBITRARY).withBuffer(FIRST, BROADCAST_PARTITION_ID);
+        outputBuffers = outputBuffers.withBuffer(FIRST, BROADCAST_PARTITION_ID);
 
         // add a queue
         buffer.setOutputBuffers(outputBuffers);
@@ -206,7 +225,7 @@ public class TestArbitraryOutputBuffer
         assertFalse(buffer.isFinished());
 
         // acknowledge the pages from the first buffer; buffer should not close automatically
-        assertBufferResultEquals(TYPES, getBufferResult(buffer, FIRST, 6, sizeOfPages(10), NO_WAIT), emptyResults(TASK_INSTANCE_ID, 6, true));
+        assertBufferResultEquals(TYPES, getBufferResult(buffer, FIRST, 6, sizeOfPages(10), NO_WAIT), emptyResults(6, true));
         assertQueueState(buffer, 0, FIRST, 0, 6);
         assertQueueState(buffer, 0, SECOND, 1, 10);
         assertFalse(buffer.isFinished());
@@ -218,7 +237,7 @@ public class TestArbitraryOutputBuffer
         assertFalse(buffer.isFinished());
 
         // acknowledge a page from the second queue; queue should not close automatically
-        assertBufferResultEquals(TYPES, getBufferResult(buffer, SECOND, 11, sizeOfPages(1), NO_WAIT), emptyResults(TASK_INSTANCE_ID, 11, true));
+        assertBufferResultEquals(TYPES, getBufferResult(buffer, SECOND, 11, sizeOfPages(1), NO_WAIT), emptyResults(11, true));
         assertQueueState(buffer, 0, SECOND, 0, 11);
         assertFalse(buffer.isFinished());
 
@@ -228,8 +247,118 @@ public class TestArbitraryOutputBuffer
         assertQueueClosed(buffer, 0, SECOND, 11);
         assertFinished(buffer);
 
-        assertBufferResultEquals(TYPES, getBufferResult(buffer, FIRST, 6, sizeOfPages(10), NO_WAIT), emptyResults(TASK_INSTANCE_ID, 6, true));
-        assertBufferResultEquals(TYPES, getBufferResult(buffer, SECOND, 11, sizeOfPages(10), NO_WAIT), emptyResults(TASK_INSTANCE_ID, 11, true));
+        assertBufferResultEquals(TYPES, getBufferResult(buffer, FIRST, 6, sizeOfPages(10), NO_WAIT), emptyResults(6, true));
+        assertBufferResultEquals(TYPES, getBufferResult(buffer, SECOND, 11, sizeOfPages(10), NO_WAIT), emptyResults(11, true));
+    }
+
+    @Test
+    public void testSnapshot()
+    {
+        OutputBuffers outputBuffers = createInitialEmptyOutputBuffers(ARBITRARY);
+        ArbitraryOutputBuffer buffer = createArbitraryBuffer(outputBuffers, sizeOfPages(10));
+
+        // add three items
+        for (int i = 0; i < 3; i++) {
+            addPage(buffer, createPage(i));
+        }
+
+        outputBuffers = outputBuffers.withBuffer(FIRST, BROADCAST_PARTITION_ID);
+
+        // add a queue
+        buffer.setOutputBuffers(outputBuffers);
+        assertQueueState(buffer, 3, FIRST, 0, 0);
+
+        //Capture and Compare with expected
+        Object snapshot = buffer.capture(null);
+        Map<String, Object> actual = SnapshotTestUtil.toSimpleSnapshotMapping(snapshot);
+        assertEquals(actual, createExpectedMapping());
+
+        addPage(buffer, createPage(3));
+
+        //Restore then Capture again to Compare with expected
+        buffer.restore(snapshot, null);
+        snapshot = buffer.capture(null);
+        actual = SnapshotTestUtil.toSimpleSnapshotMapping(snapshot);
+
+        assertEquals(actual, createExpectedMapping());
+    }
+
+    private Map<String, Object> createExpectedMapping()
+    {
+        Map<String, Object> expectedMapping = new HashMap<>();
+        expectedMapping.put("totalPagesAdded", 3L);
+        expectedMapping.put("totalRowsAdded", 3L);
+        return expectedMapping;
+    }
+
+    @Test
+    public void testMarkers()
+    {
+        OutputBuffers outputBuffers = createInitialEmptyOutputBuffers(ARBITRARY)
+                .withBuffer(FIRST, BROADCAST_PARTITION_ID)
+                .withBuffer(SECOND, BROADCAST_PARTITION_ID);
+        ArbitraryOutputBuffer buffer = createArbitraryBuffer(outputBuffers, sizeOfPages(5));
+
+        ScheduledExecutorService scheduler = newScheduledThreadPool(4, daemonThreadsNamed("test-%s"));
+        ScheduledExecutorService scheduledExecutor = newScheduledThreadPool(2, daemonThreadsNamed("test-scheduledExecutor-%s"));
+        TaskContext taskContext = createTaskContext(scheduler, scheduledExecutor, TEST_SNAPSHOT_SESSION);
+        buffer.setTaskContext(taskContext);
+        buffer.addInputChannel("id");
+        buffer.setNoMoreInputChannels();
+
+        MarkerPage marker1 = MarkerPage.snapshotPage(1);
+        MarkerPage marker2 = MarkerPage.snapshotPage(2);
+
+        // add one item
+        addPage(buffer, createPage(0));
+        // broadcast 2 pages
+        addPage(buffer, marker1, true);
+        addPage(buffer, marker2, true);
+        // target clients: ?, 1, 2, 1, 2
+
+        // first client gets all 3 elements
+        assertBufferResultEquals(TYPES, getBufferResult(buffer, FIRST, 0, sizeOfPages(3), NO_WAIT),
+                bufferResult(0, createPage(0), marker1, marker2));
+        assertEquals(buffer.getInfo().getBuffers().stream().map(BufferInfo::getBufferedPages).collect(Collectors.toList()), Arrays.asList(3, 0));
+        assertEquals(buffer.getInfo().getBuffers().stream().map(BufferInfo::getPagesSent).collect(Collectors.toList()), Arrays.asList(0L, 0L));
+        // acknowledge
+        buffer.get(FIRST, 3, sizeOfPages(1)).cancel(true);
+        assertQueueState(buffer, 2, FIRST, 0, 3);
+        assertEquals(buffer.getInfo().getBuffers().stream().map(BufferInfo::getBufferedPages).collect(Collectors.toList()), Arrays.asList(0, 0));
+        assertEquals(buffer.getInfo().getBuffers().stream().map(BufferInfo::getPagesSent).collect(Collectors.toList()), Arrays.asList(3L, 0L));
+
+        // second client gets 2 elements
+        assertBufferResultEquals(TYPES, getBufferResult(buffer, SECOND, 0, sizeOfPages(3), NO_WAIT),
+                bufferResult(0, marker1, marker2));
+        assertEquals(buffer.getInfo().getBuffers().stream().map(BufferInfo::getBufferedPages).collect(Collectors.toList()), Arrays.asList(0, 2));
+        assertEquals(buffer.getInfo().getBuffers().stream().map(BufferInfo::getPagesSent).collect(Collectors.toList()), Arrays.asList(3L, 0L));
+        // acknowledge
+        buffer.get(SECOND, 2, sizeOfPages(1)).cancel(true);
+        assertEquals(buffer.getInfo().getBuffers().stream().map(BufferInfo::getBufferedPages).collect(Collectors.toList()), Arrays.asList(0, 0));
+        assertEquals(buffer.getInfo().getBuffers().stream().map(BufferInfo::getPagesSent).collect(Collectors.toList()), Arrays.asList(3L, 2L));
+
+        // New buffer receives pending markers
+        OutputBuffers outputBuffers1 = outputBuffers.withBuffer(THIRD, BROADCAST_PARTITION_ID);
+        assertNotNull(outputBuffers1);
+        buffer.setOutputBuffers(outputBuffers);
+        assertBufferResultEquals(TYPES, getBufferResult(buffer, THIRD, 0, sizeOfPages(3), NO_WAIT),
+                bufferResult(0, marker1, marker2));
+        assertEquals(buffer.getInfo().getBuffers().stream().map(BufferInfo::getBufferedPages).collect(Collectors.toList()), Arrays.asList(0, 0, 2));
+        assertEquals(buffer.getInfo().getBuffers().stream().map(BufferInfo::getPagesSent).collect(Collectors.toList()), Arrays.asList(3L, 2L, 0L));
+        // acknowledge
+        buffer.get(THIRD, 2, sizeOfPages(1)).cancel(true);
+        assertEquals(buffer.getInfo().getBuffers().stream().map(BufferInfo::getBufferedPages).collect(Collectors.toList()), Arrays.asList(0, 0, 0));
+        assertEquals(buffer.getInfo().getBuffers().stream().map(BufferInfo::getPagesSent).collect(Collectors.toList()), Arrays.asList(3L, 2L, 2L));
+
+        // finish
+        buffer.setNoMorePages();
+        buffer.abort(FIRST);
+        buffer.abort(SECOND);
+        buffer.abort(THIRD);
+        assertQueueClosed(buffer, 0, FIRST, 3);
+        assertQueueClosed(buffer, 0, SECOND, 2);
+        assertQueueClosed(buffer, 0, THIRD, 2);
+        assertFinished(buffer);
     }
 
     // TODO: remove this after PR is landed: https://github.com/prestodb/presto/pull/7987
@@ -323,7 +452,7 @@ public class TestArbitraryOutputBuffer
         buffer.get(FIRST, 3, sizeOfPages(10)).cancel(true);
 
         // attempt to get the three elements again
-        assertBufferResultEquals(TYPES, getBufferResult(buffer, FIRST, 0, sizeOfPages(10), NO_WAIT), emptyResults(TASK_INSTANCE_ID, 0, false));
+        assertBufferResultEquals(TYPES, getBufferResult(buffer, FIRST, 0, sizeOfPages(10), NO_WAIT), emptyResults(0, false));
         // pages are acknowledged
         assertQueueState(buffer, 0, FIRST, 0, 3);
     }
@@ -450,15 +579,15 @@ public class TestArbitraryOutputBuffer
 
         // abort that buffer, and verify the future is finishd
         buffer.abort(FIRST);
-        assertBufferResultEquals(TYPES, getFuture(future, NO_WAIT), emptyResults(TASK_INSTANCE_ID, 0, false));
-        assertBufferResultEquals(TYPES, getBufferResult(buffer, FIRST, 0, sizeOfPages(10), NO_WAIT), emptyResults(TASK_INSTANCE_ID, 0, true));
+        assertBufferResultEquals(TYPES, getFuture(future, NO_WAIT), emptyResults(0, false));
+        assertBufferResultEquals(TYPES, getBufferResult(buffer, FIRST, 0, sizeOfPages(10), NO_WAIT), emptyResults(0, true));
 
         // add a page and verify the future is not complete
         addPage(buffer, createPage(33));
 
         // add the buffer and verify we did not get the page
         buffer.setOutputBuffers(createInitialEmptyOutputBuffers(ARBITRARY).withBuffer(FIRST, 0));
-        assertBufferResultEquals(TYPES, getBufferResult(buffer, FIRST, 0, sizeOfPages(10), NO_WAIT), emptyResults(TASK_INSTANCE_ID, 0, true));
+        assertBufferResultEquals(TYPES, getBufferResult(buffer, FIRST, 0, sizeOfPages(10), NO_WAIT), emptyResults(0, true));
     }
 
     @Test
@@ -500,7 +629,7 @@ public class TestArbitraryOutputBuffer
         // abort buffer, and verify page cannot be acknowledged
         buffer.abort(FIRST);
         assertQueueClosed(buffer, 9, FIRST, 0);
-        assertBufferResultEquals(TYPES, getBufferResult(buffer, FIRST, 1, sizeOfPages(1), NO_WAIT), emptyResults(TASK_INSTANCE_ID, 0, true));
+        assertBufferResultEquals(TYPES, getBufferResult(buffer, FIRST, 1, sizeOfPages(1), NO_WAIT), emptyResults(0, true));
 
         outputBuffers = outputBuffers.withBuffer(SECOND, 0).withNoMoreBufferIds();
         buffer.setOutputBuffers(outputBuffers);
@@ -510,7 +639,7 @@ public class TestArbitraryOutputBuffer
         buffer.abort(SECOND);
         assertQueueClosed(buffer, 0, SECOND, 0);
         assertFinished(buffer);
-        assertBufferResultEquals(TYPES, getBufferResult(buffer, SECOND, 1, sizeOfPages(1), NO_WAIT), emptyResults(TASK_INSTANCE_ID, 0, true));
+        assertBufferResultEquals(TYPES, getBufferResult(buffer, SECOND, 1, sizeOfPages(1), NO_WAIT), emptyResults(0, true));
     }
 
     @Test
@@ -564,7 +693,7 @@ public class TestArbitraryOutputBuffer
         assertQueueClosed(buffer, 0, FIRST, 1);
 
         // verify the future completed
-        assertBufferResultEquals(TYPES, getFuture(future, NO_WAIT), emptyResults(TASK_INSTANCE_ID, 1, false));
+        assertBufferResultEquals(TYPES, getFuture(future, NO_WAIT), emptyResults(1, false));
     }
 
     @Test
@@ -596,7 +725,7 @@ public class TestArbitraryOutputBuffer
         assertQueueClosed(buffer, 0, FIRST, 1);
 
         // verify the future completed
-        assertBufferResultEquals(TYPES, getFuture(future, NO_WAIT), emptyResults(TASK_INSTANCE_ID, 1, false));
+        assertBufferResultEquals(TYPES, getFuture(future, NO_WAIT), emptyResults(1, false));
     }
 
     @Test
@@ -636,7 +765,7 @@ public class TestArbitraryOutputBuffer
         // get and acknowledge the last 5 pages
         assertBufferResultEquals(TYPES, getBufferResult(buffer, FIRST, 1, sizeOfPages(100), NO_WAIT),
                 bufferResult(1, createPage(1), createPage(2), createPage(3), createPage(4), createPage(5), createPage(6)));
-        assertBufferResultEquals(TYPES, getBufferResult(buffer, FIRST, 7, sizeOfPages(100), NO_WAIT), emptyResults(TASK_INSTANCE_ID, 7, true));
+        assertBufferResultEquals(TYPES, getBufferResult(buffer, FIRST, 7, sizeOfPages(100), NO_WAIT), emptyResults(7, true));
 
         // verify not finished
         assertFalse(buffer.isFinished());
@@ -678,7 +807,7 @@ public class TestArbitraryOutputBuffer
         assertQueueClosed(buffer, 0, FIRST, 1);
 
         // verify the future completed
-        assertBufferResultEquals(TYPES, getFuture(future, NO_WAIT), emptyResults(TASK_INSTANCE_ID, 1, false));
+        assertBufferResultEquals(TYPES, getFuture(future, NO_WAIT), emptyResults(1, false));
     }
 
     @Test
@@ -854,7 +983,7 @@ public class TestArbitraryOutputBuffer
         buffer.setNoMorePages();
 
         // get and acknowledge 5 pages
-        assertBufferResultEquals(TYPES, getBufferResult(buffer, FIRST, 0, sizeOfPages(5), MAX_WAIT), createBufferResult(TASK_INSTANCE_ID, 0, pages));
+        assertBufferResultEquals(TYPES, getBufferResult(buffer, FIRST, 0, sizeOfPages(5), MAX_WAIT), createBufferResult(0, pages));
 
         // buffer is not finished
         assertFalse(buffer.isFinished());
@@ -908,7 +1037,7 @@ public class TestArbitraryOutputBuffer
 
         // read remaining pages from the first buffer and acknowledge
         assertBufferResultEquals(TYPES, getBufferResult(buffer, FIRST, 1, sizeOfPages(10), NO_WAIT), bufferResult(1, createPage(1), createPage(2)));
-        assertBufferResultEquals(TYPES, getBufferResult(buffer, FIRST, 3, sizeOfPages(1), NO_WAIT), emptyResults(TASK_INSTANCE_ID, 3, true));
+        assertBufferResultEquals(TYPES, getBufferResult(buffer, FIRST, 3, sizeOfPages(1), NO_WAIT), emptyResults(3, true));
         assertFalse(buffer.isFinished());
 
         // finish first queue
@@ -921,7 +1050,7 @@ public class TestArbitraryOutputBuffer
         buffer.setOutputBuffers(outputBuffers);
 
         // verify second buffer has no results
-        assertBufferResultEquals(TYPES, getBufferResult(buffer, SECOND, 0, sizeOfPages(1), NO_WAIT), emptyResults(TASK_INSTANCE_ID, 0, true));
+        assertBufferResultEquals(TYPES, getBufferResult(buffer, SECOND, 0, sizeOfPages(1), NO_WAIT), emptyResults(0, true));
     }
 
     @Test
@@ -945,20 +1074,6 @@ public class TestArbitraryOutputBuffer
     {
         ListenableFuture<BufferResult> future = buffer.get(bufferId, sequenceId, maxSize);
         return getFuture(future, maxWait);
-    }
-
-    private static ListenableFuture<?> enqueuePage(OutputBuffer buffer, Page page)
-    {
-        buffer.enqueue(ImmutableList.of(PAGES_SERDE.serialize(page)));
-        ListenableFuture<?> future = buffer.isFull();
-        assertFalse(future.isDone());
-        return future;
-    }
-
-    private static void addPage(OutputBuffer buffer, Page page)
-    {
-        buffer.enqueue(ImmutableList.of(PAGES_SERDE.serialize(page)));
-        assertTrue(buffer.isFull().isDone(), "Expected add page to not block");
     }
 
     private static void assertQueueState(
@@ -1021,7 +1136,6 @@ public class TestArbitraryOutputBuffer
     private ArbitraryOutputBuffer createArbitraryBuffer(OutputBuffers buffers, DataSize dataSize)
     {
         ArbitraryOutputBuffer buffer = new ArbitraryOutputBuffer(
-                TASK_INSTANCE_ID,
                 new StateMachine<>("bufferState", stateNotificationExecutor, OPEN, TERMINAL_BUFFER_STATES),
                 dataSize,
                 () -> new SimpleLocalMemoryContext(newSimpleAggregatedMemoryContext(), "test"),
@@ -1033,6 +1147,116 @@ public class TestArbitraryOutputBuffer
     private static BufferResult bufferResult(long token, Page firstPage, Page... otherPages)
     {
         List<Page> pages = ImmutableList.<Page>builder().add(firstPage).add(otherPages).build();
-        return createBufferResult(TASK_INSTANCE_ID, token, pages);
+        return createBufferResult(token, pages);
+    }
+
+    // The following tests apply equally to all 3 types of output buffers, so only specify them here once
+
+    @DataProvider
+    public static Object[][] bufferTypes()
+    {
+        return new Object[][] {{ARBITRARY}, {BROADCAST}, {PARTITIONED}};
+    }
+
+    @Test(expectedExceptions = IllegalArgumentException.class, dataProvider = "bufferTypes")
+    public void testSetNullTaskContext(OutputBuffers.BufferType bufferType)
+    {
+        OutputBuffer buffer = createOutputBuffer(bufferType);
+        buffer.setTaskContext(null);
+    }
+
+    @Test(expectedExceptions = IllegalStateException.class, dataProvider = "bufferTypes")
+    public void testSetMultipleTaskContext(OutputBuffers.BufferType bufferType)
+    {
+        OutputBuffer buffer = createOutputBuffer(bufferType);
+        TaskContext taskContext = BufferTestUtils.newTestingTaskContext();
+        buffer.setTaskContext(taskContext);
+        buffer.setTaskContext(taskContext);
+    }
+
+    @Test(expectedExceptions = IllegalStateException.class, dataProvider = "bufferTypes")
+    public void testSetMultipleNoMoreInputChannels(OutputBuffers.BufferType bufferType)
+    {
+        OutputBuffer buffer = createOutputBuffer(bufferType);
+        buffer.addInputChannel("1");
+        buffer.setNoMoreInputChannels();
+        buffer.addInputChannel("2");
+        buffer.setNoMoreInputChannels();
+    }
+
+    @Test(dataProvider = "bufferTypes")
+    public void testGetInputChannels(OutputBuffers.BufferType bufferType)
+    {
+        OutputBuffer buffer = createOutputBuffer(bufferType);
+
+        buffer.addInputChannel("1");
+        Optional<Set<String>> inputChannels = ((MultiInputRestorable) buffer).getInputChannels();
+        assertFalse(inputChannels.isPresent());
+
+        buffer.addInputChannel("2");
+        buffer.setNoMoreInputChannels();
+        inputChannels = ((MultiInputRestorable) buffer).getInputChannels();
+        assertTrue(inputChannels.isPresent());
+        assertEquals(inputChannels.get(), Sets.newHashSet("1", "2"));
+    }
+
+    @Test(dataProvider = "bufferTypes")
+    public void testSnapshotState(OutputBuffers.BufferType bufferType)
+    {
+        OutputBuffer buffer = createOutputBuffer(bufferType);
+        TaskContext taskContext = BufferTestUtils.newTestingTaskContext();
+        buffer.setTaskContext(taskContext);
+
+        buffer.addInputChannel("1");
+        buffer.addInputChannel("2");
+        buffer.setNoMoreInputChannels();
+        MarkerPage markerPage = MarkerPage.snapshotPage(1);
+        SerializedPage marker = SerializedPage.forMarker(markerPage);
+
+        buffer.enqueue(Collections.singletonList(marker), "1");
+        List<SerializedPage> pages = getBufferResult(buffer, FIRST, 0, sizeOfPages(3), NO_WAIT).getSerializedPages();
+        assertEquals(pages.size(), 1);
+        assertTrue(pages.get(0).isMarkerPage());
+        // Acknowledge
+        buffer.get(FIRST, 1, sizeOfPages(1)).cancel(true);
+
+        buffer.enqueue(Collections.singletonList(marker), "2");
+        pages = getBufferResult(buffer, FIRST, 0, sizeOfPages(3), NO_WAIT).getSerializedPages();
+        assertEquals(pages.size(), 0);
+    }
+
+    private OutputBuffer createOutputBuffer(OutputBuffers.BufferType bufferType)
+    {
+        OutputBuffers buffers = createInitialEmptyOutputBuffers(bufferType).withBuffer(FIRST, BROADCAST_PARTITION_ID).withNoMoreBufferIds();
+        OutputBuffer buffer;
+        switch (bufferType) {
+            case ARBITRARY:
+                buffer = new ArbitraryOutputBuffer(
+                        new StateMachine<>("bufferState", stateNotificationExecutor, OPEN, TERMINAL_BUFFER_STATES),
+                        sizeOfPages(5),
+                        () -> new SimpleLocalMemoryContext(newSimpleAggregatedMemoryContext(), "test"),
+                        stateNotificationExecutor);
+                buffer.setOutputBuffers(buffers);
+                break;
+            case BROADCAST:
+                buffer = new BroadcastOutputBuffer(
+                        new StateMachine<>("bufferState", stateNotificationExecutor, OPEN, TERMINAL_BUFFER_STATES),
+                        sizeOfPages(5),
+                        () -> new SimpleLocalMemoryContext(newSimpleAggregatedMemoryContext(), "test"),
+                        stateNotificationExecutor);
+                buffer.setOutputBuffers(buffers);
+                break;
+            case PARTITIONED:
+                buffer = new PartitionedOutputBuffer(
+                        new StateMachine<>("bufferState", stateNotificationExecutor, OPEN, TERMINAL_BUFFER_STATES),
+                        buffers,
+                        sizeOfPages(5),
+                        () -> new SimpleLocalMemoryContext(newSimpleAggregatedMemoryContext(), "test"),
+                        stateNotificationExecutor);
+                break;
+            default:
+                throw new RuntimeException("Unexpected bufferType: " + bufferType);
+        }
+        return buffer;
     }
 }

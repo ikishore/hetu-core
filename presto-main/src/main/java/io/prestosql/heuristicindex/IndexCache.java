@@ -1,5 +1,5 @@
 /*
- * Copyright (C) 2018-2020. Huawei Technologies Co., Ltd. All rights reserved.
+ * Copyright (C) 2018-2021. Huawei Technologies Co., Ltd. All rights reserved.
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
  * You may obtain a copy of the License at
@@ -21,6 +21,7 @@ import com.google.common.cache.LoadingCache;
 import com.google.common.collect.ImmutableList;
 import com.google.common.util.concurrent.ThreadFactoryBuilder;
 import io.airlift.log.Logger;
+import io.airlift.units.Duration;
 import io.prestosql.metadata.Split;
 import io.prestosql.spi.HetuConstant;
 import io.prestosql.spi.connector.CreateIndexMetadata;
@@ -30,6 +31,7 @@ import io.prestosql.spi.heuristicindex.IndexMetadata;
 import io.prestosql.spi.heuristicindex.IndexNotCreatedException;
 import io.prestosql.spi.heuristicindex.IndexRecord;
 import io.prestosql.spi.service.PropertyService;
+import org.eclipse.jetty.util.URIUtil;
 
 import java.io.IOException;
 import java.net.URI;
@@ -37,11 +39,14 @@ import java.nio.file.Path;
 import java.nio.file.Paths;
 import java.util.ArrayList;
 import java.util.Collections;
+import java.util.HashMap;
 import java.util.LinkedList;
 import java.util.List;
+import java.util.Map;
 import java.util.Set;
 import java.util.concurrent.ExecutionException;
 import java.util.concurrent.Executors;
+import java.util.concurrent.Future;
 import java.util.concurrent.ScheduledExecutorService;
 import java.util.concurrent.ThreadFactory;
 import java.util.concurrent.TimeUnit;
@@ -63,13 +68,24 @@ public class IndexCache
 
     public IndexCache(CacheLoader loader, IndexClient indexClient)
     {
+        this(loader, indexClient, true);
+    }
+
+    /**
+     * during some testing we don't want auto refresh occurring
+     */
+    @VisibleForTesting
+    protected IndexCache(CacheLoader loader, IndexClient indexClient, boolean autoRefreshEnabled)
+    {
         // If the static variables have not been initialized
         if (PropertyService.getBooleanProperty(HetuConstant.FILTER_ENABLED)) {
             loadDelay = PropertyService.getDurationProperty(HetuConstant.FILTER_CACHE_LOADING_DELAY).toMillis();
             // in millisecond
             long refreshRate = Math.max(loadDelay / 2, 5000L);
             int numThreads = Math.min(Runtime.getRuntime().availableProcessors(), PropertyService.getLongProperty(HetuConstant.FILTER_CACHE_LOADING_THREADS).intValue());
-            executor = Executors.newScheduledThreadPool(numThreads, threadFactory);
+            if (executor == null) {
+                executor = Executors.newScheduledThreadPool(numThreads, threadFactory);
+            }
             CacheBuilder<IndexCacheKey, List<IndexMetadata>> cacheBuilder = CacheBuilder.newBuilder()
                     .removalListener(e -> {
                         try {
@@ -97,50 +113,124 @@ public class IndexCache
             if (PropertyService.getBooleanProperty(HetuConstant.FILTER_CACHE_SOFT_REFERENCE)) {
                 cacheBuilder.softValues();
             }
-            executor.scheduleAtFixedRate(() -> {
-                try {
-                    if (cache.size() > 0) {
-                        // only refresh cache is it's not empty
+
+            if (autoRefreshEnabled) {
+                executor.scheduleAtFixedRate(() -> {
+                    // This thread automatically keep the cache updated every 5 secs in the background.
+                    try {
                         List<IndexRecord> newRecords = indexClient.getAllIndexRecords();
-
-                        if (indexRecords != null) {
-                            for (IndexRecord old : indexRecords) {
-                                boolean found = false;
-                                for (IndexRecord now : newRecords) {
-                                    if (now.name.equals(old.name)) {
-                                        found = true;
-                                        if (now.lastModifiedTime != old.lastModifiedTime) {
-                                            // index record has been updated. evict
-                                            evictFromCache(old);
-                                            LOG.debug("Index for {%s} has been evicted from cache because the index has been updated.", old);
-                                        }
-                                    }
-                                }
-                                // old record is gone. evict from cache
-                                if (!found) {
-                                    evictFromCache(old);
-                                    LOG.debug("Index for {%s} has been evicted from cache because the index has been dropped.", old);
-                                }
-                            }
+                        boolean success = autoUpdateCache(newRecords);
+                        if (success) {
+                            LOG.debug("Cache refreshed");
                         }
-
-                        indexRecords = newRecords;
                     }
-                }
-                catch (Exception e) {
-                    LOG.debug(e, "Error using index records to refresh cache");
-                }
-            }, loadDelay, refreshRate, TimeUnit.MILLISECONDS);
+                    catch (Exception e) {
+                        LOG.debug(e, "Error using index records to refresh cache");
+                    }
+                }, loadDelay, refreshRate, TimeUnit.MILLISECONDS);
+            }
+
             cache = cacheBuilder.build(loader);
         }
     }
 
-    public void preloadIndex(String table, String column, String type, CreateIndexMetadata.Level level)
+    // only called on "SHOW INDEX" statement
+    public void readUsage(HashMap<IndexRecord, Long> indexRecordMemoryUse, HashMap<IndexRecord, Long> indexRecordDiskUse)
     {
+        try {
+            for (Map.Entry<IndexCacheKey, List<IndexMetadata>> entry : cache.asMap().entrySet()) {
+                IndexRecord curRecord = entry.getKey().getRecord();
+                if (indexRecordMemoryUse.containsKey(curRecord)) {
+                    for (IndexMetadata indexMetadata : entry.getValue()) {
+                        indexRecordMemoryUse.put(curRecord, indexRecordMemoryUse.get(curRecord) + indexMetadata.getIndex().getMemoryUsage());
+                        indexRecordDiskUse.put(curRecord, indexRecordDiskUse.get(curRecord) + indexMetadata.getIndex().getDiskUsage());
+                    }
+                }
+            }
+        }
+        catch (Exception e) {
+            LOG.debug(e, "Error updating memory or disk usage");
+        }
+    }
+
+    private boolean autoUpdateCache(List<IndexRecord> newRecords)
+    {
+        // Three cases are checked:
+        // 1. if new index record is created, add it to cache
+        // 2. if the index in cache is updated, update the cache
+        // 3. if the index in cache is outdated, evict it from cache
+
+        if (newRecords == null && indexRecords == null) {
+            return false;
+        }
+
+        HashMap<String, Long> oldIndexMap = new HashMap<>();
+        if (indexRecords != null) {
+            for (IndexRecord oldIndexRecord : indexRecords) {
+                oldIndexMap.put(oldIndexRecord.name, oldIndexRecord.lastModifiedTime);
+            }
+        }
+        boolean dropped = false;
+        boolean created = false;
+        boolean updated = false;
+        HashMap<String, Long> newIndexMap = new HashMap<>();
+        if (newRecords != null) {
+            for (IndexRecord newIndexRecord : newRecords) {
+                newIndexMap.put(newIndexRecord.name, newIndexRecord.lastModifiedTime);
+                if (oldIndexMap.containsKey(newIndexRecord.name)) {
+                    if (oldIndexMap.get(newIndexRecord.name) != newIndexRecord.lastModifiedTime) {
+                        // update operation
+                        updated = true;
+                        evictFromCache(newIndexRecord);
+                        if (newIndexRecord.isAutoloadEnabled()) {
+                            LOG.debug("Index %s was updated: reloading to cache...", newIndexRecord.name);
+                            Duration timeElapsed = loadIndexToCache(newIndexRecord);
+                            LOG.debug("Index %s was reloaded to cache. (Time elapsed: %s)", newIndexRecord.name, timeElapsed.toString());
+                        }
+                    }
+                }
+                else {
+                    // create operation
+                    created = true;
+                    if (newIndexRecord.isAutoloadEnabled()) {
+                        LOG.debug("New index %s was created: loading to cache...", newIndexRecord.name);
+                        Duration timeElapsed = loadIndexToCache(newIndexRecord);
+                        LOG.debug("New index %s was loaded to cache. (Time elapsed: %s)", newIndexRecord.name, timeElapsed.toString());
+                    }
+                }
+            }
+        }
+
+        if (indexRecords != null) {
+            for (IndexRecord oldIndexRecord : indexRecords) {
+                if (!newIndexMap.containsKey(oldIndexRecord.name)) {
+                    // drop operation
+                    dropped = true;
+                    evictFromCache(oldIndexRecord);
+                    LOG.debug("Index %s was dropped: evicting from cache.", oldIndexRecord.name);
+                }
+            }
+        }
+        indexRecords = newRecords;
+        return (dropped || created || updated);
+    }
+
+    /**
+     * Loads the provided index record into cache.
+     * This method blocks until the loading is complete.
+     */
+    public Duration loadIndexToCache(IndexRecord record)
+    {
+        long before = System.currentTimeMillis();
+        String table = record.qualifiedTable;
+        String column = String.join(",", record.columns);
+        String type = record.indexType;
+        CreateIndexMetadata.Level level = record.getLevel();
+
         String filterKeyPath = table + "/" + column + "/" + type;
-        IndexCacheKey filterKey = new IndexCacheKey(filterKeyPath, LAST_MODIFIED_TIME_PLACE_HOLDER, level);
+        IndexCacheKey filterKey = new IndexCacheKey(filterKeyPath, LAST_MODIFIED_TIME_PLACE_HOLDER, record, level);
         filterKey.setNoCloseFlag(true);
-        executor.schedule(() -> {
+        Future<?> future = executor.submit(() -> {
             List<IndexMetadata> allLoaded;
             try {
                 // Load index for the whole table with dummy last modified time first
@@ -152,7 +242,7 @@ public class IndexCache
                         // break index key from table/column/type to several table/column/type/split-path
                         for (IndexMetadata index : allLoaded) {
                             String indexUri = index.getUri();
-                            IndexCacheKey newKey = new IndexCacheKey(filterKeyPath + indexUri, index.getLastModifiedTime());
+                            IndexCacheKey newKey = new IndexCacheKey(filterKeyPath + indexUri, index.getLastModifiedTime(), record);
                             cache.asMap().putIfAbsent(newKey, new ArrayList<>());
                             cache.asMap().get(newKey).add(index);
                         }
@@ -164,14 +254,14 @@ public class IndexCache
                             Path indexUri = Paths.get(index.getUri());
                             String partition = null;
                             // get partition name from path if present
-                            for (int i = indexUri.getNameCount() - 1; i >= 0; i--) {
+                            for (int i = 0; i < indexUri.getNameCount(); i++) {
                                 if (indexUri.getName(i).toString().contains("=")) {
                                     partition = indexUri.getName(i).toString();
                                     break;
                                 }
                             }
                             if (partition != null) {
-                                IndexCacheKey newKey = new IndexCacheKey(filterKeyPath + "/" + partition, index.getLastModifiedTime());
+                                IndexCacheKey newKey = new IndexCacheKey(filterKeyPath + "/" + partition, index.getLastModifiedTime(), record);
                                 cache.asMap().putIfAbsent(newKey, new ArrayList<>());
                                 cache.asMap().get(newKey).add(index);
                             }
@@ -179,28 +269,47 @@ public class IndexCache
                         cache.invalidate(filterKey);
                         break;
                     case TABLE:
-                        // no need to break index, and lastModifiedTime is not used for TABLE level. no need to do anything
+                        // no need to break index, and lastModifiedTime is not used for TABLE level, but we need to
+                        // toggle back the noCloseFlag, as it was previously set to true.
+                        filterKey.setNoCloseFlag(false);
+                        break;
                 }
             }
             catch (ExecutionException e) {
                 LOG.debug("Failed to load into cache: " + filterKey, e);
             }
-        }, 0, TimeUnit.MILLISECONDS);
+        });
+        // block until loading is complete
+        try {
+            future.get();
+        }
+        catch (InterruptedException | ExecutionException e) {
+            LOG.debug("Failed to load into cache: " + filterKey, e);
+        }
+        long msElapsed = System.currentTimeMillis() - before;
+        return new Duration(msElapsed, TimeUnit.MILLISECONDS);
     }
 
     public List<IndexMetadata> getIndices(String table, String column, Split split)
+    {
+        return getIndices(table, column, split, Collections.emptyMap());
+    }
+
+    public List<IndexMetadata> getIndices(String table, String column, Split split, Map<String, IndexRecord> indexRecordKeyToRecordMap)
     {
         if (cache == null) {
             return Collections.emptyList();
         }
 
-        URI splitUri = URI.create(split.getConnectorSplit().getFilePath().replaceAll(" ", "%20"));
+        URI splitUri = URI.create(URIUtil.encodePath(split.getConnectorSplit().getFilePath()));
         long lastModifiedTime = split.getConnectorSplit().getLastModifiedTime();
         List<IndexMetadata> indices = new LinkedList<>();
 
         for (String indexType : INDEX_TYPES) {
             String filterKeyPath = table + "/" + column + "/" + indexType + splitUri.getRawPath();
-            IndexCacheKey filterKey = new IndexCacheKey(filterKeyPath, lastModifiedTime);
+            String indexRecordKey = table + "/" + column + "/" + indexType;
+            IndexRecord record = indexRecordKeyToRecordMap.get(indexRecordKey);
+            IndexCacheKey filterKey = new IndexCacheKey(filterKeyPath, lastModifiedTime, record);
             //it is possible to return multiple SplitIndexMetadata due to the range mismatch, especially in the case
             //where the split has a wider range than the original splits used for index creation
             // check if cache contains the key
@@ -225,8 +334,7 @@ public class IndexCache
                     }
                 }, loadDelay, TimeUnit.MILLISECONDS);
             }
-
-            if (indexOfThisType != null) {
+            else {
                 // if key was present in cache, we still need to check if the index is validate based on the lastModifiedTime
                 // the index is only valid if the lastModifiedTime of the split matches the index's lastModifiedTime
                 for (IndexMetadata index : indexOfThisType) {
@@ -243,7 +351,7 @@ public class IndexCache
         return indices;
     }
 
-    public List<IndexMetadata> getIndices(String table, String column, String indexType, Set<String> partitions, long lastModifiedTime)
+    public List<IndexMetadata> getIndices(String table, String column, String indexType, Set<String> partitions, long lastModifiedTime, Map<String, IndexRecord> indexRecordKeyToRecordMap)
     {
         if (cache == null) {
             return Collections.emptyList();
@@ -253,7 +361,8 @@ public class IndexCache
         if (!partitions.isEmpty()) {
             for (String partition : partitions) {
                 String filterKeyPath = table + "/" + column + "/" + indexType + "/" + partition;
-                IndexCacheKey filterKey = new IndexCacheKey(filterKeyPath, lastModifiedTime, CreateIndexMetadata.Level.PARTITION);
+                IndexRecord record = indexRecordKeyToRecordMap.get(filterKeyPath);
+                IndexCacheKey filterKey = new IndexCacheKey(filterKeyPath, lastModifiedTime, record, CreateIndexMetadata.Level.PARTITION);
                 List<IndexMetadata> result = loadIndex(filterKey);
                 if (result != null) {
                     indices.addAll(result);
@@ -267,7 +376,8 @@ public class IndexCache
         }
 
         String filterKeyPath = table + "/" + column + "/" + indexType;
-        IndexCacheKey filterKey = new IndexCacheKey(filterKeyPath, lastModifiedTime, CreateIndexMetadata.Level.TABLE);
+        IndexRecord record = indexRecordKeyToRecordMap.get(filterKeyPath);
+        IndexCacheKey filterKey = new IndexCacheKey(filterKeyPath, lastModifiedTime, record, CreateIndexMetadata.Level.TABLE);
         List<IndexMetadata> result = loadIndex(filterKey);
         if (result != null) {
             indices.addAll(result);

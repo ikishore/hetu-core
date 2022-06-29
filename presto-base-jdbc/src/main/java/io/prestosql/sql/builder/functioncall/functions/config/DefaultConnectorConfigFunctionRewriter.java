@@ -77,10 +77,16 @@ public class DefaultConnectorConfigFunctionRewriter
      * @param functionCallArgsPackage the package of SqlQueryWriter's function call methods args
      * @return result string
      */
+    @Override
     public String rewriteFunctionCall(FunctionCallArgsPackage functionCallArgsPackage)
     {
         String functionPropertyName = propertyNameBuilder.apply(functionCallArgsPackage);
         Optional<String> propertyValue = this.configSupplier.getConfigValue(functionPropertyName);
         return propertyValue.map(s -> resultFunctionStringBuilder.apply(functionCallArgsPackage, s)).orElse(null);
+    }
+
+    public String getConnectorName()
+    {
+        return connectorName;
     }
 }

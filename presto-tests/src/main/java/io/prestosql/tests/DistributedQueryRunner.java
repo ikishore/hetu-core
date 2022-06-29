@@ -30,13 +30,13 @@ import io.prestosql.metadata.Catalog;
 import io.prestosql.metadata.CatalogManager;
 import io.prestosql.metadata.InternalNode;
 import io.prestosql.metadata.Metadata;
-import io.prestosql.metadata.QualifiedObjectName;
 import io.prestosql.metadata.SessionPropertyManager;
 import io.prestosql.server.BasicQueryInfo;
 import io.prestosql.server.testing.TestingPrestoServer;
 import io.prestosql.spi.Plugin;
 import io.prestosql.spi.QueryId;
 import io.prestosql.spi.connector.CatalogName;
+import io.prestosql.spi.connector.QualifiedObjectName;
 import io.prestosql.split.PageSourceManager;
 import io.prestosql.split.SplitManager;
 import io.prestosql.sql.parser.SqlParserOptions;
@@ -60,6 +60,7 @@ import java.util.List;
 import java.util.Map;
 import java.util.Optional;
 import java.util.Set;
+import java.util.UUID;
 import java.util.concurrent.locks.Lock;
 import java.util.concurrent.locks.ReadWriteLock;
 import java.util.concurrent.locks.ReentrantReadWriteLock;
@@ -114,7 +115,7 @@ public class DistributedQueryRunner
     }
 
     public DistributedQueryRunner(
-            Session defaultSession,
+            Session sessionDefault,
             int nodeCount,
             Map<String, String> extraProperties,
             Map<String, String> coordinatorProperties,
@@ -123,7 +124,8 @@ public class DistributedQueryRunner
             Optional<Path> baseDataDir)
             throws Exception
     {
-        requireNonNull(defaultSession, "defaultSession is null");
+        Session newSessionDefault = sessionDefault;
+        requireNonNull(newSessionDefault, "defaultSession is null");
 
         try {
             long start = System.nanoTime();
@@ -131,20 +133,27 @@ public class DistributedQueryRunner
             closer.register(() -> closeUnchecked(discoveryServer));
             log.info("Created TestingDiscoveryServer in %s", nanosSince(start).convertToMostSuccinctTimeUnit());
 
-            ImmutableList.Builder<TestingPrestoServer> servers = ImmutableList.builder();
+            ImmutableList.Builder<TestingPrestoServer> serverBuilder = ImmutableList.builder();
 
             Map<String, String> extraCoordinatorProperties = new HashMap<>();
             extraCoordinatorProperties.putAll(extraProperties);
             extraCoordinatorProperties.putAll(coordinatorProperties);
             coordinator = closer.register(createTestingPrestoServer(discoveryServer.getBaseUrl(), true, extraCoordinatorProperties, parserOptions, environment, baseDataDir));
-            servers.add(coordinator);
+            serverBuilder.add(coordinator);
 
             for (int i = 1; i < nodeCount; i++) {
+                if (!(extraProperties instanceof ImmutableMap)) {
+                    String path = extraProperties.get("experimental.spiller-spill-path");
+                    if (path != null) {
+                        String uuid = UUID.randomUUID().toString();
+                        extraProperties.replace("experimental.spiller-spill-path", path + uuid);
+                    }
+                }
                 TestingPrestoServer worker = closer.register(createTestingPrestoServer(discoveryServer.getBaseUrl(), false, extraProperties, parserOptions, environment, baseDataDir));
-                servers.add(worker);
+                serverBuilder.add(worker);
             }
 
-            this.servers = servers.build();
+            this.servers = serverBuilder.build();
         }
         catch (Exception e) {
             try {
@@ -156,8 +165,8 @@ public class DistributedQueryRunner
         }
 
         // copy session using property manager in coordinator
-        defaultSession = defaultSession.toSessionRepresentation().toSession(coordinator.getMetadata().getSessionPropertyManager(), defaultSession.getIdentity().getExtraCredentials());
-        this.prestoClient = closer.register(new TestingPrestoClient(coordinator, defaultSession));
+        newSessionDefault = newSessionDefault.toSessionRepresentation().toSession(coordinator.getMetadata().getSessionPropertyManager(), newSessionDefault.getIdentity().getExtraCredentials());
+        this.prestoClient = closer.register(new TestingPrestoClient(coordinator, newSessionDefault));
 
         long start = System.nanoTime();
         while (!allNodesGloballyVisible()) {
@@ -168,7 +177,7 @@ public class DistributedQueryRunner
 
         start = System.nanoTime();
         for (TestingPrestoServer server : servers) {
-            server.getMetadata().addFunctions(AbstractTestQueries.CUSTOM_FUNCTIONS);
+            server.getMetadata().getFunctionAndTypeManager().registerBuiltInFunctions(AbstractTestQueries.CUSTOM_FUNCTIONS);
         }
         log.info("Added functions in %s", nanosSince(start).convertToMostSuccinctTimeUnit());
 

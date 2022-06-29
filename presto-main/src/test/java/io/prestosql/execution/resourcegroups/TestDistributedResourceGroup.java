@@ -1,5 +1,5 @@
 /*
- * Copyright (C) 2018-2020. Huawei Technologies Co., Ltd. All rights reserved.
+ * Copyright (C) 2018-2021. Huawei Technologies Co., Ltd. All rights reserved.
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
  * You may obtain a copy of the License at
@@ -14,14 +14,22 @@
  */
 package io.prestosql.execution.resourcegroups;
 
+import com.fasterxml.jackson.core.JsonProcessingException;
+import com.fasterxml.jackson.databind.ObjectMapper;
 import com.google.common.collect.ImmutableSet;
+import io.airlift.json.ObjectMapperProvider;
 import io.airlift.units.DataSize;
 import io.airlift.units.Duration;
+import io.prestosql.client.NodeVersion;
 import io.prestosql.execution.MockManagedQueryExecution;
+import io.prestosql.metadata.InternalNode;
+import io.prestosql.metadata.InternalNodeManager;
 import io.prestosql.server.QueryStateInfo;
 import io.prestosql.server.ResourceGroupInfo;
+import io.prestosql.spi.resourcegroups.KillPolicy;
 import io.prestosql.spi.resourcegroups.ResourceGroupId;
 import io.prestosql.spi.statestore.StateStore;
+import io.prestosql.statestore.MockStateMap;
 import io.prestosql.statestore.SharedQueryState;
 import io.prestosql.statestore.SharedResourceGroupState;
 import io.prestosql.statestore.StateCacheStore;
@@ -33,6 +41,7 @@ import org.mockito.internal.stubbing.answers.Returns;
 import org.testng.annotations.BeforeClass;
 import org.testng.annotations.Test;
 
+import java.net.URI;
 import java.util.HashMap;
 import java.util.HashSet;
 import java.util.Iterator;
@@ -54,7 +63,9 @@ import static io.prestosql.spi.resourcegroups.SchedulingPolicy.FAIR;
 import static io.prestosql.spi.resourcegroups.SchedulingPolicy.QUERY_PRIORITY;
 import static io.prestosql.spi.resourcegroups.SchedulingPolicy.WEIGHTED;
 import static io.prestosql.spi.resourcegroups.SchedulingPolicy.WEIGHTED_FAIR;
+import static java.util.concurrent.TimeUnit.MILLISECONDS;
 import static java.util.concurrent.TimeUnit.SECONDS;
+import static org.mockito.Matchers.anyObject;
 import static org.mockito.Matchers.anyString;
 import static org.mockito.Mockito.when;
 import static org.testng.Assert.assertEquals;
@@ -70,17 +81,53 @@ public class TestDistributedResourceGroup
     // To ensure that test cases are run sequentially
     private final Object lock = new Object();
     private StateStore statestore;
+    private InternalNodeManager internalNodeManager;
     private static final DataSize ONE_BYTE = new DataSize(1, BYTE);
     private static final DataSize FIVE_BYTE = new DataSize(5, BYTE);
     private static final DataSize TEN_BYTE = new DataSize(10, BYTE);
     private static final DataSize ONE_MEGABYTE = new DataSize(1, MEGABYTE);
     private static final DataSize ONE_GIGABYTE = new DataSize(1, GIGABYTE);
+    private static final ObjectMapper MAPPER = new ObjectMapperProvider().get();
 
     @BeforeClass
     public void setup()
     {
         statestore = Mockito.mock(StateStore.class);
         when(statestore.getLock(anyString())).then(new Returns(new ReentrantLock()));
+        internalNodeManager = Mockito.mock(InternalNodeManager.class);
+    }
+
+    @Test
+    public void testStateStoreFetchAndUpdate()
+            throws JsonProcessingException
+    {
+        synchronized (lock) {
+            DistributedResourceGroupTemp root = new DistributedResourceGroupTemp(Optional.empty(), "root", (group, export) -> {}, directExecutor(), statestore, internalNodeManager);
+            resourceGroupBasicSetUp(root, ONE_MEGABYTE, 1, 1);
+            MockManagedQueryExecution query1 = new MockManagedQueryExecution(100);
+            query1.setResourceGroupId(root.getId());
+            MockManagedQueryExecution query2 = new MockManagedQueryExecution(0);
+            query2.setResourceGroupId(root.getId());
+            Map<String, String> mockMap = new HashMap<>();
+            MockStateMap<String, String> mockStateMap = new MockStateMap<>("127.0.0.1-resourceaggrstats", mockMap);
+            when(statestore.getOrCreateStateCollection(anyString(), anyObject())).thenReturn(mockStateMap);
+            when(internalNodeManager.getCurrentNode())
+                    .thenReturn(new InternalNode("node1", URI.create("local://127.0.0.1"), NodeVersion.UNKNOWN, true));
+            when(internalNodeManager.getCoordinators())
+                    .thenReturn(ImmutableSet.of(new InternalNode("node1", URI.create("local://127.0.0.1"), NodeVersion.UNKNOWN, true)));
+            root.run(query1);
+            DistributedResourceGroupAggrStats rootStats = MAPPER.readerFor(DistributedResourceGroupAggrStats.class)
+                    .readValue(mockMap.get("root"));
+            assertEquals(rootStats.getRunningQueries(), 1);
+            root.run(query2);
+            rootStats = MAPPER.readerFor(DistributedResourceGroupAggrStats.class)
+                    .readValue(mockMap.get("root"));
+            assertEquals(rootStats.getQueuedQueries(), 1);
+            assertEquals(rootStats.getCachedMemoryUsageBytes(), 100);
+            when(internalNodeManager.getCurrentNode())
+                    .thenReturn(new InternalNode("node2", URI.create("local://127.0.0.2"), NodeVersion.UNKNOWN, true));
+            assertEquals(root.getGlobalCachedMemoryUsageBytes(), 200);
+        }
     }
 
     @Test
@@ -286,6 +333,7 @@ public class TestDistributedResourceGroup
             assertEquals(query2.getState(), QUEUED);
             query1.complete();
             updateQueryStateCache(query1);
+            root.run(query2);
             root.processQueuedQueries();
             assertEquals(query2.getState(), RUNNING);
             StateCacheStore.get().resetCachedStates();
@@ -620,12 +668,143 @@ public class TestDistributedResourceGroup
         }
     }
 
+    @Test
+    public void testQueryKillMemory()
+    {
+        synchronized (lock) {
+            DistributedResourceGroup root = new DistributedResourceGroup(Optional.empty(), "root", (group, export) -> {}, directExecutor(), statestore);
+            resourceGroupBasicSetUp(root, FIVE_BYTE, 3, 4);
+            root.setKillPolicy(KillPolicy.HIGH_MEMORY_QUERIES);
+            Set<MockManagedQueryExecution> queries = new HashSet<>();
+            // query1 running in remote
+            MockManagedQueryExecution query1 = new MockManagedQueryExecution(2, "q1");
+            query1.startWaitingForResources();
+            query1.setResourceGroupId(root.getId());
+            updateQueryStateCache(query1);
+            // Process the group to refresh stats
+            root.run(query1);
+            assertEquals(query1.getState(), RUNNING);
+            MockManagedQueryExecution query2 = new MockManagedQueryExecution(10, "q2");
+            query2.setResourceGroupId(root.getId());
+            root.run(query2);
+            MockManagedQueryExecution query3 = new MockManagedQueryExecution(15, "q3");
+            query3.setResourceGroupId(root.getId());
+            root.run(query3);
+            MockManagedQueryExecution query4 = new MockManagedQueryExecution(3, "q4");
+            query4.setResourceGroupId(root.getId());
+            root.run(query4);
+            updateQueryStateCache(query2);
+            updateQueryStateCache(query3);
+            updateQueryStateCache(query4);
+            assertEquals(query3.getState(), RUNNING);
+            root.processQueuedQueries();
+            assertEquals(query1.getState(), RUNNING);
+            assertEquals(query2.getState(), FAILED);
+            assertEquals(query3.getState(), FAILED);
+            assertEquals(query4.getState(), RUNNING);
+            query1.complete();
+            query4.complete();
+            StateCacheStore.get().resetCachedStates();
+        }
+    }
+
+    @Test
+    public void testQueryKillMemoryFinishPercent()
+    {
+        synchronized (lock) {
+            DistributedResourceGroup root = new DistributedResourceGroup(Optional.empty(), "root", (group, export) -> {}, directExecutor(), statestore);
+            resourceGroupBasicSetUp(root, new DataSize(130, BYTE), 3, 4);
+            root.setKillPolicy(KillPolicy.HIGH_MEMORY_QUERIES);
+            Set<MockManagedQueryExecution> queries = new HashSet<>();
+            // query1 running in remote
+            MockManagedQueryExecution query1 = new MockManagedQueryExecution(2, "q1");
+            query1.startWaitingForResources();
+            query1.setResourceGroupId(root.getId());
+            updateQueryStateCache(query1);
+            // Process the group to refresh stats
+            root.run(query1);
+            assertEquals(query1.getState(), RUNNING);
+            MockManagedQueryExecution query2 = new MockManagedQueryExecution(100, "q2", 20.0);
+            query2.setResourceGroupId(root.getId());
+            root.run(query2);
+            MockManagedQueryExecution query3 = new MockManagedQueryExecution(95, "q3", 10.0);
+            query3.setResourceGroupId(root.getId());
+            root.run(query3);
+            MockManagedQueryExecution query4 = new MockManagedQueryExecution(120, "q4", 5.0);
+            query4.setResourceGroupId(root.getId());
+            root.run(query4);
+            updateQueryStateCache(query2);
+            updateQueryStateCache(query3);
+            updateQueryStateCache(query4);
+            assertEquals(query3.getState(), RUNNING);
+            root.processQueuedQueries();
+            assertEquals(query1.getState(), RUNNING);
+            assertEquals(query2.getState(), RUNNING);
+            assertEquals(query3.getState(), FAILED);
+            assertEquals(query4.getState(), FAILED);
+            query1.complete();
+            query2.complete();
+            StateCacheStore.get().resetCachedStates();
+        }
+    }
+
+    @Test
+    public void testQueryKillFinishPercent()
+            throws InterruptedException
+    {
+        synchronized (lock) {
+            DistributedResourceGroup root = new DistributedResourceGroup(Optional.empty(), "root", (group, export) -> {}, directExecutor(), statestore);
+            resourceGroupBasicSetUp(root, new DataSize(12, BYTE), 4, 4);
+            root.setKillPolicy(KillPolicy.FINISH_PERCENTAGE_QUERIES);
+            Set<MockManagedQueryExecution> queries = new HashSet<>();
+            // query1 running in remote
+            MockManagedQueryExecution query1 = new MockManagedQueryExecution(2, "q1", 30.0);
+            query1.startWaitingForResources();
+            query1.setResourceGroupId(root.getId());
+            updateQueryStateCache(query1);
+            // Process the group to refresh stats
+            root.run(query1);
+            assertEquals(query1.getState(), RUNNING);
+            MockManagedQueryExecution query2 = new MockManagedQueryExecution(10, "q2", 5.0);
+            query2.setResourceGroupId(root.getId());
+            MILLISECONDS.sleep(1);
+            root.run(query2);
+            MockManagedQueryExecution query3 = new MockManagedQueryExecution(10, "q3", 10.0);
+            query3.setResourceGroupId(root.getId());
+            MILLISECONDS.sleep(1);
+            root.run(query3);
+            MockManagedQueryExecution query4 = new MockManagedQueryExecution(10, "q4", 15.0);
+            query4.setResourceGroupId(root.getId());
+            MILLISECONDS.sleep(1);
+            root.run(query4);
+            updateQueryStateCache(query2);
+            updateQueryStateCache(query3);
+            updateQueryStateCache(query4);
+            assertEquals(query3.getState(), RUNNING);
+            root.processQueuedQueries();
+            assertEquals(query1.getState(), RUNNING);
+            assertEquals(query2.getState(), FAILED);
+            assertEquals(query3.getState(), FAILED);
+            assertEquals(query4.getState(), RUNNING);
+            query1.complete();
+            query4.complete();
+            StateCacheStore.get().resetCachedStates();
+        }
+    }
+
     private void setResourceGroupCpuUsage(DistributedResourceGroup group, long cpuUsageMillis)
     {
         // manually add cpu usage of query1(1000ms) to root
         Map<ResourceGroupId, SharedResourceGroupState> resourceGroupStates = StateCacheStore.get().getCachedStates(StateStoreConstants.RESOURCE_GROUP_STATE_COLLECTION_NAME);
         resourceGroupStates.get(group.getId()).setCpuUsageMillis(cpuUsageMillis);
         StateCacheStore.get().setCachedStates(StateStoreConstants.RESOURCE_GROUP_STATE_COLLECTION_NAME, resourceGroupStates);
+    }
+
+    private void resourceGroupBasicSetUp(DistributedResourceGroupTemp group, DataSize softMemoryLimit, int hardConcurrencyLimit, int maxQueued)
+    {
+        group.setSoftMemoryLimit(softMemoryLimit);
+        group.setMaxQueuedQueries(maxQueued);
+        group.setHardConcurrencyLimit(hardConcurrencyLimit);
     }
 
     // Set up mandatory fields for DistributedResourceGroup
@@ -666,7 +845,6 @@ public class TestDistributedResourceGroup
     {
         return new SharedQueryState(
                 query.getBasicQueryInfo(),
-                query.getSession().toSessionRepresentation(),
                 query.getErrorCode(),
                 query.getUserMemoryReservation(),
                 query.getTotalMemoryReservation(),
@@ -680,7 +858,7 @@ public class TestDistributedResourceGroup
         int existingCount = existingQueries.size();
         Set<MockManagedQueryExecution> queries = new HashSet<>(existingQueries);
         for (int i = 0; i < count - existingCount; i++) {
-            MockManagedQueryExecution query = new MockManagedQueryExecution(0, group.getId().toString().replace(".", "") + Integer.toString(i), queryPriority ? i + 1 : 1);
+            MockManagedQueryExecution query = new MockManagedQueryExecution(0, "test", queryPriority ? i + 1 : 1);
             query.setResourceGroupId(group.getId());
             queries.add(query);
             group.run(query);

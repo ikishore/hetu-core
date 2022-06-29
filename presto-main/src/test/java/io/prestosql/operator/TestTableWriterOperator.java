@@ -15,6 +15,8 @@ package io.prestosql.operator;
 
 import com.google.common.collect.ImmutableList;
 import io.airlift.slice.Slice;
+import io.hetu.core.transport.execution.buffer.PagesSerde;
+import io.hetu.core.transport.execution.buffer.SerializedPage;
 import io.prestosql.RowPagesBuilder;
 import io.prestosql.Session;
 import io.prestosql.memory.context.MemoryTrackingContext;
@@ -33,9 +35,11 @@ import io.prestosql.spi.connector.ConnectorPageSinkProvider;
 import io.prestosql.spi.connector.ConnectorSession;
 import io.prestosql.spi.connector.ConnectorTransactionHandle;
 import io.prestosql.spi.connector.SchemaTableName;
-import io.prestosql.spi.function.Signature;
 import io.prestosql.spi.plan.AggregationNode;
 import io.prestosql.spi.plan.PlanNodeId;
+import io.prestosql.spi.snapshot.BlockEncodingSerdeProvider;
+import io.prestosql.spi.snapshot.RestorableConfig;
+import io.prestosql.spi.snapshot.SnapshotTestUtil;
 import io.prestosql.spi.type.Type;
 import io.prestosql.split.PageSinkManager;
 import io.prestosql.sql.planner.plan.TableWriterNode.CreateTarget;
@@ -43,9 +47,12 @@ import org.testng.annotations.AfterClass;
 import org.testng.annotations.BeforeClass;
 import org.testng.annotations.Test;
 
+import java.io.Serializable;
 import java.util.ArrayList;
 import java.util.Collection;
+import java.util.HashMap;
 import java.util.List;
+import java.util.Map;
 import java.util.Optional;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.ExecutorService;
@@ -56,9 +63,9 @@ import static io.prestosql.RowPagesBuilder.rowPagesBuilder;
 import static io.prestosql.SessionTestUtils.TEST_SESSION;
 import static io.prestosql.metadata.MetadataManager.createTestMetadataManager;
 import static io.prestosql.operator.PageAssertions.assertPageEquals;
-import static io.prestosql.spi.function.FunctionKind.AGGREGATE;
 import static io.prestosql.spi.type.BigintType.BIGINT;
 import static io.prestosql.spi.type.VarbinaryType.VARBINARY;
+import static io.prestosql.sql.analyzer.TypeSignatureProvider.fromTypes;
 import static io.prestosql.testing.TestingSession.testSessionBuilder;
 import static io.prestosql.testing.TestingTaskContext.createTaskContext;
 import static java.util.concurrent.CompletableFuture.completedFuture;
@@ -74,8 +81,8 @@ import static org.testng.Assert.assertTrue;
 public class TestTableWriterOperator
 {
     private static final CatalogName CONNECTOR_ID = new CatalogName("testConnectorId");
-    private static final InternalAggregationFunction LONG_MAX = createTestMetadataManager().getAggregateFunctionImplementation(
-            new Signature("max", AGGREGATE, BIGINT.getTypeSignature(), BIGINT.getTypeSignature()));
+    private static final InternalAggregationFunction LONG_MAX = createTestMetadataManager().getFunctionAndTypeManager().getAggregateFunctionImplementation(
+            createTestMetadataManager().getFunctionAndTypeManager().lookupFunction("max", fromTypes(BIGINT)));
     private ExecutorService executor;
     private ScheduledExecutorService scheduledExecutor;
 
@@ -245,6 +252,84 @@ public class TestTableWriterOperator
         assertThat(info.getStatisticsCpuTime().getValue(NANOSECONDS)).isGreaterThan(0);
     }
 
+    @Test
+    public void testStatisticsAggregationSnapshot()
+            throws Exception
+    {
+        PageSinkManager pageSinkManager = new PageSinkManager();
+        pageSinkManager.addConnectorPageSinkProvider(CONNECTOR_ID, new ConstantPageSinkProvider(new TableWriteInfoTestPageSink()));
+        ImmutableList<Type> outputTypes = ImmutableList.of(BIGINT, VARBINARY, BIGINT);
+        Session session = testSessionBuilder()
+                .setSystemProperty("statistics_cpu_timer_enabled", "true")
+                .build();
+        DriverContext driverContext = createTaskContext(executor, scheduledExecutor, session)
+                .addPipelineContext(0, true, true, false)
+                .addDriverContext();
+        TableWriterOperator operator = (TableWriterOperator) createTableWriterOperator(
+                pageSinkManager,
+                new AggregationOperatorFactory(
+                        1,
+                        new PlanNodeId("test"),
+                        AggregationNode.Step.SINGLE,
+                        ImmutableList.of(LONG_MAX.bind(ImmutableList.of(0), Optional.empty())),
+                        true),
+                outputTypes,
+                session,
+                driverContext);
+
+        operator.addInput(rowPagesBuilder(BIGINT).row(42).build().get(0));
+        Object snapshot = operator.capture(operator.getOperatorContext().getDriverContext().getSerde());
+        assertEquals(SnapshotTestUtil.toSimpleSnapshotMapping(snapshot), createExpectedMapping());
+        operator.addInput(rowPagesBuilder(BIGINT).row(43).build().get(0));
+
+        operator.restore(snapshot, operator.getOperatorContext().getDriverContext().getSerde());
+        snapshot = operator.capture(operator.getOperatorContext().getDriverContext().getSerde());
+        assertEquals(SnapshotTestUtil.toSimpleSnapshotMapping(snapshot), createExpectedMapping());
+        operator.addInput(rowPagesBuilder(BIGINT).row(43).build().get(0));
+
+        assertTrue(operator.isBlocked().isDone());
+        assertTrue(operator.needsInput());
+
+        assertThat(driverContext.getSystemMemoryUsage()).isGreaterThan(0);
+        assertEquals(driverContext.getMemoryUsage(), 0);
+
+        operator.finish();
+        assertFalse(operator.isFinished());
+
+        assertPageEquals(outputTypes, operator.getOutput(),
+                rowPagesBuilder(outputTypes)
+                        .row(null, null, 43).build().get(0));
+
+        assertPageEquals(outputTypes, operator.getOutput(),
+                rowPagesBuilder(outputTypes)
+                        .row(2, null, null).build().get(0));
+
+        assertTrue(operator.isBlocked().isDone());
+        assertFalse(operator.needsInput());
+        assertTrue(operator.isFinished());
+
+        operator.close();
+        assertMemoryIsReleased(operator);
+
+        TableWriterInfo info = operator.getInfo();
+        assertThat(info.getStatisticsWallTime().getValue(NANOSECONDS)).isGreaterThan(0);
+        assertThat(info.getStatisticsCpuTime().getValue(NANOSECONDS)).isGreaterThan(0);
+    }
+
+    private Map<String, Object> createExpectedMapping()
+    {
+        Map<String, Object> expectedMapping = new HashMap<>();
+        expectedMapping.put("operatorContext", 0);
+        expectedMapping.put("pageSinkMemoryContext", 204L);
+        expectedMapping.put("pageSinkPeakMemoryUsage", 204L);
+        expectedMapping.put("state", "RUNNING");
+        expectedMapping.put("rowCount", 1L);
+        expectedMapping.put("committed", false);
+        expectedMapping.put("closed", false);
+        expectedMapping.put("writtenBytes", 0L);
+        return expectedMapping;
+    }
+
     private void assertMemoryIsReleased(TableWriterOperator tableWriterOperator)
     {
         OperatorContext tableWriterOperatorOperatorContext = tableWriterOperator.getOperatorContext();
@@ -329,6 +414,7 @@ public class TestTableWriterOperator
         }
     }
 
+    @RestorableConfig(unsupported = true)
     private static class BlockingPageSink
             implements ConnectorPageSink
     {
@@ -361,6 +447,7 @@ public class TestTableWriterOperator
         }
     }
 
+    @RestorableConfig(stateClassName = "TableWriteInfoTestPageSinkState")
     private static class TableWriteInfoTestPageSink
             implements ConnectorPageSink
     {
@@ -401,5 +488,34 @@ public class TestTableWriterOperator
 
         @Override
         public void abort() {}
+
+        @Override
+        public Object capture(BlockEncodingSerdeProvider serdeProvider)
+        {
+            TableWriteInfoTestPageSinkState myState = new TableWriteInfoTestPageSinkState();
+            myState.pages = new Object[pages.size()];
+            for (int i = 0; i < pages.size(); i++) {
+                SerializedPage serializedPage = ((PagesSerde) serdeProvider).serialize(pages.get(i));
+                myState.pages[i] = serializedPage.capture(serdeProvider);
+            }
+            return myState;
+        }
+
+        @Override
+        public void restore(Object state, BlockEncodingSerdeProvider serdeProvider, long resumeCount)
+        {
+            TableWriteInfoTestPageSinkState myState = (TableWriteInfoTestPageSinkState) state;
+            this.pages.clear();
+            for (int i = 0; i < myState.pages.length; i++) {
+                SerializedPage serializedPage = SerializedPage.restoreSerializedPage(myState.pages[i]);
+                this.pages.add(((PagesSerde) serdeProvider).deserialize(serializedPage));
+            }
+        }
+
+        private static class TableWriteInfoTestPageSinkState
+                implements Serializable
+        {
+            private Object[] pages;
+        }
     }
 }

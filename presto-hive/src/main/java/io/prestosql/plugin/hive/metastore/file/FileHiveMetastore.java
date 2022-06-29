@@ -139,8 +139,8 @@ public class FileHiveMetastore
     {
         HiveConfig hiveConfig = new HiveConfig();
         HdfsConfiguration hdfsConfiguration = new HiveHdfsConfiguration(new HdfsConfigurationInitializer(hiveConfig), ImmutableSet.of());
-        HdfsEnvironment hdfsEnvironment = new HdfsEnvironment(hdfsConfiguration, hiveConfig, new NoHdfsAuthentication());
-        return new FileHiveMetastore(hdfsEnvironment, catalogDirectory.toURI().toString(), "test");
+        HdfsEnvironment localHdfsEnvironment = new HdfsEnvironment(hdfsConfiguration, hiveConfig, new NoHdfsAuthentication());
+        return new FileHiveMetastore(localHdfsEnvironment, catalogDirectory.toURI().toString(), "test");
     }
 
     @Inject
@@ -391,11 +391,11 @@ public class FileHiveMetastore
     }
 
     @Override
-    public void updatePartitionsStatistics(HiveIdentity identity, String databaseName, String tableName, List<String> partitionNames, List<Function<PartitionStatistics, PartitionStatistics>> updateFunctionList)
+    public void updatePartitionsStatistics(HiveIdentity identity, String databaseName, String tableName, Map<String, Function<PartitionStatistics, PartitionStatistics>> partNamesUpdateFunctionMap)
     {
-        for (int i = 0; i < partitionNames.size(); i++) {
-            updatePartitionStatistics(identity, databaseName, tableName, partitionNames.get(i), updateFunctionList.get(i));
-        }
+        partNamesUpdateFunctionMap.entrySet().stream().forEach(e -> {
+            updatePartitionStatistics(identity, databaseName, tableName, e.getKey(), e.getValue());
+        });
     }
 
     @Override
@@ -647,6 +647,7 @@ public class FileHiveMetastore
                         metadataFileSystem.delete(createdFile, false);
                     }
                     catch (IOException ignored) {
+                        // could be ignored
                     }
                 }
                 throw e;

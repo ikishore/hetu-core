@@ -1,5 +1,5 @@
 /*
- * Copyright (C) 2018-2020. Huawei Technologies Co., Ltd. All rights reserved.
+ * Copyright (C) 2018-2021. Huawei Technologies Co., Ltd. All rights reserved.
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
  * You may obtain a copy of the License at
@@ -15,6 +15,8 @@
 
 package io.hetu.core.seedstore.filebased;
 
+import com.fasterxml.jackson.annotation.JsonCreator;
+import com.fasterxml.jackson.annotation.JsonProperty;
 import io.hetu.core.common.util.SecureObjectInputStream;
 import io.prestosql.spi.seedstore.Seed;
 
@@ -37,10 +39,13 @@ public class FileBasedSeed
 {
     private static final long serialVersionUID = 4L;
 
-    private final String location;
-    private final long timestamp;
+    private String location;
+    private long timestamp;
 
-    private FileBasedSeed(String location, long timestamp)
+    @JsonCreator
+    public FileBasedSeed(
+            @JsonProperty("location") String location,
+            @JsonProperty("timestamp") long timestamp)
     {
         this.location = location;
         this.timestamp = timestamp;
@@ -66,15 +71,37 @@ public class FileBasedSeed
     }
 
     @Override
+    @JsonProperty
     public String getLocation()
     {
         return location;
     }
 
     @Override
+    @JsonProperty
+    public void setLocation(String location)
+    {
+        this.location = location;
+    }
+
+    @Override
+    @JsonProperty
     public long getTimestamp()
     {
         return timestamp;
+    }
+
+    @Override
+    @JsonProperty
+    public void setTimestamp(long timestamp)
+    {
+        this.timestamp = timestamp;
+    }
+
+    @Override
+    public String getUniqueInstanceId()
+    {
+        return "none";
     }
 
     @Override
@@ -113,49 +140,5 @@ public class FileBasedSeed
         return "FileBasedSeed{"
                 + "location='" + location + '\''
                 + ", timestamp=" + timestamp + '}';
-    }
-
-    /**
-     * FileBasedSeedBuilder
-     *
-     * @since 2020-03-08
-     */
-
-    public static class FileBasedSeedBuilder
-    {
-        private String location;
-        private long timestamp;
-
-        /**
-         * constructor of FileBasedSeedBuilder
-         *
-         * @param location location(eg ip) of seed
-         */
-        public FileBasedSeedBuilder(String location)
-        {
-            this.location = location;
-        }
-
-        /**
-         * Set timestamp for FileBasedSeedBuilder
-         *
-         * @param timestamp timestamp of seed
-         * @return FileBasedSeedBuilder
-         */
-        public FileBasedSeedBuilder setTimestamp(long timestamp)
-        {
-            this.timestamp = timestamp;
-            return this;
-        }
-
-        /**
-         * build FileBasedSeed Object
-         *
-         * @return FileBasedSeed
-         */
-        public FileBasedSeed build()
-        {
-            return new FileBasedSeed(location, timestamp);
-        }
     }
 }

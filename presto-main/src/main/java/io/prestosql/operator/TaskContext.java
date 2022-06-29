@@ -22,6 +22,7 @@ import io.airlift.stats.CounterStat;
 import io.airlift.stats.GcMonitor;
 import io.airlift.units.DataSize;
 import io.airlift.units.Duration;
+import io.hetu.core.transport.execution.buffer.PagesSerdeFactory;
 import io.prestosql.Session;
 import io.prestosql.execution.Lifespan;
 import io.prestosql.execution.TaskId;
@@ -32,6 +33,7 @@ import io.prestosql.memory.QueryContext;
 import io.prestosql.memory.QueryContextVisitor;
 import io.prestosql.memory.context.LocalMemoryContext;
 import io.prestosql.memory.context.MemoryTrackingContext;
+import io.prestosql.snapshot.TaskSnapshotManager;
 import io.prestosql.spi.plan.PlanNodeId;
 import org.joda.time.DateTime;
 
@@ -106,6 +108,9 @@ public class TaskContext
 
     private final PlanNodeId consumerId;
 
+    private final PagesSerdeFactory serdeFactory;
+    private final TaskSnapshotManager snapshotManager;
+
     public static TaskContext createTaskContext(
             QueryContext queryContext,
             TaskStateMachine taskStateMachine,
@@ -117,9 +122,11 @@ public class TaskContext
             boolean perOperatorCpuTimerEnabled,
             boolean cpuTimerEnabled,
             OptionalInt totalPartitions,
-            PlanNodeId consumerId)
+            PlanNodeId consumerId,
+            PagesSerdeFactory serdeFactory,
+            TaskSnapshotManager snapshotManager)
     {
-        TaskContext taskContext = new TaskContext(queryContext, taskStateMachine, gcMonitor, notificationExecutor, yieldExecutor, session, taskMemoryContext, perOperatorCpuTimerEnabled, cpuTimerEnabled, totalPartitions, consumerId);
+        TaskContext taskContext = new TaskContext(queryContext, taskStateMachine, gcMonitor, notificationExecutor, yieldExecutor, session, taskMemoryContext, perOperatorCpuTimerEnabled, cpuTimerEnabled, totalPartitions, consumerId, serdeFactory, snapshotManager);
         taskContext.initialize();
         return taskContext;
     }
@@ -134,7 +141,9 @@ public class TaskContext
             boolean perOperatorCpuTimerEnabled,
             boolean cpuTimerEnabled,
             OptionalInt totalPartitions,
-            PlanNodeId consumerId)
+            PlanNodeId consumerId,
+            PagesSerdeFactory serdeFactory,
+            TaskSnapshotManager snapshotManager)
     {
         this.taskStateMachine = requireNonNull(taskStateMachine, "taskStateMachine is null");
         this.gcMonitor = requireNonNull(gcMonitor, "gcMonitor is null");
@@ -149,6 +158,8 @@ public class TaskContext
         this.cpuTimerEnabled = cpuTimerEnabled;
         this.totalPartitions = requireNonNull(totalPartitions, "totalPartitions is null");
         this.consumerId = consumerId;
+        this.serdeFactory = serdeFactory;
+        this.snapshotManager = requireNonNull(snapshotManager, "snapshotManager is null");
     }
 
     // the state change listener is added here in a separate initialize() method
@@ -167,6 +178,11 @@ public class TaskContext
     public OptionalInt getTotalPartitions()
     {
         return totalPartitions;
+    }
+
+    public TaskSnapshotManager getSnapshotManager()
+    {
+        return snapshotManager;
     }
 
     public PipelineContext addPipelineContext(int pipelineId, boolean inputPipeline, boolean outputPipeline, boolean partitioned)
@@ -364,30 +380,30 @@ public class TaskContext
 
     public Duration getFullGcTime()
     {
-        long startFullGcTimeNanos = this.startFullGcTimeNanos.get();
-        if (startFullGcTimeNanos < 0) {
+        long beginFullGcTimeNanos = this.startFullGcTimeNanos.get();
+        if (beginFullGcTimeNanos < 0) {
             return new Duration(0, MILLISECONDS);
         }
 
-        long endFullGcTimeNanos = this.endFullGcTimeNanos.get();
-        if (endFullGcTimeNanos < 0) {
-            endFullGcTimeNanos = gcMonitor.getMajorGcTime().roundTo(NANOSECONDS);
+        long finishFullGcTimeNanos = this.endFullGcTimeNanos.get();
+        if (finishFullGcTimeNanos < 0) {
+            finishFullGcTimeNanos = gcMonitor.getMajorGcTime().roundTo(NANOSECONDS);
         }
-        return new Duration(max(0, endFullGcTimeNanos - startFullGcTimeNanos), NANOSECONDS);
+        return new Duration(max(0, finishFullGcTimeNanos - beginFullGcTimeNanos), NANOSECONDS);
     }
 
     public int getFullGcCount()
     {
-        long startFullGcCount = this.startFullGcCount.get();
-        if (startFullGcCount < 0) {
+        long beginFullGcCount = this.startFullGcCount.get();
+        if (beginFullGcCount < 0) {
             return 0;
         }
 
-        long endFullGcCount = this.endFullGcCount.get();
-        if (endFullGcCount <= 0) {
-            endFullGcCount = gcMonitor.getMajorGcCount();
+        long finishFullGcCount = this.endFullGcCount.get();
+        if (finishFullGcCount <= 0) {
+            finishFullGcCount = gcMonitor.getMajorGcCount();
         }
-        return toIntExact(max(0, endFullGcCount - startFullGcCount));
+        return toIntExact(max(0, finishFullGcCount - beginFullGcCount));
     }
 
     public TaskStats getTaskStats()
@@ -467,16 +483,16 @@ public class TaskContext
             physicalWrittenDataSize += pipeline.getPhysicalWrittenDataSize().toBytes();
         }
 
-        long startNanos = this.startNanos.get();
-        if (startNanos == 0) {
-            startNanos = System.nanoTime();
+        long localStartNanos = this.startNanos.get();
+        if (localStartNanos == 0) {
+            localStartNanos = System.nanoTime();
         }
-        Duration queuedTime = new Duration(startNanos - createNanos, NANOSECONDS);
+        Duration queuedTime = new Duration(localStartNanos - createNanos, NANOSECONDS);
 
-        long endNanos = this.endNanos.get();
+        long endNanosTime = this.endNanos.get();
         Duration elapsedTime;
-        if (endNanos >= startNanos) {
-            elapsedTime = new Duration(endNanos - createNanos, NANOSECONDS);
+        if (endNanosTime >= localStartNanos) {
+            elapsedTime = new Duration(endNanosTime - createNanos, NANOSECONDS);
         }
         else {
             elapsedTime = new Duration(0, NANOSECONDS);
@@ -582,5 +598,10 @@ public class TaskContext
     public int getTaskCount()
     {
         return queryContext.getTaskCount();
+    }
+
+    public PagesSerdeFactory getSerdeFactory()
+    {
+        return serdeFactory;
     }
 }

@@ -35,16 +35,24 @@ public class PagesSerdeFactory
 
     public PagesSerde createPagesSerde()
     {
-        return createPagesSerdeInternal(Optional.empty());
+        return createPagesSerdeInternal(Optional.empty(), false, false);
     }
 
-    public PagesSerde createPagesSerdeForSpill(Optional<SpillCipher> spillCipher)
+    public PagesSerde createPagesSerdeForSpill(Optional<SpillCipher> spillCipher, boolean useDirectSerde, boolean useKryo)
     {
-        return createPagesSerdeInternal(spillCipher);
+        return createPagesSerdeInternal(spillCipher, useDirectSerde, useKryo);
     }
 
-    private PagesSerde createPagesSerdeInternal(Optional<SpillCipher> spillCipher)
+    private PagesSerde createPagesSerdeInternal(Optional<SpillCipher> spillCipher, boolean useDirectSerde, boolean useKryo)
     {
+        if (useDirectSerde) {
+            if (useKryo) {
+                return new KryoPageSerializer(blockEncodingSerde);
+            }
+
+            return new SliceStreamPageSerde(blockEncodingSerde, Optional.empty(), Optional.empty(), spillCipher);
+        }
+
         if (compressionEnabled) {
             return new PagesSerde(blockEncodingSerde, Optional.of(new ZstdCompressor()), Optional.of(new ZstdDecompressor()), spillCipher);
         }

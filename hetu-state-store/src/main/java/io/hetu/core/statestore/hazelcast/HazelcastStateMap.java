@@ -1,5 +1,5 @@
 /*
- * Copyright (C) 2018-2020. Huawei Technologies Co., Ltd. All rights reserved.
+ * Copyright (C) 2018-2021. Huawei Technologies Co., Ltd. All rights reserved.
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
  * You may obtain a copy of the License at
@@ -28,6 +28,7 @@ import java.util.Map;
 import java.util.Map.Entry;
 import java.util.Set;
 import java.util.UUID;
+import java.util.function.Function;
 import java.util.stream.Stream;
 
 /**
@@ -42,7 +43,6 @@ public class HazelcastStateMap<K, V>
         implements StateMap<K, V>
 {
     private final String name;
-
     private IMap<K, V> hzMap;
     private SetMultimap<MapListener, UUID> registeredListeners = HashMultimap.create();
 
@@ -198,5 +198,11 @@ public class HazelcastStateMap<K, V>
     public void removeEntryListener(MapListener listener)
     {
         registeredListeners.get(listener).forEach(listenerId -> hzMap.removeEntryListener(listenerId));
+    }
+
+    @Override
+    public V computeIfAbsent(K key, Function<? super K, ? extends V> mappingFunction)
+    {
+        return hzMap.computeIfAbsent(key, mappingFunction);
     }
 }

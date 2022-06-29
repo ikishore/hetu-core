@@ -16,6 +16,7 @@ package io.prestosql.orc;
 import com.google.common.collect.ImmutableList;
 import com.google.common.collect.ImmutableSet;
 import com.google.common.primitives.UnsignedBytes;
+import io.airlift.log.Logger;
 import io.airlift.slice.Slice;
 import io.airlift.slice.Slices;
 import io.prestosql.orc.OrcWriteValidation.OrcWriteValidationBuilder;
@@ -41,7 +42,6 @@ import io.prestosql.orc.writer.ColumnWriter;
 import io.prestosql.orc.writer.SliceDictionaryColumnWriter;
 import io.prestosql.spi.Page;
 import io.prestosql.spi.type.Type;
-import org.joda.time.DateTimeZone;
 import org.openjdk.jol.info.ClassLayout;
 
 import javax.annotation.Nullable;
@@ -83,6 +83,7 @@ import static java.util.stream.Collectors.toList;
 public final class OrcWriter
         implements Closeable
 {
+    private static final Logger log = Logger.get(OrcWriter.class);
     private static final int INSTANCE_SIZE = ClassLayout.parseClass(OrcWriter.class).instanceSize();
 
     private static final String PRESTO_ORC_WRITER_VERSION_METADATA_KEY = "presto.writer.version";
@@ -104,7 +105,6 @@ public final class OrcWriter
     private final int maxCompressionBufferSize;
     private final Map<String, String> userMetadata;
     private final CompressedMetadataWriter metadataWriter;
-    private final DateTimeZone hiveStorageTimeZone;
 
     private final List<ClosedStripe> closedStripes = new ArrayList<>();
     private final ColumnMetadata<OrcType> orcTypes;
@@ -132,7 +132,6 @@ public final class OrcWriter
             OrcWriterOptions options,
             boolean writeLegacyVersion,
             Map<String, String> userMetadata,
-            DateTimeZone hiveStorageTimeZone,
             boolean validate,
             OrcWriteValidationMode validationMode,
             OrcWriterStats stats,
@@ -146,7 +145,7 @@ public final class OrcWriter
         this.types = ImmutableList.copyOf(requireNonNull(types, "types is null"));
         this.compression = requireNonNull(compression, "compression is null");
         recordValidation(validation -> validation.setCompression(compression));
-        recordValidation(validation -> validation.setTimeZone(hiveStorageTimeZone.toTimeZone().toZoneId()));
+        recordValidation(validation -> validation.setTimeZone(ZoneId.of("UTC")));
 
         requireNonNull(options, "options is null");
         checkArgument(options.getStripeMaxSize().compareTo(options.getStripeMinSize()) >= 0, "stripeMaxSize must be greater than stripeMinSize");
@@ -160,7 +159,6 @@ public final class OrcWriter
 
         this.userMetadata = buildUserMetadata(userMetadata);
         this.metadataWriter = new CompressedMetadataWriter(new OrcMetadataWriter(writeLegacyVersion), compression, maxCompressionBufferSize);
-        this.hiveStorageTimeZone = requireNonNull(hiveStorageTimeZone, "hiveStorageTimeZone is null");
         this.stats = requireNonNull(stats, "stats is null");
 
         requireNonNull(columnNames, "columnNames is null");
@@ -168,15 +166,15 @@ public final class OrcWriter
         recordValidation(validation -> validation.setColumnNames(columnNames));
 
         // create column writers
-        OrcType rootType = orcTypes.get(ROOT_COLUMN);
-        checkArgument(rootType.getFieldCount() == types.size());
-        ImmutableList.Builder<ColumnWriter> columnWriters = ImmutableList.builder();
+        OrcType localRootType = orcTypes.get(ROOT_COLUMN);
+        checkArgument(localRootType.getFieldCount() == types.size());
+        ImmutableList.Builder<ColumnWriter> localColumnWriters = ImmutableList.builder();
         ImmutableSet.Builder<SliceDictionaryColumnWriter> sliceColumnWriters = ImmutableSet.builder();
         for (int fieldId = 0; fieldId < types.size(); fieldId++) {
-            OrcColumnId fieldColumnIndex = rootType.getFieldTypeIndex(fieldId);
+            OrcColumnId fieldColumnIndex = localRootType.getFieldTypeIndex(fieldId);
             Type fieldType = types.get(fieldId);
-            ColumnWriter columnWriter = createColumnWriter(fieldColumnIndex, orcTypes, fieldType, compression, maxCompressionBufferSize, hiveStorageTimeZone, options.getMaxStringStatisticsLimit());
-            columnWriters.add(columnWriter);
+            ColumnWriter columnWriter = createColumnWriter(fieldColumnIndex, orcTypes, fieldType, compression, maxCompressionBufferSize, options.getMaxStringStatisticsLimit());
+            localColumnWriters.add(columnWriter);
 
             if (columnWriter instanceof SliceDictionaryColumnWriter) {
                 sliceColumnWriters.add((SliceDictionaryColumnWriter) columnWriter);
@@ -189,7 +187,7 @@ public final class OrcWriter
                 }
             }
         }
-        this.columnWriters = columnWriters.build();
+        this.columnWriters = localColumnWriters.build();
         this.dictionaryCompressionOptimizer = new DictionaryCompressionOptimizer(
                 sliceColumnWriters.build(),
                 stripeMinBytes,
@@ -240,9 +238,10 @@ public final class OrcWriter
                 (validationBuilder == null ? 0 : validationBuilder.getRetainedSize());
     }
 
-    public void write(Page page)
+    public void write(Page inputPage)
             throws IOException
     {
+        Page page = inputPage;
         requireNonNull(page, "page is null");
         if (page.getPositionCount() == 0) {
             return;
@@ -339,7 +338,7 @@ public final class OrcWriter
                 preStripeFlushCallback.get().call();
             }
             catch (Exception e) {
-                //ignored;
+                log.debug("Call pre stripe flush call back error");
             }
         }
         List<OrcDataOutput> outputData = new ArrayList<>();
@@ -434,8 +433,7 @@ public final class OrcWriter
         columnStatistics.put(ROOT_COLUMN, new ColumnStatistics((long) stripeRowCount, 0, null, null, null, null, null, null, null, null));
 
         // add footer
-        Optional<ZoneId> timeZone = Optional.of(hiveStorageTimeZone.toTimeZone().toZoneId());
-        StripeFooter stripeFooter = new StripeFooter(allStreams, toColumnMetadata(columnEncodings, orcTypes.size()), timeZone);
+        StripeFooter stripeFooter = new StripeFooter(allStreams, toColumnMetadata(columnEncodings, orcTypes.size()), ZoneId.of("UTC"));
         Slice footer = metadataWriter.writeStripeFooter(stripeFooter);
         outputData.add(createDataOutput(footer));
 
@@ -480,7 +478,7 @@ public final class OrcWriter
                 preCloseCallback.get().call();
             }
             catch (Exception e) {
-                //ignored
+                log.debug("Call pre close call back error");
             }
         }
         List<OrcDataOutput> outputData = new ArrayList<>();
@@ -502,7 +500,7 @@ public final class OrcWriter
                 .collect(toList()));
         recordValidation(validation -> validation.setFileStatistics(fileStats));
 
-        Map<String, Slice> userMetadata = this.userMetadata.entrySet().stream()
+        Map<String, Slice> localUserMetadata = this.userMetadata.entrySet().stream()
                 .collect(Collectors.toMap(Entry::getKey, entry -> utf8Slice(entry.getValue())));
 
         Footer footer = new Footer(
@@ -513,7 +511,7 @@ public final class OrcWriter
                         .collect(toImmutableList()),
                 orcTypes,
                 fileStats,
-                userMetadata);
+                localUserMetadata);
 
         closedStripes.clear();
         closedStripesRetainedBytes = 0;
@@ -539,7 +537,7 @@ public final class OrcWriter
             throws OrcCorruptionException
     {
         checkState(validationBuilder != null, "validation is not enabled");
-        validateFile(validationBuilder.build(), input, types, hiveStorageTimeZone);
+        validateFile(validationBuilder.build(), input, types);
     }
 
     private static <T> ColumnMetadata<T> toColumnMetadata(Map<OrcColumnId, T> data, int expectedSize)

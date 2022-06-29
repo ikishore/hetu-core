@@ -30,8 +30,7 @@ import static java.util.Objects.requireNonNull;
  */
 public class TpcdsStatisticsRecorder
 {
-    //private static final ImmutableList<String> SUPPORTED_SCHEMAS = ImmutableList.of("tiny", "sf1");
-    private static final ImmutableList<String> SUPPORTED_SCHEMAS = ImmutableList.of("sf30");
+    private static final ImmutableList<String> SUPPORTED_SCHEMAS = ImmutableList.of("tiny", "sf1");
 
     public static void main(String[] args)
     {
@@ -43,20 +42,6 @@ public class TpcdsStatisticsRecorder
 
     private final TableStatisticsRecorder tableStatisticsRecorder;
     private final TableStatisticsDataRepository tableStatisticsDataRepository;
-
-    public TpcdsStatisticsRecorder()
-    {
-        tableStatisticsRecorder = null;
-        tableStatisticsDataRepository = null;
-        System.out.println("this is the constructor of tpcdsstatisticsrecorder");
-    }
-    public static void callable()
-    {
-        TpcdsStatisticsRecorder tool = new TpcdsStatisticsRecorder(new TableStatisticsRecorder(), new TableStatisticsDataRepository());
-
-        SUPPORTED_SCHEMAS.forEach(schemaName -> Table.getBaseTables().stream()
-                .forEach(table -> tool.computeAndOutputStatsFor(schemaName, table)));
-    }
 
     private TpcdsStatisticsRecorder(TableStatisticsRecorder tableStatisticsRecorder, TableStatisticsDataRepository tableStatisticsDataRepository)
     {

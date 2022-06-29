@@ -52,7 +52,10 @@ import static io.prestosql.execution.TaskTestUtils.createTestSplitMonitor;
 import static io.prestosql.execution.TaskTestUtils.createTestingPlanner;
 import static io.prestosql.execution.buffer.OutputBuffers.BufferType.PARTITIONED;
 import static io.prestosql.execution.buffer.OutputBuffers.createInitialEmptyOutputBuffers;
+import static io.prestosql.metadata.MetadataManager.createTestMetadataManager;
+import static io.prestosql.testing.TestingPagesSerdeFactory.TESTING_SERDE_FACTORY;
 import static io.prestosql.testing.TestingSession.testSessionBuilder;
+import static io.prestosql.testing.TestingSnapshotUtils.NOOP_SNAPSHOT_UTILS;
 import static org.testng.Assert.assertEquals;
 import static org.testng.Assert.assertNotEquals;
 import static org.testng.Assert.assertNotNull;
@@ -86,6 +89,40 @@ public class TestSqlTaskManager
     }
 
     @Test
+    public void testGetCreate()
+    {
+        try (SqlTaskManager sqlTaskManager = createSqlTaskManager(new TaskManagerConfig())) {
+            // create a task
+            TaskId taskId = TASK_ID;
+            String instanceId = "1-testing instance id";
+            assertEquals(sqlTaskManager.getTaskStatus(taskId, instanceId).getState(), TaskState.RUNNING);
+
+            // external call to non-existent is null
+            assertNull(sqlTaskManager.getTaskStatus(new TaskId("query", 3, 3), null));
+
+            // external call to existent works
+            assertEquals(sqlTaskManager.getTaskStatus(taskId, null).getState(), TaskState.RUNNING);
+
+            // cancel to resume, no revive case
+            sqlTaskManager.cancelTask(taskId, TaskState.CANCELED_TO_RESUME, instanceId);
+            assertNull(sqlTaskManager.getTaskStatus(taskId, instanceId));
+
+            String newInstanceId = "220-another testing instance id";
+            String oldInstanceId = "53-earlier instance id";
+
+            // make sure only latest is stored in taskId map, and external call works
+            assertEquals(sqlTaskManager.getTaskStatus(taskId, newInstanceId).getState(), TaskState.RUNNING);
+            assertEquals(sqlTaskManager.getTaskStatus(taskId, oldInstanceId).getState(), TaskState.RUNNING);
+            sqlTaskManager.cancelTask(taskId, TaskState.CANCELED, null);
+            assertEquals(sqlTaskManager.getTaskStatus(taskId, newInstanceId).getState(), TaskState.CANCELED);
+            assertEquals(sqlTaskManager.getTaskStatus(taskId, oldInstanceId).getState(), TaskState.RUNNING);
+
+            // call to existent works
+            assertEquals(sqlTaskManager.getTaskStatus(taskId, newInstanceId).getState(), TaskState.CANCELED);
+        }
+    }
+
+    @Test
     public void testEmptyQuery()
     {
         try (SqlTaskManager sqlTaskManager = createSqlTaskManager(new TaskManagerConfig())) {
@@ -93,13 +130,13 @@ public class TestSqlTaskManager
             TaskInfo taskInfo = createTask(sqlTaskManager, taskId, createInitialEmptyOutputBuffers(PARTITIONED).withNoMoreBufferIds());
             assertEquals(taskInfo.getTaskStatus().getState(), TaskState.RUNNING);
 
-            taskInfo = sqlTaskManager.getTaskInfo(taskId);
+            taskInfo = sqlTaskManager.getTaskInfo(taskId, "0-test_instance_id");
             assertEquals(taskInfo.getTaskStatus().getState(), TaskState.RUNNING);
 
             taskInfo = createTask(sqlTaskManager, taskId, ImmutableSet.of(), createInitialEmptyOutputBuffers(PARTITIONED).withNoMoreBufferIds());
             assertEquals(taskInfo.getTaskStatus().getState(), TaskState.FINISHED);
 
-            taskInfo = sqlTaskManager.getTaskInfo(taskId);
+            taskInfo = sqlTaskManager.getTaskInfo(taskId, "0-test_instance_id");
             assertEquals(taskInfo.getTaskStatus().getState(), TaskState.FINISHED);
         }
     }
@@ -113,27 +150,27 @@ public class TestSqlTaskManager
             TaskInfo taskInfo = createTask(sqlTaskManager, taskId, ImmutableSet.of(SPLIT), createInitialEmptyOutputBuffers(PARTITIONED).withBuffer(OUT, 0).withNoMoreBufferIds());
             assertEquals(taskInfo.getTaskStatus().getState(), TaskState.RUNNING);
 
-            taskInfo = sqlTaskManager.getTaskInfo(taskId);
+            taskInfo = sqlTaskManager.getTaskInfo(taskId, "0-test_instance_id");
             assertEquals(taskInfo.getTaskStatus().getState(), TaskState.RUNNING);
 
-            BufferResult results = sqlTaskManager.getTaskResults(taskId, OUT, 0, new DataSize(1, Unit.MEGABYTE)).get();
+            BufferResult results = sqlTaskManager.getTaskResults(taskId, OUT, 0, new DataSize(1, Unit.MEGABYTE), "0-test_instance_id").get();
             assertEquals(results.isBufferComplete(), false);
             assertEquals(results.getSerializedPages().size(), 1);
             assertEquals(results.getSerializedPages().get(0).getPositionCount(), 1);
 
             for (boolean moreResults = true; moreResults; moreResults = !results.isBufferComplete()) {
-                results = sqlTaskManager.getTaskResults(taskId, OUT, results.getToken() + results.getSerializedPages().size(), new DataSize(1, Unit.MEGABYTE)).get();
+                results = sqlTaskManager.getTaskResults(taskId, OUT, results.getToken() + results.getSerializedPages().size(), new DataSize(1, Unit.MEGABYTE), "0-test_instance_id").get();
             }
             assertEquals(results.isBufferComplete(), true);
             assertEquals(results.getSerializedPages().size(), 0);
 
             // complete the task by calling abort on it
-            TaskInfo info = sqlTaskManager.abortTaskResults(taskId, OUT);
+            TaskInfo info = sqlTaskManager.abortTaskResults(taskId, OUT, "0-test_instance_id");
             assertEquals(info.getOutputBuffers().getState(), BufferState.FINISHED);
 
-            taskInfo = sqlTaskManager.getTaskInfo(taskId, taskInfo.getTaskStatus().getState()).get(1, TimeUnit.SECONDS);
+            taskInfo = sqlTaskManager.getTaskInfo(taskId, taskInfo.getTaskStatus().getState(), "0-test_instance_id").get(1, TimeUnit.SECONDS);
             assertEquals(taskInfo.getTaskStatus().getState(), TaskState.FINISHED);
-            taskInfo = sqlTaskManager.getTaskInfo(taskId);
+            taskInfo = sqlTaskManager.getTaskInfo(taskId, "0-test_instance_id");
             assertEquals(taskInfo.getTaskStatus().getState(), TaskState.FINISHED);
         }
     }
@@ -147,15 +184,15 @@ public class TestSqlTaskManager
             assertEquals(taskInfo.getTaskStatus().getState(), TaskState.RUNNING);
             assertNull(taskInfo.getStats().getEndTime());
 
-            taskInfo = sqlTaskManager.getTaskInfo(taskId);
+            taskInfo = sqlTaskManager.getTaskInfo(taskId, "0-test_instance_id");
             assertEquals(taskInfo.getTaskStatus().getState(), TaskState.RUNNING);
             assertNull(taskInfo.getStats().getEndTime());
 
-            taskInfo = sqlTaskManager.cancelTask(taskId);
+            taskInfo = sqlTaskManager.cancelTask(taskId, TaskState.CANCELED, "0-test_instance_id");
             assertEquals(taskInfo.getTaskStatus().getState(), TaskState.CANCELED);
             assertNotNull(taskInfo.getStats().getEndTime());
 
-            taskInfo = sqlTaskManager.getTaskInfo(taskId);
+            taskInfo = sqlTaskManager.getTaskInfo(taskId, "0-test_instance_id");
             assertEquals(taskInfo.getTaskStatus().getState(), TaskState.CANCELED);
             assertNotNull(taskInfo.getStats().getEndTime());
         }
@@ -170,15 +207,15 @@ public class TestSqlTaskManager
             assertEquals(taskInfo.getTaskStatus().getState(), TaskState.RUNNING);
             assertNull(taskInfo.getStats().getEndTime());
 
-            taskInfo = sqlTaskManager.getTaskInfo(taskId);
+            taskInfo = sqlTaskManager.getTaskInfo(taskId, "0-test_instance_id");
             assertEquals(taskInfo.getTaskStatus().getState(), TaskState.RUNNING);
             assertNull(taskInfo.getStats().getEndTime());
 
-            taskInfo = sqlTaskManager.abortTask(taskId);
+            taskInfo = sqlTaskManager.cancelTask(taskId, TaskState.ABORTED, "0-test_instance_id");
             assertEquals(taskInfo.getTaskStatus().getState(), TaskState.ABORTED);
             assertNotNull(taskInfo.getStats().getEndTime());
 
-            taskInfo = sqlTaskManager.getTaskInfo(taskId);
+            taskInfo = sqlTaskManager.getTaskInfo(taskId, "0-test_instance_id");
             assertEquals(taskInfo.getTaskStatus().getState(), TaskState.ABORTED);
             assertNotNull(taskInfo.getStats().getEndTime());
         }
@@ -193,15 +230,15 @@ public class TestSqlTaskManager
             TaskInfo taskInfo = createTask(sqlTaskManager, taskId, ImmutableSet.of(SPLIT), createInitialEmptyOutputBuffers(PARTITIONED).withBuffer(OUT, 0).withNoMoreBufferIds());
             assertEquals(taskInfo.getTaskStatus().getState(), TaskState.RUNNING);
 
-            taskInfo = sqlTaskManager.getTaskInfo(taskId);
+            taskInfo = sqlTaskManager.getTaskInfo(taskId, "0-test_instance_id");
             assertEquals(taskInfo.getTaskStatus().getState(), TaskState.RUNNING);
 
-            sqlTaskManager.abortTaskResults(taskId, OUT);
+            sqlTaskManager.abortTaskResults(taskId, OUT, "0-test_instance_id");
 
-            taskInfo = sqlTaskManager.getTaskInfo(taskId, taskInfo.getTaskStatus().getState()).get(1, TimeUnit.SECONDS);
+            taskInfo = sqlTaskManager.getTaskInfo(taskId, taskInfo.getTaskStatus().getState(), "0-test_instance_id").get(1, TimeUnit.SECONDS);
             assertEquals(taskInfo.getTaskStatus().getState(), TaskState.FINISHED);
 
-            taskInfo = sqlTaskManager.getTaskInfo(taskId);
+            taskInfo = sqlTaskManager.getTaskInfo(taskId, "0-test_instance_id");
             assertEquals(taskInfo.getTaskStatus().getState(), TaskState.FINISHED);
         }
     }
@@ -216,10 +253,10 @@ public class TestSqlTaskManager
             TaskInfo taskInfo = createTask(sqlTaskManager, taskId, createInitialEmptyOutputBuffers(PARTITIONED).withBuffer(OUT, 0).withNoMoreBufferIds());
             assertEquals(taskInfo.getTaskStatus().getState(), TaskState.RUNNING);
 
-            taskInfo = sqlTaskManager.cancelTask(taskId);
+            taskInfo = sqlTaskManager.cancelTask(taskId, TaskState.CANCELED, "0-test_instance_id");
             assertEquals(taskInfo.getTaskStatus().getState(), TaskState.CANCELED);
 
-            taskInfo = sqlTaskManager.getTaskInfo(taskId);
+            taskInfo = sqlTaskManager.getTaskInfo(taskId, "0-test_instance_id");
             assertEquals(taskInfo.getTaskStatus().getState(), TaskState.CANCELED);
 
             Thread.sleep(100);
@@ -246,7 +283,8 @@ public class TestSqlTaskManager
                 localSpillManager,
                 new NodeSpillConfig(),
                 new TestingGcMonitor(),
-                new EmptyMockMetadata());
+                createTestMetadataManager(),
+                NOOP_SNAPSHOT_UTILS);
     }
 
     private TaskInfo createTask(SqlTaskManager sqlTaskManager, TaskId taskId, ImmutableSet<ScheduledSplit> splits, OutputBuffers outputBuffers)
@@ -257,21 +295,28 @@ public class TestSqlTaskManager
                 ImmutableList.of(new TaskSource(TABLE_SCAN_NODE_ID, splits, true)),
                 outputBuffers,
                 OptionalInt.empty(),
-                Optional.empty());
+                Optional.empty(),
+                "0-test_instance_id");
     }
 
     private TaskInfo createTask(SqlTaskManager sqlTaskManager, TaskId taskId, OutputBuffers outputBuffers)
     {
-        sqlTaskManager.getQueryContext(taskId.getQueryId())
-                .addTaskContext(new TaskStateMachine(taskId, directExecutor()), testSessionBuilder().build(), false, false, OptionalInt.empty(),
-                        Optional.empty());
+        sqlTaskManager.getQueryContext(taskId.getQueryId()).addTaskContext(
+                new TaskStateMachine(taskId, directExecutor()),
+                testSessionBuilder().build(),
+                false,
+                false,
+                OptionalInt.empty(),
+                Optional.empty(),
+                TESTING_SERDE_FACTORY);
         return sqlTaskManager.updateTask(TEST_SESSION,
                 taskId,
                 Optional.of(PLAN_FRAGMENT),
                 ImmutableList.of(),
                 outputBuffers,
                 OptionalInt.empty(),
-                Optional.empty());
+                Optional.empty(),
+                "0-test_instance_id");
     }
 
     public static class MockExchangeClientSupplier

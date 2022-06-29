@@ -13,17 +13,23 @@
  */
 package io.prestosql.operator;
 
+import io.hetu.core.spi.cube.CubeFilter;
 import io.hetu.core.spi.cube.CubeMetadata;
 import io.hetu.core.spi.cube.CubeMetadataBuilder;
 import io.hetu.core.spi.cube.io.CubeMetaStore;
 import io.prestosql.Session;
 import io.prestosql.cube.CubeManager;
+import io.prestosql.metadata.Metadata;
 import io.prestosql.spi.Page;
+import io.prestosql.spi.cube.CubeUpdateMetadata;
 import io.prestosql.spi.plan.PlanNodeId;
+import io.prestosql.spi.snapshot.RestorableConfig;
 import io.prestosql.sql.ExpressionFormatter;
 import io.prestosql.sql.ExpressionUtils;
 import io.prestosql.sql.parser.ParsingOptions;
 import io.prestosql.sql.parser.SqlParser;
+import io.prestosql.sql.planner.TypeProvider;
+import io.prestosql.sql.tree.BooleanLiteral;
 import io.prestosql.sql.tree.Expression;
 
 import java.util.Optional;
@@ -33,6 +39,8 @@ import static io.hetu.core.spi.cube.CubeStatus.READY;
 import static io.prestosql.cube.CubeManager.STAR_TREE;
 import static java.util.Objects.requireNonNull;
 
+// create cube statement does not have snapshot support
+@RestorableConfig(unsupported = true)
 public class CubeFinishOperator
         implements Operator
 {
@@ -43,27 +51,27 @@ public class CubeFinishOperator
         private final PlanNodeId planNodeId;
         private final Session session;
         private final CubeManager cubeManager;
-        private final String cubeName;
-        private final Expression newDataPredicate;
-        private final boolean overwrite;
+        private final CubeUpdateMetadata cubeUpdateMetadata;
+        private final Metadata metadata;
+        private final TypeProvider types;
         private boolean closed;
 
         public CubeFinishOperatorFactory(
                 int operatorId,
                 PlanNodeId planNodeId,
                 Session session,
+                Metadata metadata,
+                TypeProvider types,
                 CubeManager cubeManager,
-                String cubeName,
-                Expression newDataPredicate,
-                boolean overwrite)
+                CubeUpdateMetadata cubeUpdateMetadata)
         {
             this.operatorId = operatorId;
             this.planNodeId = requireNonNull(planNodeId, "planNodeId is null");
             this.session = requireNonNull(session, "session is null");
+            this.metadata = requireNonNull(metadata, "metadata is null");
+            this.types = requireNonNull(types, "types is null");
             this.cubeManager = requireNonNull(cubeManager, "cubeManager is null");
-            this.cubeName = requireNonNull(cubeName, "starTableName is null");
-            this.newDataPredicate = newDataPredicate;
-            this.overwrite = overwrite;
+            this.cubeUpdateMetadata = requireNonNull(cubeUpdateMetadata, "cubeUpdateMetadata is null");
         }
 
         @Override
@@ -71,7 +79,7 @@ public class CubeFinishOperator
         {
             checkState(!closed, "Factory is already closed");
             OperatorContext context = driverContext.addOperatorContext(operatorId, planNodeId, CubeFinishOperator.class.getSimpleName());
-            return new CubeFinishOperator(context, cubeManager, cubeName, newDataPredicate, overwrite);
+            return new CubeFinishOperator(context, cubeManager, cubeUpdateMetadata, types, metadata, session);
         }
 
         @Override
@@ -83,7 +91,7 @@ public class CubeFinishOperator
         @Override
         public OperatorFactory duplicate()
         {
-            return new CubeFinishOperatorFactory(operatorId, planNodeId, session, cubeManager, cubeName, newDataPredicate, overwrite);
+            return new CubeFinishOperatorFactory(operatorId, planNodeId, session, metadata, types, cubeManager, cubeUpdateMetadata);
         }
     }
 
@@ -96,24 +104,27 @@ public class CubeFinishOperator
 
     private final OperatorContext operatorContext;
     private final CubeMetaStore cubeMetastore;
-    private final String cubeName;
-    private final Expression newDataPredicate;
-    private final boolean overwrite;
+    private final CubeUpdateMetadata updateMetadata;
+    private final TypeProvider types;
+    private final Metadata metadata;
+    private final Session session;
     private State state = State.NEEDS_INPUT;
     private Page page;
 
     public CubeFinishOperator(
             OperatorContext operatorContext,
             CubeManager cubeManager,
-            String cubeName,
-            Expression newDataPredicate,
-            boolean overwrite)
+            CubeUpdateMetadata updateMetadata,
+            TypeProvider types,
+            Metadata metadata,
+            Session session)
     {
         this.operatorContext = requireNonNull(operatorContext, "operatorContext is null");
         this.cubeMetastore = cubeManager.getMetaStore(STAR_TREE).get();
-        this.cubeName = cubeName;
-        this.newDataPredicate = newDataPredicate;
-        this.overwrite = overwrite;
+        this.updateMetadata = updateMetadata;
+        this.types = types;
+        this.metadata = metadata;
+        this.session = session;
     }
 
     @Override
@@ -143,23 +154,45 @@ public class CubeFinishOperator
         if (state != State.HAS_OUTPUT) {
             return null;
         }
-        CubeMetadata cubeMetadata = cubeMetastore.getMetadataFromCubeName(cubeName).get();
-        CubeMetadataBuilder builder = cubeMetastore.getBuilder(cubeMetadata);
-        Expression updatable;
-        if (overwrite || cubeMetadata.getPredicateString() == null) {
-            updatable = newDataPredicate;
+        synchronized (cubeMetastore) {
+            //handle concurrent inserts into cube.
+            CubeMetadata cubeMetadata = cubeMetastore.getMetadataFromCubeName(updateMetadata.getCubeName()).get();
+            CubeMetadataBuilder builder = cubeMetastore.getBuilder(cubeMetadata);
+            builder.withCubeFilter(mergePredicates(cubeMetadata.getCubeFilter(), updateMetadata.getDataPredicateString()));
+            builder.setTableLastUpdatedTime(updateMetadata.getTableLastUpdatedTime());
+            builder.setCubeLastUpdatedTime(System.currentTimeMillis());
+            builder.setCubeStatus(READY);
+            cubeMetastore.persist(builder.build());
+            state = State.FINISHED;
         }
-        else {
-            Expression existing = new SqlParser().createExpression(cubeMetadata.getPredicateString(), new ParsingOptions());
-            updatable = ExpressionUtils.or(existing, newDataPredicate);
-        }
-        //TODO: Add Logic to simplify expression. Check if Two between predicates can be merged into one
-        builder.withPredicate(ExpressionFormatter.formatExpression(updatable, Optional.empty()));
-        builder.setCubeStatus(READY);
-        CubeMetadata update = builder.build(System.currentTimeMillis());
-        cubeMetastore.persist(update);
-        state = State.FINISHED;
         return page;
+    }
+
+    private CubeFilter mergePredicates(CubeFilter existing, String newPredicateString)
+    {
+        String sourceTablePredicate = existing == null ? null : existing.getSourceTablePredicate();
+        if (newPredicateString == null && sourceTablePredicate == null) {
+            return null;
+        }
+        else if (newPredicateString == null) {
+            return new CubeFilter(sourceTablePredicate, null);
+        }
+        SqlParser sqlParser = new SqlParser();
+        Expression newPredicate = sqlParser.createExpression(newPredicateString, new ParsingOptions());
+        if (!updateMetadata.isOverwrite() && existing != null && existing.getCubePredicate() != null) {
+            newPredicate = ExpressionUtils.or(sqlParser.createExpression(existing.getCubePredicate(), new ParsingOptions()), newPredicate);
+        }
+        //Merge new data predicate with existing predicate string
+        CubeRangeCanonicalizer canonicalizer = new CubeRangeCanonicalizer(metadata, session, types);
+        newPredicate = canonicalizer.mergePredicates(newPredicate);
+        String formatExpression = newPredicate.equals(BooleanLiteral.TRUE_LITERAL) ? null : ExpressionFormatter.formatExpression(newPredicate, Optional.empty());
+        return formatExpression == null && sourceTablePredicate == null ? null : new CubeFilter(sourceTablePredicate, formatExpression);
+    }
+
+    @Override
+    public Page pollMarker()
+    {
+        return null;
     }
 
     @Override

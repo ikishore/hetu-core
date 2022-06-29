@@ -13,15 +13,25 @@
  */
 package io.prestosql.plugin.jdbc;
 
+import io.airlift.slice.Slice;
 import io.prestosql.plugin.jdbc.optimization.BaseJdbcQueryGenerator;
+import io.prestosql.plugin.jdbc.optimization.JdbcConverterContext;
 import io.prestosql.plugin.jdbc.optimization.JdbcQueryGeneratorResult;
+import io.prestosql.plugin.splitmanager.SplitStatLog;
+import io.prestosql.plugin.splitmanager.TableSplitConfig;
+import io.prestosql.spi.block.Block;
 import io.prestosql.spi.connector.ColumnHandle;
 import io.prestosql.spi.connector.ColumnMetadata;
 import io.prestosql.spi.connector.ConnectorSession;
 import io.prestosql.spi.connector.ConnectorSplitSource;
+import io.prestosql.spi.connector.ConnectorTableHandle;
 import io.prestosql.spi.connector.ConnectorTableMetadata;
 import io.prestosql.spi.connector.SchemaTableName;
+import io.prestosql.spi.function.ExternalFunctionHub;
+import io.prestosql.spi.function.FunctionMetadataManager;
+import io.prestosql.spi.function.StandardFunctionResolution;
 import io.prestosql.spi.predicate.TupleDomain;
+import io.prestosql.spi.relation.DeterminismEvaluator;
 import io.prestosql.spi.relation.RowExpressionService;
 import io.prestosql.spi.sql.QueryGenerator;
 import io.prestosql.spi.statistics.TableStatistics;
@@ -34,6 +44,7 @@ import java.util.Collection;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
+import java.util.OptionalLong;
 import java.util.Set;
 
 public abstract class ForwardingJdbcClient
@@ -179,6 +190,18 @@ public abstract class ForwardingJdbcClient
     }
 
     @Override
+    public void createSchema(ConnectorSession session, String schemaName)
+    {
+        getDelegate().createSchema(session, schemaName);
+    }
+
+    @Override
+    public void dropSchema(ConnectorSession session, String schemaName)
+    {
+        getDelegate().dropSchema(session, schemaName);
+    }
+
+    @Override
     public boolean supportsLimit()
     {
         return getDelegate().supportsLimit();
@@ -262,8 +285,125 @@ public abstract class ForwardingJdbcClient
      * @return the optional SQL query writer which can write database specific SQL queries
      */
     @Override
-    public Optional<QueryGenerator<JdbcQueryGeneratorResult>> getQueryGenerator(RowExpressionService rowExpressionService)
+    public Optional<QueryGenerator<JdbcQueryGeneratorResult, JdbcConverterContext>> getQueryGenerator(DeterminismEvaluator determinismEvaluator, RowExpressionService rowExpressionService, FunctionMetadataManager functionManager, StandardFunctionResolution functionResolution)
     {
-        return getDelegate().getQueryGenerator(rowExpressionService);
+        return getDelegate().getQueryGenerator(determinismEvaluator, rowExpressionService, functionManager, functionResolution);
+    }
+
+    /**
+     * return external function hub
+     */
+    @Override
+    public Optional<ExternalFunctionHub> getExternalFunctionHub()
+    {
+        return Optional.empty();
+    }
+
+    @Override
+    public ColumnHandle getDeleteRowIdColumnHandle(ConnectorSession session, ConnectorTableHandle tableHandle)
+    {
+        return getDelegate().getDeleteRowIdColumnHandle(session, tableHandle);
+    }
+
+    @Override
+    public Optional<ConnectorTableHandle> applyDelete(ConnectorSession session, ConnectorTableHandle handle)
+    {
+        return getDelegate().applyDelete(session, handle);
+    }
+
+    @Override
+    public OptionalLong executeDelete(ConnectorSession session, ConnectorTableHandle handle)
+    {
+        return getDelegate().executeDelete(session, handle);
+    }
+
+    @Override
+    public OptionalLong executeUpdate(ConnectorSession session, ConnectorTableHandle handle)
+    {
+        return getDelegate().executeUpdate(session, handle);
+    }
+
+    @Override
+    public OptionalLong deleteTable(ConnectorSession session, ConnectorTableHandle handle)
+    {
+        return getDelegate().deleteTable(session, handle);
+    }
+
+    @Override
+    public ConnectorTableHandle beginDelete(ConnectorSession session, ConnectorTableHandle tableHandle)
+    {
+        return getDelegate().beginDelete(session, tableHandle);
+    }
+
+    @Override
+    public void finishDelete(ConnectorSession session, ConnectorTableHandle tableHandle, Collection<Slice> fragments)
+    {
+        getDelegate().finishDelete(session, tableHandle, fragments);
+    }
+
+    @Override
+    public ConnectorTableHandle beginUpdate(ConnectorSession session, ConnectorTableHandle tableHandle, List<Type> updatedColumnTypes)
+    {
+        return getDelegate().beginUpdate(session, tableHandle, updatedColumnTypes);
+    }
+
+    @Override
+    public void finishUpdate(ConnectorSession session, ConnectorTableHandle tableHandle, Collection<Slice> fragments)
+    {
+        getDelegate().finishUpdate(session, tableHandle, fragments);
+    }
+
+    @Override
+    public String buildDeleteSql(ConnectorTableHandle handle)
+    {
+        return getDelegate().buildDeleteSql(handle);
+    }
+
+    @Override
+    public String buildUpdateSql(ConnectorSession session, ConnectorTableHandle handle, int updateColumnNum, List<String> updatedColumns)
+    {
+        return getDelegate().buildUpdateSql(session, handle, updateColumnNum, updatedColumns);
+    }
+
+    @Override
+    public void setDeleteSql(PreparedStatement statement, Block rowIds, int position)
+    {
+        getDelegate().setDeleteSql(statement, rowIds, position);
+    }
+
+    @Override
+    public void setUpdateSql(ConnectorSession session, ConnectorTableHandle tableHandle, PreparedStatement statement, List<Block> columnValueAndRowIdBlock, int position, List<String> updatedColumns)
+    {
+        getDelegate().setUpdateSql(session, tableHandle, statement, columnValueAndRowIdBlock, position, updatedColumns);
+    }
+
+    @Override
+    public ColumnHandle getUpdateRowIdColumnHandle(ConnectorSession session, ConnectorTableHandle tableHandle, List<ColumnHandle> updatedColumns)
+    {
+        return getDelegate().getUpdateRowIdColumnHandle(session, tableHandle, updatedColumns);
+    }
+
+    @Override
+    public List<SplitStatLog> getSplitStatic(JdbcIdentity identity, List<JdbcSplit> jdbcSplitList)
+    {
+        return getDelegate().getSplitStatic(identity, jdbcSplitList);
+    }
+
+    @Override
+    public Long[] getSplitFieldMinAndMaxValue(TableSplitConfig conf, Connection connection, JdbcTableHandle tableHandle)
+    {
+        return getDelegate().getSplitFieldMinAndMaxValue(conf, connection, tableHandle);
+    }
+
+    @Override
+    public long getTableModificationTime(ConnectorSession session, JdbcTableHandle tableHandle)
+    {
+        return getDelegate().getTableModificationTime(session, tableHandle);
+    }
+
+    @Override
+    public boolean isPreAggregationSupported(ConnectorSession session)
+    {
+        return getDelegate().isPreAggregationSupported(session);
     }
 }

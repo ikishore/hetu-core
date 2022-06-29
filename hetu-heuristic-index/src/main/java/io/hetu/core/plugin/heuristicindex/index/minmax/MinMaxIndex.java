@@ -1,5 +1,5 @@
 /*
- * Copyright (C) 2018-2020. Huawei Technologies Co., Ltd. All rights reserved.
+ * Copyright (C) 2018-2021. Huawei Technologies Co., Ltd. All rights reserved.
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
  * You may obtain a copy of the License at
@@ -18,6 +18,7 @@ package io.hetu.core.plugin.heuristicindex.index.minmax;
 import com.google.common.collect.ImmutableSet;
 import io.hetu.core.common.util.SecureObjectInputStream;
 import io.prestosql.spi.connector.CreateIndexMetadata;
+import io.prestosql.spi.function.BuiltInFunctionHandle;
 import io.prestosql.spi.function.OperatorType;
 import io.prestosql.spi.function.Signature;
 import io.prestosql.spi.heuristicindex.Index;
@@ -29,6 +30,7 @@ import java.io.InputStream;
 import java.io.ObjectInputStream;
 import java.io.ObjectOutputStream;
 import java.io.OutputStream;
+import java.nio.charset.StandardCharsets;
 import java.util.List;
 import java.util.Objects;
 import java.util.Optional;
@@ -65,6 +67,17 @@ public class MinMaxIndex
     {
         this.min = (Comparable) min;
         this.max = (Comparable) max;
+    }
+
+    @Override
+    public long getMemoryUsage()
+    {
+        if (min instanceof String) {
+            return ((String) min).getBytes(StandardCharsets.UTF_8).length + ((String) max).getBytes(StandardCharsets.UTF_8).length;
+        }
+        else {
+            return 0; // if the data type is not a string, the memory usage will be too small to converted to a positive number in KB
+        }
     }
 
     @Override
@@ -113,22 +126,28 @@ public class MinMaxIndex
     {
         if (expression instanceof CallExpression) {
             CallExpression callExp = (CallExpression) expression;
-            Optional<OperatorType> operatorOptional = Signature.getOperatorType(((CallExpression) expression).getSignature().getName());
+            BuiltInFunctionHandle builtInFunctionHandle;
+            if (callExp.getFunctionHandle() instanceof BuiltInFunctionHandle) {
+                builtInFunctionHandle = (BuiltInFunctionHandle) callExp.getFunctionHandle();
+            }
+            else {
+                throw new UnsupportedOperationException("Unsupported function: " + callExp.getDisplayName());
+            }
+            Optional<OperatorType> operatorOptional = Signature.getOperatorType(builtInFunctionHandle.getSignature().getNameSuffix());
             if (operatorOptional.isPresent()) {
                 OperatorType operator = operatorOptional.get();
                 Comparable value = (Comparable) extractValueFromRowExpression(callExp.getArguments().get(1));
                 switch (operator) {
                     case EQUAL:
-                        return (value.compareTo(min) > 0 || value.compareTo(min) == 0)
-                                && (value.compareTo(max) < 0 || value.compareTo(max) == 0);
+                        return (value.compareTo(min) >= 0) && (value.compareTo(max) <= 0);
                     case LESS_THAN:
                         return value.compareTo(min) > 0;
                     case LESS_THAN_OR_EQUAL:
-                        return value.compareTo(min) > 0 || value.compareTo(min) == 0;
+                        return value.compareTo(min) >= 0;
                     case GREATER_THAN:
                         return value.compareTo(max) < 0;
                     case GREATER_THAN_OR_EQUAL:
-                        return value.compareTo(max) < 0 || value.compareTo(max) == 0;
+                        return value.compareTo(max) <= 0;
                     default:
                         throw new UnsupportedOperationException("Unsupported operator " + operator);
                 }

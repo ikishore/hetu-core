@@ -120,6 +120,13 @@ public abstract class AbstractTestQueryFramework
         return queryRunner.execute(session, sql).toTestTypes();
     }
 
+    protected MaterializedResult computeActualAndAssertPlan(Session session, @Language("SQL") String sql, Consumer<Plan> planAssertion)
+    {
+        QueryRunner.MaterializedResultWithPlan resultWithPlan = queryRunner.executeWithPlan(session, sql, WarningCollector.NOOP);
+        planAssertion.accept(resultWithPlan.getQueryPlan());
+        return resultWithPlan.getMaterializedResult().toTestTypes();
+    }
+
     protected Object computeScalar(@Language("SQL") String sql)
     {
         return computeActual(sql).getOnlyValue();
@@ -149,6 +156,16 @@ public abstract class AbstractTestQueryFramework
     {
         checkArgument(queryRunner instanceof DistributedQueryRunner, "pattern assertion is only supported for DistributedQueryRunner");
         QueryAssertions.assertQuery(queryRunner, session, actual, h2QueryRunner, expected, false, false, planAssertion);
+    }
+
+    /*
+    * The assertQuery method runs actual query with actual query session and it runs the expected query with expected query session.
+    * In this way we can compare the results and test the features which can be enabled and disabled through the session.
+    */
+    protected void assertQuery(Session actualQuerySession, @Language("SQL") String actual, Session expectedQuerySession, @Language("SQL") String expected, Consumer<Plan> planAssertion)
+    {
+        checkArgument(queryRunner instanceof DistributedQueryRunner, "pattern assertion is only supported for DistributedQueryRunner");
+        QueryAssertions.assertQuery(queryRunner, actualQuerySession, actual, h2QueryRunner, expectedQuerySession, expected, false, false, planAssertion);
     }
 
     protected void assertQueryOrdered(@Language("SQL") String sql)

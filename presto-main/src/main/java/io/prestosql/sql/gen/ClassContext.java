@@ -1,5 +1,5 @@
 /*
- * Copyright (C) 2018-2020. Huawei Technologies Co., Ltd. All rights reserved.
+ * Copyright (C) 2018-2021. Huawei Technologies Co., Ltd. All rights reserved.
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
  * You may obtain a copy of the License at
@@ -22,7 +22,7 @@ import io.prestosql.spi.relation.SpecialForm;
 public class ClassContext
 {
     public static final int SPLIT_EXPRESSION_WEIGHT_THRESHOLD = 16;
-    public static final int SPLIT_EXPRESSION_DEPTH_THRESHOLD = 64;
+    public static final int SPLIT_EXPRESSION_DEPTH_THRESHOLD = 32;
 
     interface FilterMethodGenerator
     {

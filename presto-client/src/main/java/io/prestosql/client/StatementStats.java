@@ -44,7 +44,11 @@ public class StatementStats
     private final long processedBytes;
     private final long peakMemoryBytes;
     private final long spilledBytes;
+    private long elapsedSpillReadTimeMillis;
+    private long elapsedSpillWriteTimeMillis;
+    private int spilledNodes;
     private final StageStats rootStage;
+    private final SnapshotStats snapshotStats;
 
     @JsonCreator
     public StatementStats(
@@ -64,7 +68,11 @@ public class StatementStats
             @JsonProperty("processedBytes") long processedBytes,
             @JsonProperty("peakMemoryBytes") long peakMemoryBytes,
             @JsonProperty("spilledBytes") long spilledBytes,
-            @JsonProperty("rootStage") StageStats rootStage)
+            @JsonProperty("elapsedSpillReadTimeMillis") long elapsedSpillReadTimeMillis,
+            @JsonProperty("elapsedSpillWriteTimeMillis") long elapsedSpillWriteTimeMillis,
+            @JsonProperty("spilledNodes") int spilledNodes,
+            @JsonProperty("rootStage") StageStats rootStage,
+            @JsonProperty("snapshotStats") SnapshotStats snapshotStats)
     {
         this.state = requireNonNull(state, "state is null");
         this.queued = queued;
@@ -82,7 +90,11 @@ public class StatementStats
         this.processedBytes = processedBytes;
         this.peakMemoryBytes = peakMemoryBytes;
         this.spilledBytes = spilledBytes;
+        this.elapsedSpillReadTimeMillis = elapsedSpillReadTimeMillis;
+        this.elapsedSpillWriteTimeMillis = elapsedSpillWriteTimeMillis;
+        this.spilledNodes = spilledNodes;
         this.rootStage = rootStage;
+        this.snapshotStats = snapshotStats;
     }
 
     @JsonProperty
@@ -197,6 +209,30 @@ public class StatementStats
         return spilledBytes;
     }
 
+    @JsonProperty
+    public long getElapsedSpillReadTimeMillis()
+    {
+        return elapsedSpillReadTimeMillis;
+    }
+
+    @JsonProperty
+    public long getElapsedSpillWriteTimeMillis()
+    {
+        return elapsedSpillWriteTimeMillis;
+    }
+
+    @JsonProperty
+    public int getSpilledNodes()
+    {
+        return spilledNodes;
+    }
+
+    @JsonProperty
+    public SnapshotStats getSnapshotStats()
+    {
+        return snapshotStats;
+    }
+
     @Override
     public String toString()
     {
@@ -217,7 +253,10 @@ public class StatementStats
                 .add("processedBytes", processedBytes)
                 .add("peakMemoryBytes", peakMemoryBytes)
                 .add("spilledBytes", spilledBytes)
+                .add("elapsedSpillReadTime", elapsedSpillReadTimeMillis)
+                .add("elapsedSpillWriteTime", elapsedSpillWriteTimeMillis)
                 .add("rootStage", rootStage)
+                .add("snapshotStats", snapshotStats)
                 .toString();
     }
 
@@ -245,6 +284,10 @@ public class StatementStats
         private long peakMemoryBytes;
         private long spilledBytes;
         private StageStats rootStage;
+        private long spillReadTimeMillis;
+        private long spillWriteTimeMillis;
+        private int spilledNodes;
+        private SnapshotStats snapshotStats;
 
         private Builder() {}
 
@@ -344,9 +387,33 @@ public class StatementStats
             return this;
         }
 
+        public Builder setSpilledWriteTimeMillis(long spillTime)
+        {
+            this.spillWriteTimeMillis = spillTime;
+            return this;
+        }
+
+        public Builder setSpilledReadTimeMillis(long spillTime)
+        {
+            this.spillReadTimeMillis = spillTime;
+            return this;
+        }
+
+        public Builder setSpilledNodes(int spilledNodes)
+        {
+            this.spilledNodes = spilledNodes;
+            return this;
+        }
+
         public Builder setRootStage(StageStats rootStage)
         {
             this.rootStage = rootStage;
+            return this;
+        }
+
+        public Builder setSnapshotStats(SnapshotStats snapshotStats)
+        {
+            this.snapshotStats = snapshotStats;
             return this;
         }
 
@@ -369,7 +436,11 @@ public class StatementStats
                     processedBytes,
                     peakMemoryBytes,
                     spilledBytes,
-                    rootStage);
+                    spillReadTimeMillis,
+                    spillWriteTimeMillis,
+                    spilledNodes,
+                    rootStage,
+                    snapshotStats);
         }
     }
 }

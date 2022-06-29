@@ -120,7 +120,7 @@ import static org.apache.hadoop.hive.metastore.api.hive_metastoreConstants.HIVE_
 public class ThriftHiveMetastore
         implements ThriftMetastore
 {
-    private static final Logger log = Logger.get(ThriftHiveMetastore.class);
+    private static final Logger LOGGER = Logger.get(ThriftHiveMetastore.class);
 
     private final ThriftMetastoreStats stats = new ThriftMetastoreStats();
     private final MetastoreLocator clientProvider;
@@ -530,31 +530,36 @@ public class ThriftHiveMetastore
     }
 
     @Override
-    public synchronized void updatePartitionsStatistics(HiveIdentity identity, String databaseName, String tableName, List<String> partitionNames, List<Function<PartitionStatistics, PartitionStatistics>> updateFunctionList)
+    public synchronized void updatePartitionsStatistics(HiveIdentity identity, String databaseName, String tableName, Map<String, Function<PartitionStatistics, PartitionStatistics>> partNamesUpdateFunctionMap)
     {
         ImmutableList.Builder<Partition> modifiedPartitionBuilder = ImmutableList.builder();
         ImmutableMap.Builder<String, PartitionInfo> partitionInfoMapBuilder = ImmutableMap.builder();
         Optional<Table> table = getTable(identity, databaseName, tableName);
-        List<Partition> partitions = getPartitionsByNames(identity, databaseName, tableName, partitionNames);
+
+        List<Partition> partitions = getPartitionsByNames(identity, databaseName, tableName, partNamesUpdateFunctionMap.keySet().stream().collect(Collectors.toList()));
         Map<String, PartitionStatistics> partitionsStatistics = getPartitionStatistics(identity, table.get(), partitions);
 
-        if (partitions.size() != partitionsStatistics.size() || partitions.size() != partitionNames.size()) {
+        if (partitions.size() != partitionsStatistics.size() || partitions.size() != partNamesUpdateFunctionMap.size()) {
             throw new PrestoException(HiveErrorCode.HIVE_METASTORE_ERROR, "Metastore returned multiple partitions");
         }
-        for (int index = 0; index < partitionNames.size(); index++) {
-            String partitionName = partitionNames.get(index);
+        List<String> partColumns = table.get().getPartitionKeys().stream()
+                .map(FieldSchema::getName)
+                .collect(toImmutableList());
+        for (int index = 0; index < partitions.size(); index++) {
+            String partitionName = makePartName(partColumns, partitions.get(index).getValues());
             PartitionStatistics currentStatistics = requireNonNull(partitionsStatistics.get(partitionName),
                     "getPartitionStatistics() returned null");
 
-            PartitionStatistics updatedStatistics = updateFunctionList.get(index).apply(currentStatistics);
+            PartitionStatistics updatedStatistics = partNamesUpdateFunctionMap.get(partitionName).apply(currentStatistics);
 
             Partition originalPartition = partitions.get(index);
             Partition modifiedPartition = originalPartition.deepCopy();
             HiveBasicStatistics basicStatistics = updatedStatistics.getBasicStatistics();
             modifiedPartition.setParameters(ThriftMetastoreUtil.updateStatisticsParameters(modifiedPartition.getParameters(), basicStatistics));
+            originalPartition.setParameters(ThriftMetastoreUtil.updateStatisticsParameters(originalPartition.getParameters(), basicStatistics));
 
             modifiedPartitionBuilder.add(modifiedPartition);
-            partitionInfoMapBuilder.put(partitionName, new PartitionInfo(basicStatistics, currentStatistics, modifiedPartition, updatedStatistics));
+            partitionInfoMapBuilder.put(partitionName, new PartitionInfo(basicStatistics, currentStatistics, originalPartition, updatedStatistics));
         }
         alterPartitionsWithoutStatistics(databaseName, tableName, modifiedPartitionBuilder.build());
 
@@ -1266,7 +1271,6 @@ public class ThriftHiveMetastore
         }
 
         // check if statistics for the columnsWithMissingStatistics are actually stored in the metastore
-        // when trying to remove any missing statistics the metastore throws NoSuchObjectException
         String partitionName = partitionWithStatistics.getPartitionName();
         List<ColumnStatisticsObj> statisticsToBeRemoved = getMetastorePartitionColumnStatistics(
                 identity,
@@ -1615,7 +1619,7 @@ public class ThriftHiveMetastore
                     throw new PrestoException(HiveErrorCode.HIVE_TABLE_LOCK_NOT_ACQUIRED, format("Timed out waiting for lock %d in hive transaction %s for query %s", lockId, transactionId, queryId));
                 }
 
-                log.debug("Waiting for lock %d in hive transaction %s for query %s", lockId, transactionId, queryId);
+                LOGGER.debug("Waiting for lock %d in hive transaction %s for query %s", lockId, transactionId, queryId);
 
                 response = retry()
                         .stopOn(NoSuchTxnException.class, NoSuchLockException.class, TxnAbortedException.class, MetaException.class)
@@ -1748,7 +1752,7 @@ public class ThriftHiveMetastore
                     });
         }
         catch (ConfigValSecurityException e) {
-            log.debug(e, "Could not fetch value for config '%s' from Hive", name);
+            LOGGER.debug(e, "Could not fetch value for config '%s' from Hive", name);
             return Optional.empty();
         }
         catch (TException e) {
@@ -1772,7 +1776,8 @@ public class ThriftHiveMetastore
                             new HiveObjectRef(TABLE, databaseName, tableName, null, null),
                             grantee.getName(),
                             ThriftMetastoreUtil.fromPrestoPrincipalType(grantee.getType()),
-                            privilegeGrantInfo));
+                            privilegeGrantInfo,
+                            "SQL"));
         }
         return new PrivilegeBag(privilegeBagBuilder.build());
     }
@@ -1853,6 +1858,7 @@ public class ThriftHiveMetastore
                 throw t;
             }
             catch (IOException e) {
+                LOGGER.error("setMetastoreUserOrClose error : %s", e.getMessage());
                 // impossible; will be suppressed
             }
         }

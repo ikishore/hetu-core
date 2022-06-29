@@ -17,18 +17,18 @@ import com.google.common.collect.ImmutableList;
 import io.prestosql.matching.Capture;
 import io.prestosql.matching.Captures;
 import io.prestosql.matching.Pattern;
-import io.prestosql.spi.function.Signature;
+import io.prestosql.metadata.FunctionAndTypeManager;
+import io.prestosql.spi.function.StandardFunctionResolution;
 import io.prestosql.spi.plan.AggregationNode;
 import io.prestosql.spi.plan.Assignments;
 import io.prestosql.spi.plan.ProjectNode;
 import io.prestosql.spi.plan.Symbol;
-import io.prestosql.spi.type.StandardTypes;
-import io.prestosql.sql.planner.SymbolUtils;
+import io.prestosql.spi.relation.CallExpression;
+import io.prestosql.spi.relation.ConstantExpression;
+import io.prestosql.spi.relation.RowExpression;
+import io.prestosql.spi.relation.VariableReferenceExpression;
 import io.prestosql.sql.planner.iterative.Rule;
-import io.prestosql.sql.tree.Expression;
-import io.prestosql.sql.tree.Literal;
-import io.prestosql.sql.tree.NullLiteral;
-import io.prestosql.sql.tree.SymbolReference;
+import io.prestosql.sql.relational.FunctionResolution;
 
 import java.util.LinkedHashMap;
 import java.util.Map;
@@ -36,12 +36,12 @@ import java.util.Map.Entry;
 import java.util.Optional;
 
 import static io.prestosql.matching.Capture.newCapture;
-import static io.prestosql.spi.function.FunctionKind.AGGREGATE;
-import static io.prestosql.spi.type.TypeSignature.parseTypeSignature;
+import static io.prestosql.spi.type.BigintType.BIGINT;
 import static io.prestosql.sql.planner.plan.Patterns.aggregation;
 import static io.prestosql.sql.planner.plan.Patterns.project;
 import static io.prestosql.sql.planner.plan.Patterns.source;
-import static io.prestosql.sql.relational.OriginalExpressionUtils.castToExpression;
+import static io.prestosql.sql.relational.Expressions.isNull;
+import static java.util.Objects.requireNonNull;
 
 public class SimplifyCountOverConstant
         implements Rule<AggregationNode>
@@ -50,6 +50,14 @@ public class SimplifyCountOverConstant
 
     private static final Pattern<AggregationNode> PATTERN = aggregation()
             .with(source().matching(project().capturedAs(CHILD)));
+
+    private final StandardFunctionResolution functionResolution;
+
+    public SimplifyCountOverConstant(FunctionAndTypeManager functionAndTypeManager)
+    {
+        requireNonNull(functionAndTypeManager, "functionManager is null");
+        this.functionResolution = new FunctionResolution(functionAndTypeManager);
+    }
 
     @Override
     public Pattern<AggregationNode> getPattern()
@@ -72,7 +80,12 @@ public class SimplifyCountOverConstant
             if (isCountOverConstant(aggregation, child.getAssignments())) {
                 changed = true;
                 aggregations.put(symbol, new AggregationNode.Aggregation(
-                        new Signature("count", AGGREGATE, parseTypeSignature(StandardTypes.BIGINT)),
+                        new CallExpression(
+                                "count",
+                                functionResolution.countFunction(),
+                                BIGINT,
+                                ImmutableList.of(),
+                                Optional.empty()),
                         ImmutableList.of(),
                         false,
                         Optional.empty(),
@@ -93,21 +106,22 @@ public class SimplifyCountOverConstant
                 ImmutableList.of(),
                 parent.getStep(),
                 parent.getHashSymbol(),
-                parent.getGroupIdSymbol()));
+                parent.getGroupIdSymbol(),
+                parent.getAggregationType(),
+                parent.getFinalizeSymbol()));
     }
 
-    private static boolean isCountOverConstant(AggregationNode.Aggregation aggregation, Assignments inputs)
+    private boolean isCountOverConstant(AggregationNode.Aggregation aggregation, Assignments inputs)
     {
-        Signature signature = aggregation.getSignature();
-        if (!signature.getName().equals("count") || signature.getArgumentTypes().size() != 1) {
+        if (!functionResolution.isCountFunction(aggregation.getFunctionHandle()) || aggregation.getArguments().size() != 1) {
             return false;
         }
 
-        Expression argument = castToExpression(aggregation.getArguments().get(0));
-        if (argument instanceof SymbolReference) {
-            argument = castToExpression(inputs.get(SymbolUtils.from(argument)));
+        RowExpression argument = aggregation.getArguments().get(0);
+        if (argument instanceof VariableReferenceExpression) {
+            argument = inputs.get(new Symbol(((VariableReferenceExpression) argument).getName()));
         }
 
-        return argument instanceof Literal && !(argument instanceof NullLiteral);
+        return argument instanceof ConstantExpression && !isNull(argument);
     }
 }

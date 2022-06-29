@@ -18,11 +18,11 @@ import com.fasterxml.jackson.annotation.JsonProperty;
 import com.google.common.collect.ImmutableSet;
 import io.prestosql.Session;
 import io.prestosql.metadata.Metadata;
-import io.prestosql.metadata.QualifiedObjectName;
 import io.prestosql.metadata.TableMetadata;
 import io.prestosql.spi.connector.CatalogSchemaTableName;
 import io.prestosql.spi.connector.ColumnHandle;
 import io.prestosql.spi.connector.ColumnMetadata;
+import io.prestosql.spi.connector.QualifiedObjectName;
 import io.prestosql.spi.metadata.TableHandle;
 import io.prestosql.spi.plan.PlanNode;
 import io.prestosql.spi.plan.TableScanNode;
@@ -35,6 +35,7 @@ import io.prestosql.spi.type.TypeSignature;
 import io.prestosql.sql.planner.plan.CubeFinishNode;
 import io.prestosql.sql.planner.plan.InternalPlanVisitor;
 import io.prestosql.sql.planner.plan.TableFinishNode;
+import io.prestosql.sql.planner.plan.TableWriterNode;
 import io.prestosql.sql.planner.plan.TableWriterNode.CreateReference;
 import io.prestosql.sql.planner.plan.TableWriterNode.CreateTarget;
 import io.prestosql.sql.planner.plan.TableWriterNode.DeleteAsInsertTarget;
@@ -510,6 +511,13 @@ public class IoPlanPrinter
                         target.getSchemaTableName().getSchemaName(),
                         target.getSchemaTableName().getTableName()));
             }
+            else if (writerTarget instanceof TableWriterNode.UpdateAsInsertTarget) {
+                TableWriterNode.UpdateAsInsertTarget target = (TableWriterNode.UpdateAsInsertTarget) writerTarget;
+                context.setOutputTable(new CatalogSchemaTableName(
+                        target.getHandle().getCatalogName().getCatalogName(),
+                        target.getSchemaTableName().getSchemaName(),
+                        target.getSchemaTableName().getTableName()));
+            }
             else if (writerTarget instanceof DeleteAsInsertTarget) {
                 DeleteAsInsertTarget target = (DeleteAsInsertTarget) writerTarget;
                 context.setOutputTable(new CatalogSchemaTableName(
@@ -536,7 +544,7 @@ public class IoPlanPrinter
         @Override
         public Void visitCubeFinish(CubeFinishNode node, IoPlanBuilder context)
         {
-            QualifiedObjectName qualifiedObjectName = QualifiedObjectName.valueOf(node.getCubeName());
+            QualifiedObjectName qualifiedObjectName = QualifiedObjectName.valueOf(node.getMetadata().getCubeName());
             context.setOutputTable(new CatalogSchemaTableName(
                     qualifiedObjectName.getCatalogName(),
                     qualifiedObjectName.getSchemaName(),

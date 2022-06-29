@@ -19,8 +19,10 @@ import io.airlift.units.Duration;
 import io.prestosql.execution.QueryManagerConfig;
 import io.prestosql.execution.TaskManagerConfig;
 import io.prestosql.memory.MemoryManagerConfig;
+import io.prestosql.snapshot.SnapshotConfig;
 import io.prestosql.spi.PrestoException;
 import io.prestosql.spi.session.PropertyMetadata;
+import io.prestosql.spi.type.TimeZoneKey;
 import io.prestosql.sql.analyzer.FeaturesConfig;
 import io.prestosql.sql.analyzer.FeaturesConfig.DynamicFilterDataType;
 import io.prestosql.sql.analyzer.FeaturesConfig.JoinDistributionType;
@@ -42,6 +44,7 @@ import static io.prestosql.spi.session.PropertyMetadata.doubleProperty;
 import static io.prestosql.spi.session.PropertyMetadata.durationProperty;
 import static io.prestosql.spi.session.PropertyMetadata.enumProperty;
 import static io.prestosql.spi.session.PropertyMetadata.integerProperty;
+import static io.prestosql.spi.session.PropertyMetadata.longProperty;
 import static io.prestosql.spi.session.PropertyMetadata.stringProperty;
 import static io.prestosql.spi.type.BigintType.BIGINT;
 import static io.prestosql.spi.type.BooleanType.BOOLEAN;
@@ -73,6 +76,7 @@ public final class SystemSessionProperties
     public static final String QUERY_MAX_CPU_TIME = "query_max_cpu_time";
     public static final String QUERY_MAX_STAGE_COUNT = "query_max_stage_count";
     public static final String REDISTRIBUTE_WRITES = "redistribute_writes";
+    public static final String TIME_ZONE_ID = "time_zone_id";
     // redistribute writes type session property key
     public static final String REDISTRIBUTE_WRITES_TYPE = "redistribute_writes_type";
     public static final String SCALE_WRITERS = "scale_writers";
@@ -96,14 +100,16 @@ public final class SystemSessionProperties
     public static final String QUERY_PRIORITY = "query_priority";
     public static final String SPILL_ENABLED = "spill_enabled";
     public static final String SPILL_ORDER_BY = "spill_order_by";
+    public static final String SPILL_NON_BLOCKING_ORDERBY = "spill_non_blocking_orderby";
     public static final String SPILL_WINDOW_OPERATOR = "spill_window_operator";
+    public static final String SPILL_OUTER_JOIN_ENABLED = "spill_build_for_outer_join_enabled";
+    public static final String INNER_JOIN_SPILL_FILTER_ENABLED = "inner_join_spill_filter_enabled";
     public static final String AGGREGATION_OPERATOR_UNSPILL_MEMORY_LIMIT = "aggregation_operator_unspill_memory_limit";
     public static final String OPTIMIZE_DISTINCT_AGGREGATIONS = "optimize_mixed_distinct_aggregations";
     public static final String ITERATIVE_OPTIMIZER = "iterative_optimizer_enabled";
     public static final String ITERATIVE_OPTIMIZER_TIMEOUT = "iterative_optimizer_timeout";
     public static final String ENABLE_FORCED_EXCHANGE_BELOW_GROUP_ID = "enable_forced_exchange_below_group_id";
     public static final String EXCHANGE_COMPRESSION = "exchange_compression";
-    public static final String LEGACY_TIMESTAMP = "legacy_timestamp";
     public static final String ENABLE_INTERMEDIATE_AGGREGATIONS = "enable_intermediate_aggregations";
     public static final String PUSH_AGGREGATION_THROUGH_JOIN = "push_aggregation_through_join";
     public static final String PUSH_PARTIAL_AGGREGATION_THROUGH_JOIN = "push_partial_aggregation_through_join";
@@ -150,12 +156,25 @@ public final class SystemSessionProperties
     public static final String REUSE_TABLE_SCAN = "reuse_table_scan";
     public static final String SPILL_REUSE_TABLESCAN = "spill_reuse_tablescan";
     public static final String SPILL_THRESHOLD_REUSE_TABLESCAN = "spill_threshold_reuse_tablescan";
+    public static final String SORT_BASED_AGGREGATION_ENABLED = "sort_based_aggregation_enabled";
+    public static final String PRCNT_DRIVERS_FOR_PARTIAL_AGGR = "prcnt_drivers_for_partial_aggr";
     // CTE Optimization configurations
     public static final String CTE_REUSE_ENABLED = "cte_reuse_enabled";
     public static final String CTE_MAX_QUEUE_SIZE = "cte_max_queue_size";
     public static final String CTE_MAX_PREFETCH_QUEUE_SIZE = "cte_max_prefetch_queue_size";
     public static final String DELETE_TRANSACTIONAL_TABLE_DIRECT = "delete_transactional_table_direct";
-    // BQO configurations
+    public static final String LIST_BUILT_IN_FUNCTIONS_ONLY = "list_built_in_functions_only";
+    // Snapshot related configurations
+    public static final String SNAPSHOT_ENABLED = "snapshot_enabled";
+    public static final String SNAPSHOT_INTERVAL_TYPE = "snapshot_interval_type";
+    public static final String SNAPSHOT_TIME_INTERVAL = "snapshot_time_interval";
+    public static final String SNAPSHOT_SPLIT_COUNT_INTERVAL = "snapshot_split_count_interval";
+    public static final String SNAPSHOT_MAX_RETRIES = "snapshot_max_retries";
+    public static final String SNAPSHOT_RETRY_TIMEOUT = "snapshot_retry_timeout";
+    public static final String SKIP_ATTACHING_STATS_WITH_PLAN = "skip_attaching_stats_with_plan";
+    public static final String SKIP_NON_APPLICABLE_RULES_ENABLED = "skip_non_applicable_rules_enabled";
+	
+	    // BQO configurations
     public static final String BATCH_ENABLED = "batch_enabled";
     public static final String BATCH_SIZE = "batch_size";
     public static final String CM_PARAMETER = "cm_parameter";
@@ -165,12 +184,11 @@ public final class SystemSessionProperties
     public static final String SINGLE_QUERY_COST_THRESHOLD = "single_query_cost_threshold";
     public static final String CACHING_PARTITIONING = "caching_paritioning";
     public static final String ONLY_PARTITIONING = "only_partitioning";
-
     private final List<PropertyMetadata<?>> sessionProperties;
 
     public SystemSessionProperties()
     {
-        this(new QueryManagerConfig(), new TaskManagerConfig(), new MemoryManagerConfig(), new FeaturesConfig(), new HetuConfig());
+        this(new QueryManagerConfig(), new TaskManagerConfig(), new MemoryManagerConfig(), new FeaturesConfig(), new HetuConfig(), new SnapshotConfig());
     }
 
     @Inject
@@ -179,7 +197,8 @@ public final class SystemSessionProperties
             TaskManagerConfig taskManagerConfig,
             MemoryManagerConfig memoryManagerConfig,
             FeaturesConfig featuresConfig,
-            HetuConfig hetuConfig)
+            HetuConfig hetuConfig,
+            SnapshotConfig snapshotConfig)
     {
         sessionProperties = ImmutableList.of(
                 stringProperty(
@@ -280,6 +299,16 @@ public final class SystemSessionProperties
                         "Force parallel distributed writes",
                         featuresConfig.isRedistributeWrites(),
                         false),
+                stringProperty(
+                        TIME_ZONE_ID,
+                        "Time Zone Id for the current session",
+                        null,
+                        value -> {
+                            if (value != null) {
+                                TimeZoneKey.getTimeZoneKey(value);
+                            }
+                        },
+                        true),
                 // redistribute writes type config
                 enumProperty(
                         REDISTRIBUTE_WRITES_TYPE,
@@ -485,6 +514,21 @@ public final class SystemSessionProperties
                         featuresConfig.isSpillOrderBy(),
                         false),
                 booleanProperty(
+                        SPILL_NON_BLOCKING_ORDERBY,
+                        "Spill orderby in non blocking manner",
+                        featuresConfig.isNonBlockingSpill(),
+                        false),
+                booleanProperty(
+                        SPILL_OUTER_JOIN_ENABLED,
+                        "Enable build side spill for Right or Full Outer Join",
+                        featuresConfig.isSpillBuildForOuterJoinEnabled(),
+                        false),
+                booleanProperty(
+                        INNER_JOIN_SPILL_FILTER_ENABLED,
+                        "Enable build side spill matching optimization for Inner Join",
+                        featuresConfig.isInnerJoinSpillFilterEnabled(),
+                        false),
+                booleanProperty(
                         SPILL_WINDOW_OPERATOR,
                         "Spill in WindowOperator if spill_enabled is also set",
                         featuresConfig.isSpillWindowOperator(),
@@ -519,11 +563,6 @@ public final class SystemSessionProperties
                         "Enable compression in exchanges",
                         featuresConfig.isExchangeCompressionEnabled(),
                         false),
-                booleanProperty(
-                        LEGACY_TIMESTAMP,
-                        "Use legacy TIME & TIMESTAMP semantics (warning: this will be removed)",
-                        featuresConfig.isLegacyTimestamp(),
-                        true),
                 booleanProperty(
                         ENABLE_INTERMEDIATE_AGGREGATIONS,
                         "Enable the use of intermediate aggregations",
@@ -732,6 +771,62 @@ public final class SystemSessionProperties
                         featuresConfig.isEnableStarTreeIndex(),
                         false),
                 booleanProperty(
+                        LIST_BUILT_IN_FUNCTIONS_ONLY,
+                        "Only List built-in functions in SHOW FUNCTIONS",
+                        featuresConfig.isListBuiltInFunctionsOnly(),
+                        false),
+                booleanProperty(
+                        SNAPSHOT_ENABLED,
+                        "Enable query snapshoting",
+                        false,
+                        false),
+                enumProperty(
+                        SNAPSHOT_INTERVAL_TYPE,
+                        "Snapshot interval type",
+                        SnapshotConfig.IntervalType.class,
+                        snapshotConfig.getSnapshotIntervalType(),
+                        false),
+                durationProperty(
+                        SNAPSHOT_TIME_INTERVAL,
+                        "Snapshot time interval",
+                        snapshotConfig.getSnapshotTimeInterval(),
+                        false),
+                longProperty(
+                        SNAPSHOT_SPLIT_COUNT_INTERVAL,
+                        "snapshot split count interval",
+                        snapshotConfig.getSnapshotSplitCountInterval(),
+                        false),
+                longProperty(
+                        SNAPSHOT_MAX_RETRIES,
+                        "snapshot max retries",
+                        snapshotConfig.getSnapshotMaxRetries(),
+                        false),
+                durationProperty(
+                        SNAPSHOT_RETRY_TIMEOUT,
+                        "Snapshot retry timeout",
+                        snapshotConfig.getSnapshotRetryTimeout(),
+                        false),
+                booleanProperty(
+                        SORT_BASED_AGGREGATION_ENABLED,
+                        "Enable sort based aggregation",
+                        featuresConfig.isSortBasedAggregationEnabled(),
+                        false),
+                integerProperty(
+                        PRCNT_DRIVERS_FOR_PARTIAL_AGGR,
+                        "Sort based aggr, percentage of number of drivers that are used for not finalized values",
+                        featuresConfig.getPrcntDriversForPartialAggr(),
+                        false),
+                booleanProperty(
+                        SKIP_ATTACHING_STATS_WITH_PLAN,
+                        "Whether to calculate stats and attach with final plan",
+                        featuresConfig.isSkipAttachingStatsWithPlan(),
+                        false),
+                booleanProperty(
+                        SKIP_NON_APPLICABLE_RULES_ENABLED,
+                        "Whether to skip applying some selected rules based on query pattern",
+                        featuresConfig.isSkipNonApplicableRulesEnabled(),
+                        false),
+		                booleanProperty(
                         BATCH_ENABLED,
                         "Enabled batching",
                         featuresConfig.isBatchEnabled(),
@@ -765,17 +860,17 @@ public final class SystemSessionProperties
                         OVERLAP_OPTIMIZATION,
                         "Set overlap optimization parameter",
                         featuresConfig.getOverlapOpt(),
-                        false),
-                booleanProperty(
-                        CACHING_PARTITIONING,
-                        "Set Caching and Partitioning enabling parameter",
-                        featuresConfig.getCachingPartitioning(),
-                        false),
-                booleanProperty(
-                        ONLY_PARTITIONING,
-                        "Set Only Partitioning Parameter",
-                        featuresConfig.getOnlyPartitioning(),
-                        false));
+                                        false),
+                                booleanProperty(
+                                               CACHING_PARTITIONING,
+                                                "Set Caching and Partitioning enabling parameter",
+                                                featuresConfig.getCachingPartitioning(),
+                                                false),
+                                booleanProperty(
+                                                ONLY_PARTITIONING,
+                                                "Set Only Partitioning Parameter",
+                                                featuresConfig.getOnlyPartitioning(), false)
+                        );
     }
 
     public List<PropertyMetadata<?>> getSessionProperties()
@@ -1040,6 +1135,21 @@ public final class SystemSessionProperties
         return session.getSystemProperty(SPILL_ENABLED, Boolean.class);
     }
 
+    public static boolean isSpillForOuterJoinEnabled(Session session)
+    {
+        return session.getSystemProperty(SPILL_OUTER_JOIN_ENABLED, Boolean.class);
+    }
+
+    public static boolean isInnerJoinSpillFilteringEnabled(Session session)
+    {
+        return session.getSystemProperty(INNER_JOIN_SPILL_FILTER_ENABLED, Boolean.class);
+    }
+
+    public static boolean isNonBlockingSpillOrderby(Session session)
+    {
+        return session.getSystemProperty(SPILL_NON_BLOCKING_ORDERBY, Boolean.class);
+    }
+
     public static boolean isSpillOrderBy(Session session)
     {
         return session.getSystemProperty(SPILL_ORDER_BY, Boolean.class);
@@ -1065,11 +1175,6 @@ public final class SystemSessionProperties
     public static boolean isNewOptimizerEnabled(Session session)
     {
         return session.getSystemProperty(ITERATIVE_OPTIMIZER, Boolean.class);
-    }
-
-    public static boolean isLegacyTimestamp(Session session)
-    {
-        return session.getSystemProperty(LEGACY_TIMESTAMP, Boolean.class);
     }
 
     public static Duration getOptimizerTimeout(Session session)
@@ -1319,7 +1424,62 @@ public final class SystemSessionProperties
         return session.getSystemProperty(ENABLE_STAR_TREE_INDEX, Boolean.class);
     }
 
-    public static boolean isBatchEnabled(Session session)
+    public static boolean isListBuiltInFunctionsOnly(Session session)
+    {
+        return session.getSystemProperty(LIST_BUILT_IN_FUNCTIONS_ONLY, Boolean.class);
+    }
+
+    public static boolean isSnapshotEnabled(Session session)
+    {
+        return session.getSystemProperty(SNAPSHOT_ENABLED, Boolean.class);
+    }
+
+    public static SnapshotConfig.IntervalType getSnapshotIntervalType(Session session)
+    {
+        return session.getSystemProperty(SNAPSHOT_INTERVAL_TYPE, SnapshotConfig.IntervalType.class);
+    }
+
+    public static Duration getSnapshotTimeInterval(Session session)
+    {
+        return session.getSystemProperty(SNAPSHOT_TIME_INTERVAL, Duration.class);
+    }
+
+    public static long getSnapshotSplitCountInterval(Session session)
+    {
+        return session.getSystemProperty(SNAPSHOT_SPLIT_COUNT_INTERVAL, Long.class);
+    }
+
+    public static long getSnapshotMaxRetries(Session session)
+    {
+        return session.getSystemProperty(SNAPSHOT_MAX_RETRIES, Long.class);
+    }
+
+    public static Duration getSnapshotRetryTimeout(Session session)
+    {
+        return session.getSystemProperty(SNAPSHOT_RETRY_TIMEOUT, Duration.class);
+    }
+
+    public static boolean isSortBasedAggregationEnabled(Session session)
+    {
+        return session.getSystemProperty(SORT_BASED_AGGREGATION_ENABLED, Boolean.class);
+    }
+
+    public static int getPrcntDriversForPartialAggr(Session session)
+    {
+        return session.getSystemProperty(PRCNT_DRIVERS_FOR_PARTIAL_AGGR, Integer.class);
+    }
+
+    public static boolean isSkipAttachingStatsWithPlan(Session session)
+    {
+        return session.getSystemProperty(SKIP_ATTACHING_STATS_WITH_PLAN, Boolean.class);
+    }
+
+    public static boolean isSkipNonApplicableRulesEnabled(Session session)
+    {
+        return session.getSystemProperty(SKIP_NON_APPLICABLE_RULES_ENABLED, Boolean.class);
+    }
+    
+        public static boolean isBatchEnabled(Session session)
     {
         return session.getSystemProperty(BATCH_ENABLED, Boolean.class);
     }
@@ -1332,16 +1492,6 @@ public final class SystemSessionProperties
     public static boolean isOverlapOptEnabled(Session session)
     {
         return session.getSystemProperty(OVERLAP_OPTIMIZATION, Boolean.class);
-    }
-
-    public static boolean isCachingPartioningEnabled(Session session)
-    {
-        return session.getSystemProperty(CACHING_PARTITIONING, Boolean.class);
-    }
-
-    public static boolean isOnlyPartitioningEnabled(Session session)
-    {
-        return session.getSystemProperty(ONLY_PARTITIONING, Boolean.class);
     }
 
     public static int getBatchSize(Session session)
@@ -1363,4 +1513,15 @@ public final class SystemSessionProperties
     {
         return session.getSystemProperty(SINGLE_QUERY_COST_THRESHOLD, Integer.class);
     }
+
+    public static boolean isCachingPartioningEnabled(Session session)
+    {
+        return session.getSystemProperty(CACHING_PARTITIONING, Boolean.class);
+    }
+
+    public static boolean isOnlyPartitioningEnabled(Session session)
+    {
+            return session.getSystemProperty(ONLY_PARTITIONING, Boolean.class);
+       }
+
 }

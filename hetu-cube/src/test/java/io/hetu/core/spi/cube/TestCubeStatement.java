@@ -1,5 +1,5 @@
 /*
- * Copyright (C) 2018-2020. Huawei Technologies Co., Ltd. All rights reserved.
+ * Copyright (C) 2018-2021. Huawei Technologies Co., Ltd. All rights reserved.
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
  * You may obtain a copy of the License at
@@ -34,8 +34,8 @@ public class TestCubeStatement
                 .select("name", "address", "nationkey")
                 .aggregate(AggregationSignature.count())
                 .from("tpch.tiny.customer")
-                .groupBy("address")
-                .groupBy("name", "nationkey")
+                .groupByAddString("address")
+                .groupByAddStringList("name", "nationkey")
                 .build();
 
         assertEquals(statement.getFrom(), "tpch.tiny.customer", "incorrect from table");
@@ -51,21 +51,18 @@ public class TestCubeStatement
                 .select("name", "address", "nationkey")
                 .aggregate(AggregationSignature.count())
                 .from("tpch.tiny.customer")
-                .where("nationkey = 123")
                 .build();
 
         CubeStatement statement2 = CubeStatement.newBuilder()
                 .select("name", "address", "nationkey")
                 .aggregate(AggregationSignature.count())
                 .from("tpch.tiny.customer")
-                .where("nationkey = 123")
                 .build();
 
         CubeStatement statement3 = CubeStatement.newBuilder()
                 .select("name", "address")
                 .aggregate(AggregationSignature.count())
                 .from("tpch.tiny.customer")
-                .where("nationkey = 123")
                 .build();
 
         assertEquals(statement1, statement2, "statements are not equal");

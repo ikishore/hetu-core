@@ -37,6 +37,7 @@ import io.prestosql.metadata.InternalNode;
 import io.prestosql.metadata.Split;
 import io.prestosql.operator.TaskContext;
 import io.prestosql.operator.TaskStats;
+import io.prestosql.snapshot.QuerySnapshotManager;
 import io.prestosql.spi.memory.MemoryPoolId;
 import io.prestosql.spi.operator.ReuseExchangeOperator;
 import io.prestosql.spi.plan.PlanNode;
@@ -85,6 +86,8 @@ import static io.prestosql.spi.type.VarcharType.VARCHAR;
 import static io.prestosql.sql.planner.SystemPartitioningHandle.SINGLE_DISTRIBUTION;
 import static io.prestosql.sql.planner.SystemPartitioningHandle.SOURCE_DISTRIBUTION;
 import static io.prestosql.testing.TestingHandles.TEST_TABLE_HANDLE;
+import static io.prestosql.testing.TestingPagesSerdeFactory.TESTING_SERDE_FACTORY;
+import static io.prestosql.testing.TestingSnapshotUtils.NOOP_SNAPSHOT_UTILS;
 import static io.prestosql.util.Failures.toFailures;
 import static java.util.Objects.requireNonNull;
 import static java.util.concurrent.TimeUnit.MILLISECONDS;
@@ -92,7 +95,6 @@ import static java.util.concurrent.TimeUnit.MILLISECONDS;
 public class MockRemoteTaskFactory
         implements RemoteTaskFactory
 {
-    private static final String TASK_INSTANCE_ID = "task-instance-id";
     private final Executor executor;
     private final ScheduledExecutorService scheduledExecutor;
 
@@ -104,6 +106,8 @@ public class MockRemoteTaskFactory
 
     public MockRemoteTask createTableScanTask(TaskId taskId, InternalNode newNode, List<Split> splits, PartitionedSplitCountTracker partitionedSplitCountTracker)
     {
+        // for now, just use a filler instanceId for tests
+        String instanceId = "testInstanceId";
         Symbol symbol = new Symbol("column");
         PlanNodeId sourceId = new PlanNodeId("sourceId");
         PlanFragment testFragment = new PlanFragment(
@@ -131,22 +135,26 @@ public class MockRemoteTaskFactory
         for (Split sourceSplit : splits) {
             initialSplits.put(sourceId, sourceSplit);
         }
-        return createRemoteTask(TEST_SESSION, taskId, newNode, testFragment, initialSplits.build(), OptionalInt.empty(), createInitialEmptyOutputBuffers(BROADCAST), partitionedSplitCountTracker, true, Optional.empty());
+        return createRemoteTask(TEST_SESSION, taskId, instanceId, newNode, testFragment, initialSplits.build(), OptionalInt.empty(), createInitialEmptyOutputBuffers(BROADCAST),
+                partitionedSplitCountTracker, true, Optional.empty(), new QuerySnapshotManager(taskId.getQueryId(), NOOP_SNAPSHOT_UTILS, TEST_SESSION));
     }
 
     @Override
     public MockRemoteTask createRemoteTask(
             Session session,
             TaskId taskId,
+            String instanceId,
             InternalNode node,
             PlanFragment fragment,
             Multimap<PlanNodeId, Split> initialSplits,
             OptionalInt totalPartitions,
             OutputBuffers outputBuffers,
             PartitionedSplitCountTracker partitionedSplitCountTracker,
-            boolean summarizeTaskInfo, Optional<PlanNodeId> parent)
+            boolean summarizeTaskInfo,
+            Optional<PlanNodeId> parent,
+            QuerySnapshotManager snapshotManager)
     {
-        return new MockRemoteTask(taskId, fragment, node.getNodeIdentifier(), executor, scheduledExecutor, initialSplits, totalPartitions, partitionedSplitCountTracker);
+        return new MockRemoteTask(taskId, instanceId, fragment, node.getNodeIdentifier(), executor, scheduledExecutor, initialSplits, totalPartitions, partitionedSplitCountTracker);
     }
 
     public static final class MockRemoteTask
@@ -155,6 +163,7 @@ public class MockRemoteTaskFactory
         private final AtomicLong nextTaskInfoVersion = new AtomicLong(TaskStatus.STARTING_VERSION);
 
         private final URI location;
+        private final String instanceId;
         private final TaskStateMachine taskStateMachine;
         private final TaskContext taskContext;
         private final OutputBuffer outputBuffer;
@@ -177,6 +186,7 @@ public class MockRemoteTaskFactory
         private final PartitionedSplitCountTracker partitionedSplitCountTracker;
 
         public MockRemoteTask(TaskId taskId,
+                String instanceId,
                 PlanFragment fragment,
                 String nodeId,
                 Executor executor,
@@ -186,6 +196,7 @@ public class MockRemoteTaskFactory
                 PartitionedSplitCountTracker partitionedSplitCountTracker)
         {
             this.taskStateMachine = new TaskStateMachine(requireNonNull(taskId, "taskId is null"), requireNonNull(executor, "executor is null"));
+            this.instanceId = instanceId;
 
             MemoryPool memoryPool = new MemoryPool(new MemoryPoolId("test"), new DataSize(1, GIGABYTE));
             SpillSpaceTracker spillSpaceTracker = new SpillSpaceTracker(new DataSize(1, GIGABYTE));
@@ -197,14 +208,21 @@ public class MockRemoteTaskFactory
                     executor,
                     scheduledExecutor,
                     new DataSize(1, MEGABYTE),
-                    spillSpaceTracker);
-            this.taskContext = queryContext.addTaskContext(taskStateMachine, TEST_SESSION, true, true, totalPartitions, Optional.empty());
+                    spillSpaceTracker,
+                    NOOP_SNAPSHOT_UTILS);
+            this.taskContext = queryContext.addTaskContext(
+                    taskStateMachine,
+                    TEST_SESSION,
+                    true,
+                    true,
+                    totalPartitions,
+                    Optional.empty(),
+                    TESTING_SERDE_FACTORY);
 
             this.location = URI.create("fake://task/" + taskId);
 
             this.outputBuffer = new LazyOutputBuffer(
                     taskId,
-                    TASK_INSTANCE_ID,
                     executor,
                     new DataSize(1, BYTE),
                     () -> new SimpleLocalMemoryContext(newSimpleAggregatedMemoryContext(), "test"));
@@ -221,6 +239,12 @@ public class MockRemoteTaskFactory
         public TaskId getTaskId()
         {
             return taskStateMachine.getTaskId();
+        }
+
+        @Override
+        public String getInstanceId()
+        {
+            return instanceId;
         }
 
         @Override
@@ -241,7 +265,7 @@ public class MockRemoteTaskFactory
             return new TaskInfo(
                     new TaskStatus(
                             taskStateMachine.getTaskId(),
-                            TASK_INSTANCE_ID,
+                            "fakeConfirmationInstanceId",
                             nextTaskInfoVersion.getAndIncrement(),
                             state,
                             location,
@@ -256,7 +280,9 @@ public class MockRemoteTaskFactory
                             new DataSize(0, BYTE),
                             new DataSize(0, BYTE),
                             0,
-                            new Duration(0, MILLISECONDS)),
+                            new Duration(0, MILLISECONDS),
+                            ImmutableMap.of(),
+                            Optional.empty()),
                     DateTime.now(),
                     outputBuffer.getInfo(),
                     ImmutableSet.of(),
@@ -269,7 +295,7 @@ public class MockRemoteTaskFactory
         {
             TaskStats stats = taskContext.getTaskStats();
             return new TaskStatus(taskStateMachine.getTaskId(),
-                    TASK_INSTANCE_ID,
+                    "fakeConfirmationInstanceId",
                     nextTaskInfoVersion.get(),
                     taskStateMachine.getState(),
                     location,
@@ -284,7 +310,9 @@ public class MockRemoteTaskFactory
                     stats.getSystemMemoryReservation(),
                     stats.getRevocableMemoryReservation(),
                     0,
-                    new Duration(0, MILLISECONDS));
+                    new Duration(0, MILLISECONDS),
+                    ImmutableMap.of(),
+                    Optional.empty());
         }
 
         private synchronized void updateSplitQueueSpace()
@@ -404,13 +432,19 @@ public class MockRemoteTaskFactory
         @Override
         public void cancel()
         {
-            taskStateMachine.cancel();
+            taskStateMachine.cancel(TaskState.CANCELED);
+        }
+
+        @Override
+        public void cancelToResume()
+        {
+            taskStateMachine.cancel(TaskState.CANCELED_TO_RESUME);
         }
 
         @Override
         public void abort()
         {
-            taskStateMachine.abort();
+            taskStateMachine.cancel(TaskState.ABORTED);
             clearSplits();
         }
 

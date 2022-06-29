@@ -88,6 +88,11 @@ public interface ConnectorTableHandle
         return false;
     }
 
+    default boolean isUpdateAsInsertSupported()
+    {
+        return false;
+    }
+
     default boolean isSuitableForPushdown()
     {
         return false;
@@ -125,5 +130,23 @@ public interface ConnectorTableHandle
     default boolean isReuseTableScanSupported()
     {
         return false;
+    }
+
+    /* This method checks if table properties caching supported*/
+    default boolean isTablePropertiesCacheSupported()
+    {
+        return false;
+    }
+
+    /* This method checks if Sort Based Aggregation can be used*/
+    default boolean isSortBasedAggregationSupported()
+    {
+        return false;
+    }
+
+    /* this method validates for required ConnectorTableHandle parameters*/
+    default boolean basicEquals(ConnectorTableHandle that)
+    {
+        return equals(that);
     }
 }

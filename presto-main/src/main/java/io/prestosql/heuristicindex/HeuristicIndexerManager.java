@@ -1,5 +1,5 @@
 /*
- * Copyright (C) 2018-2020. Huawei Technologies Co., Ltd. All rights reserved.
+ * Copyright (C) 2018-2021. Huawei Technologies Co., Ltd. All rights reserved.
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
  * You may obtain a copy of the License at
@@ -16,6 +16,7 @@ package io.prestosql.heuristicindex;
 
 import com.google.inject.Inject;
 import io.airlift.log.Logger;
+import io.hetu.core.common.util.SecurePathWhiteList;
 import io.prestosql.execution.QueryInfo;
 import io.prestosql.filesystem.FileSystemClientManager;
 import io.prestosql.metastore.HetuMetaStoreManager;
@@ -38,9 +39,12 @@ import java.nio.file.Path;
 import java.nio.file.Paths;
 import java.util.Arrays;
 import java.util.Collections;
+import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Properties;
+
+import static com.google.common.base.Preconditions.checkArgument;
 
 public class HeuristicIndexerManager
 {
@@ -67,6 +71,13 @@ public class HeuristicIndexerManager
         return new HeuristicIndexerManager(new FileSystemClientManager(), new HetuMetaStoreManager());
     }
 
+    public void initCache()
+    {
+        if (PropertyService.getBooleanProperty(HetuConstant.FILTER_ENABLED)) {
+            SplitFiltering.getCache(getIndexClient());
+        }
+    }
+
     public void loadIndexFactories(IndexFactory indexFactory)
     {
         HeuristicIndexerManager.factory = indexFactory;
@@ -75,6 +86,49 @@ public class HeuristicIndexerManager
     public IndexClient getIndexClient()
     {
         return indexClient;
+    }
+
+    private IndexCache getIndexCache()
+    {
+        return SplitFiltering.getCache(indexClient);
+    }
+
+    public List<IndexRecord> getAllIndexRecordsWithUsage()
+            throws IOException
+    {
+        List<IndexRecord> records = getIndexClient().getAllIndexRecords();
+        updateIndexRecordUsage(records);
+        return records;
+    }
+
+    public List<IndexRecord> getIndexRecordWithUsage(String indexName)
+            throws IOException
+    {
+        List<IndexRecord> records = Collections.singletonList(getIndexClient().lookUpIndexRecord(indexName));
+        if (records.get(0) == null) {
+            return Collections.emptyList();
+        }
+        updateIndexRecordUsage(records);
+        return records;
+    }
+
+    private void updateIndexRecordUsage(List<IndexRecord> targetRecords)
+    {
+        HashMap<IndexRecord, Long> indexRecordMemoryUse = new HashMap<IndexRecord, Long>();
+        HashMap<IndexRecord, Long> indexRecordDiskUse = new HashMap<IndexRecord, Long>();
+        for (IndexRecord record : targetRecords) {
+            indexRecordMemoryUse.put(record, 0L);
+            indexRecordDiskUse.put(record, 0L);
+        }
+
+        // get the memory and disk usage of the records from cache
+        getIndexCache().readUsage(indexRecordMemoryUse, indexRecordDiskUse);
+
+        for (IndexRecord record : targetRecords) {
+            // update the indexRecord memory and disk usage field
+            record.setMemoryUsage(indexRecordMemoryUse.get(record));
+            record.setDiskUsage(indexRecordDiskUse.get(record));
+        }
     }
 
     public IndexWriter getIndexWriter(CreateIndexMetadata createIndexMetadata, Properties connectorMetadata)
@@ -101,9 +155,18 @@ public class HeuristicIndexerManager
             String indexStoreRoot = PropertyService.getStringProperty(HetuConstant.INDEXSTORE_URI);
 
             root = Paths.get(indexStoreRoot);
+
+            // although the root is already checked in HetuConfig#getIndexStoreUri
+            // when we set and get it from PropertyService, the code scan tool loses track and complains
+            // add the check here again
+            checkArgument(!root.toString().contains("../"),
+                    HetuConstant.INDEXSTORE_URI + " must be absolute and under one of the following whitelisted directories:  " + SecurePathWhiteList.getSecurePathWhiteList().toString());
+            checkArgument(SecurePathWhiteList.isSecurePath(root),
+                    HetuConstant.INDEXSTORE_URI + " must be under one of the following whitelisted directories: " + SecurePathWhiteList.getSecurePathWhiteList().toString());
+
             fs = fileSystemClientManager.getFileSystemClient(fsProfile, root);
             if (fileSystemClientManager.isFileSystemLocal(fsProfile)) {
-               throw new IllegalArgumentException("Indexer does not support local filesystem: " + fsProfile);
+                throw new IllegalArgumentException("Indexer does not support local filesystem: " + fsProfile);
             }
 
             metastore = hetuMetaStoreManager.getHetuMetastore();
@@ -122,16 +185,12 @@ public class HeuristicIndexerManager
     {
         if (PropertyService.getBooleanProperty(HetuConstant.FILTER_ENABLED) && indexClient != null) {
             String preloadNames = PropertyService.getStringProperty(HetuConstant.FILTER_CACHE_PRELOAD_INDICES);
-            if (!preloadNames.isEmpty()) {
-                List<String> preloadNameList = Arrays.asList(preloadNames.split(","));
-                if (!preloadNameList.isEmpty()) {
-                    try {
-                        SplitFiltering.preloadCache(indexClient, preloadNameList);
-                    }
-                    catch (Exception e) {
-                        LOG.info("Error preloading index: " + e);
-                    }
-                }
+            List<String> preloadNameList = Arrays.asList(preloadNames.split(","));
+            try {
+                SplitFiltering.preloadCache(indexClient, preloadNameList);
+            }
+            catch (Exception e) {
+                LOG.info("Error loading index: " + e);
             }
         }
     }

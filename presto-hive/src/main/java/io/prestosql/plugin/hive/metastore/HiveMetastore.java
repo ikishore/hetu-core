@@ -49,7 +49,7 @@ public interface HiveMetastore
 
     void updatePartitionStatistics(HiveIdentity identity, String databaseName, String tableName, String partitionName, Function<PartitionStatistics, PartitionStatistics> update);
 
-    void updatePartitionsStatistics(HiveIdentity identity, String databaseName, String tableName, List<String> partitionNames, List<Function<PartitionStatistics, PartitionStatistics>> updateFunctionList);
+    void updatePartitionsStatistics(HiveIdentity identity, String databaseName, String tableName, Map<String, Function<PartitionStatistics, PartitionStatistics>> partNamesUpdateFunctionMap);
 
     Optional<List<String>> getAllTables(String databaseName);
 
@@ -193,4 +193,8 @@ public interface HiveMetastore
     }
 
     boolean isImpersonationEnabled();
+
+    default void refreshMetastoreCache()
+    {
+    }
 }

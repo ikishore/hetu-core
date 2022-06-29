@@ -54,6 +54,7 @@ import io.prestosql.sql.planner.plan.SimplePlanRewriter;
 import io.prestosql.sql.planner.plan.StatisticsWriterNode;
 import io.prestosql.sql.planner.plan.TableDeleteNode;
 import io.prestosql.sql.planner.plan.TableFinishNode;
+import io.prestosql.sql.planner.plan.TableUpdateNode;
 import io.prestosql.sql.planner.plan.TableWriterNode;
 import io.prestosql.sql.planner.plan.TopNRankingNumberNode;
 import io.prestosql.sql.planner.plan.VacuumTableNode;
@@ -155,7 +156,6 @@ public class PlanFragmenter
     {
         PlanFragment fragment = subPlan.getFragment();
         GroupedExecutionProperties properties = fragment.getRoot().accept(new GroupedExecutionTagger(session, metadata, nodePartitioningManager), null);
-
         if (properties.isSubTreeUseful()) {
             boolean preferDynamic = fragment.getRemoteSourceNodes().stream().allMatch(node -> node.getExchangeType() == REPLICATE)
                     && isDynamicSchduleForGroupedExecution(session);
@@ -210,8 +210,8 @@ public class PlanFragmenter
                 fragment.getStageExecutionDescriptor(),
                 fragment.getStatsAndCosts(),
                 fragment.getJsonRepresentation(),
-                fragment.getProducerCTEId(),
-                fragment.getProducerCTEParentId());
+                fragment.getFeederCTEId(),
+                fragment.getFeederCTEParentId());
 
         ImmutableList.Builder<SubPlan> childrenBuilder = ImmutableList.builder();
         for (SubPlan child : subPlan.getChildren()) {
@@ -252,7 +252,7 @@ public class PlanFragmenter
             return new PlanFragmentId(String.valueOf(nextFragmentId++));
         }
 
-        private SubPlan buildFragment(PlanNode root, FragmentProperties properties, PlanFragmentId fragmentId, boolean isProducerCTE, Optional<PlanNodeId> producerCTEParentId)
+        private SubPlan buildFragment(PlanNode root, FragmentProperties properties, PlanFragmentId fragmentId, boolean isFeederCTE, Optional<PlanNodeId> feederCTEParentId)
         {
             Set<Symbol> dependencies = SymbolsExtractor.extractAllSymbols(root, Lookup.noLookup());
 
@@ -272,8 +272,8 @@ public class PlanFragmenter
                     ungroupedExecution(),
                     statsAndCosts.getForSubplan(root),
                     Optional.of(jsonFragmentPlan(root, symbols, metadata, session)),
-                    isProducerCTE ? Optional.of(fragmentId) : Optional.empty(),
-                    producerCTEParentId);
+                    isFeederCTE ? Optional.of(fragmentId) : Optional.empty(),
+                    feederCTEParentId);
 
             return new SubPlan(fragment, properties.getChildren());
         }
@@ -324,6 +324,13 @@ public class PlanFragmenter
         }
 
         @Override
+        public PlanNode visitTableUpdate(TableUpdateNode node, RewriteContext<FragmentProperties> context)
+        {
+            context.get().setCoordinatorOnlyDistribution();
+            return context.defaultRewrite(node, context.get());
+        }
+
+        @Override
         public PlanNode visitTableScan(TableScanNode node, RewriteContext<FragmentProperties> context)
         {
             PartitioningHandle partitioning = metadata.getTableProperties(session, node.getTable())
@@ -331,7 +338,6 @@ public class PlanFragmenter
                     .map(TablePartitioning::getPartitioningHandle)
                     .orElse(SOURCE_DISTRIBUTION);
             context.get().addSourceDistribution(node.getId(), partitioning, metadata, session);
-
             return context.defaultRewrite(node, context.get());
         }
 
@@ -397,7 +403,7 @@ public class PlanFragmenter
                                     currFragment.getStatsAndCosts(),
                                     currFragment.getJsonRepresentation(),
                                     Optional.empty(),   // This is not producer CTE, so we pass empty
-                                    currFragment.getProducerCTEParentId());
+                                    currFragment.getFeederCTEParentId());
                             builder.add(new SubPlan(fragment, subPlanMap.get(planNodeId).getChildren()));
                             List<RouterNode> routerNodes = routerToParentsMap.get(planNodeId);
                             routerNodes.add(getRouterNode(exchange.getSources().get(sourceIndex)));
@@ -412,6 +418,8 @@ public class PlanFragmenter
                             builder.add(plan);
                         }
                     }
+	
+                    builder.add(buildSubPlan(exchange.getSources().get(sourceIndex), childProperties, context, false, Optional.empty()));
                 }
                 else {
                     if (subPlanMap.containsKey(planNodeId)) {
@@ -425,8 +433,8 @@ public class PlanFragmenter
                                 currFragment.getStageExecutionDescriptor(),
                                 currFragment.getStatsAndCosts(),
                                 currFragment.getJsonRepresentation(),
-                                Optional.empty(),   // This is not producer CTE, so we pass empty
-                                currFragment.getProducerCTEParentId());
+                                Optional.empty(),   // This is not feeder CTE, so we pass empty
+                                currFragment.getFeederCTEParentId());
                         builder.add(new SubPlan(fragment, subPlanMap.get(planNodeId).getChildren()));
                         List<CTEScanNode> cteNodes = cteToParentsMap.get(planNodeId);
                         cteNodes.add(getCTENode(exchange.getSources().get(sourceIndex)));
@@ -456,18 +464,19 @@ public class PlanFragmenter
 
         private Integer checkForCTENode(PlanNode node, PlanNodeId nodeId)
         {
-            while (node instanceof ProjectNode) {
-                node = ((ProjectNode) node).getSource();
+            PlanNode planNode = node;
+            while (planNode instanceof ProjectNode) {
+                planNode = ((ProjectNode) planNode).getSource();
             }
 
-            if (node instanceof CTEScanNode) {
-                int commonCTERefNum = ((CTEScanNode) node).getCommonCTERefNum();
+            if (planNode instanceof CTEScanNode) {
+                int commonCTERefNum = ((CTEScanNode) planNode).getCommonCTERefNum();
                 if (cteToParentsMap.containsKey(commonCTERefNum)) {
                     cteToParentsMap.get(commonCTERefNum).forEach(x -> x.updateConsumerPlan(nodeId));
-                    ((CTEScanNode) node).updateConsumerPlans(cteToParentsMap.get(commonCTERefNum).get(0).getConsumerPlans());
+                    ((CTEScanNode) planNode).updateConsumerPlans(cteToParentsMap.get(commonCTERefNum).get(0).getConsumerPlans());
                 }
                 else {
-                    ((CTEScanNode) node).updateConsumerPlan(nodeId);
+                    ((CTEScanNode) planNode).updateConsumerPlan(nodeId);
                 }
 
                 return commonCTERefNum;
@@ -478,19 +487,20 @@ public class PlanFragmenter
 
         private CTEScanNode getCTENode(PlanNode node)
         {
-            while (node instanceof ProjectNode) {
-                node = ((ProjectNode) node).getSource();
+            PlanNode planNode = node;
+            while (planNode instanceof ProjectNode) {
+                planNode = ((ProjectNode) planNode).getSource();
             }
 
-            if (node instanceof CTEScanNode) {
-                return (CTEScanNode) node;
+            if (planNode instanceof CTEScanNode) {
+                return (CTEScanNode) planNode;
             }
 
             // Should never come here.
             return null;
         }
 
-        private Integer checkForRouterNode(PlanNode node, PlanNodeId nodeId)
+	        private Integer checkForRouterNode(PlanNode node, PlanNodeId nodeId)
         {
             while (node instanceof ProjectNode) {
                 node = ((ProjectNode) node).getSource();
@@ -527,11 +537,11 @@ public class PlanFragmenter
             return null;
         }
 
-        private SubPlan buildSubPlan(PlanNode node, FragmentProperties properties, RewriteContext<FragmentProperties> context, boolean isProducerCTE, Optional<PlanNodeId> producerCTEParentId)
+        private SubPlan buildSubPlan(PlanNode node, FragmentProperties properties, RewriteContext<FragmentProperties> context, boolean isfeederCTE, Optional<PlanNodeId> feederCTEParentId)
         {
             PlanFragmentId planFragmentId = nextFragmentId();
             PlanNode child = context.rewrite(node, properties);
-            return buildFragment(child, properties, planFragmentId, isProducerCTE, producerCTEParentId);
+            return buildFragment(child, properties, planFragmentId, isfeederCTE, feederCTEParentId);
         }
     }
 

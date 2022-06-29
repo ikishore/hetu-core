@@ -1,5 +1,5 @@
 /*
- * Copyright (C) 2018-2020. Huawei Technologies Co., Ltd. All rights reserved.
+ * Copyright (C) 2018-2021. Huawei Technologies Co., Ltd. All rights reserved.
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
  * You may obtain a copy of the License at
@@ -33,7 +33,7 @@ public class TestHindexBTreeIndex
         createBtreeTable1(tableName);
 
         String indexName = getNewIndexName();
-        safeCreateIndex("CREATE INDEX " + indexName + " USING btree ON " + tableName +
+        assertQuerySucceeds("CREATE INDEX " + indexName + " USING btree ON " + tableName +
                 " (key2) WHERE key2 = 11");
         assertQuerySucceeds("DROP INDEX " + indexName);
     }
@@ -46,7 +46,7 @@ public class TestHindexBTreeIndex
         createBtreeTable1(tableName);
 
         String indexName = getNewIndexName();
-        safeCreateIndex("CREATE INDEX " + indexName + " USING btree ON " + tableName +
+        assertQuerySucceeds("CREATE INDEX " + indexName + " USING btree ON " + tableName +
                 " (key1) WHERE key2 = 11");
         assertQuerySucceeds("DROP INDEX " + indexName);
     }
@@ -59,7 +59,7 @@ public class TestHindexBTreeIndex
         createBtreeTable1(tableName);
 
         String indexName = getNewIndexName();
-        safeCreateIndex("CREATE INDEX " + indexName + " USING btree ON " + tableName +
+        assertQuerySucceeds("CREATE INDEX " + indexName + " USING btree ON " + tableName +
                 " (key1) WHERE key2 = 11");
         assertQuerySucceeds("DROP INDEX " + indexName + " WHERE key2 = 11");
     }
@@ -72,7 +72,7 @@ public class TestHindexBTreeIndex
         createBtreeTable1(tableName);
 
         String indexName = getNewIndexName();
-        safeCreateIndex("CREATE INDEX " + indexName + " USING btree ON " + tableName +
+        assertQuerySucceeds("CREATE INDEX " + indexName + " USING btree ON " + tableName +
                 " (key1) WHERE key2 = 11");
         try {
             assertQuerySucceeds("DROP INDEX " + indexName + " WHERE key2 = 10");
@@ -92,7 +92,7 @@ public class TestHindexBTreeIndex
         createBtreeTable1(tableName);
 
         String indexName = getNewIndexName();
-        safeCreateIndex("CREATE INDEX " + indexName + " USING btree ON " + tableName +
+        assertQuerySucceeds("CREATE INDEX " + indexName + " USING btree ON " + tableName +
                 " (key2) WHERE key2 = 11");
 
         String testerQuery = "SELECT * FROM " + tableName + " WHERE key2 = 11";
@@ -104,7 +104,7 @@ public class TestHindexBTreeIndex
         // Wait before continuing
         Thread.sleep(1000);
 
-        Pair<Integer, MaterializedResult> resultPairIndexLoaded = getSplitAndMaterializedResult(testerQuery);
+        Pair<Integer, MaterializedResult> resultPairIndexLoaded = runTwiceGetSplitAndMaterializedResult(testerQuery);
         int splitsIndexLoaded = resultPairIndexLoaded.getFirst();
         MaterializedResult resultIndexLoaded = resultPairIndexLoaded.getSecond();
 
@@ -132,7 +132,7 @@ public class TestHindexBTreeIndex
         createBtreeTableTransact1(tableName);
 
         String indexName = getNewIndexName();
-        safeCreateIndex("CREATE INDEX " + indexName + " USING btree ON " + tableName +
+        assertQuerySucceeds("CREATE INDEX " + indexName + " USING btree ON " + tableName +
                 " (key2) WHERE key2 = 12");
 
         String testerQuery = "SELECT * FROM " + tableName + " WHERE key2 = 12";
@@ -144,7 +144,7 @@ public class TestHindexBTreeIndex
         // Wait before continuing
         Thread.sleep(1000);
 
-        Pair<Integer, MaterializedResult> resultPairIndexLoaded = getSplitAndMaterializedResult(testerQuery);
+        Pair<Integer, MaterializedResult> resultPairIndexLoaded = runTwiceGetSplitAndMaterializedResult(testerQuery);
         int splitsIndexLoaded = resultPairIndexLoaded.getFirst();
         MaterializedResult resultIndexLoaded = resultPairIndexLoaded.getSecond();
 
@@ -170,6 +170,8 @@ public class TestHindexBTreeIndex
     @Test(dataProvider = "btreeTable1Operators")
     public void testBtreeIndexOperators(String condition)
     {
+        System.out.println("Running testBtreeIndexOperators[condition: " + condition + "]");
+
         String tableName = getNewTableName();
         createBtreeTable1(tableName);
 
@@ -193,7 +195,7 @@ public class TestHindexBTreeIndex
         createBtreeTableMultiPart1(tableName);
 
         String indexName1 = getNewIndexName();
-        safeCreateIndex("CREATE INDEX " + indexName1 + " USING btree ON " + tableName +
+        assertQuerySucceeds("CREATE INDEX " + indexName1 + " USING btree ON " + tableName +
                 " (key1) WHERE key3 = 222");
 
         String testerQuery1 = "SELECT * FROM " + tableName + " WHERE key1 = 2";
@@ -205,7 +207,7 @@ public class TestHindexBTreeIndex
         // Wait before continuing
         Thread.sleep(1000);
 
-        Pair<Integer, MaterializedResult> resultPairIndexLoaded1 = getSplitAndMaterializedResult(testerQuery1);
+        Pair<Integer, MaterializedResult> resultPairIndexLoaded1 = runTwiceGetSplitAndMaterializedResult(testerQuery1);
         int splitsIndexLoaded1 = resultPairIndexLoaded1.getFirst();
         MaterializedResult resultIndexLoaded1 = resultPairIndexLoaded1.getSecond();
 
@@ -215,8 +217,8 @@ public class TestHindexBTreeIndex
         // Create second index and do query again on different keys
 
         String indexName2 = getNewIndexName();
-        safeCreateIndex("CREATE INDEX " + indexName2 + " USING btree ON " + tableName +
-                " (key2) WHERE key5 = 22222");
+        assertQueryFails("CREATE INDEX " + indexName2 + " USING btree ON " + tableName +
+                " (key2) WHERE key5 = 22222", "Creating index on key5 is not supported as it's not first-level partition");
 
         String testerQuery2 = "SELECT * FROM " + tableName + " WHERE key2 = 22";
 
@@ -227,7 +229,7 @@ public class TestHindexBTreeIndex
         // Wait before continuing
         Thread.sleep(1000);
 
-        Pair<Integer, MaterializedResult> resultPairIndexLoaded2 = getSplitAndMaterializedResult(testerQuery2);
+        Pair<Integer, MaterializedResult> resultPairIndexLoaded2 = runTwiceGetSplitAndMaterializedResult(testerQuery2);
         int splitsIndexLoaded2 = resultPairIndexLoaded2.getFirst();
         MaterializedResult resultIndexLoaded2 = resultPairIndexLoaded2.getSecond();
 

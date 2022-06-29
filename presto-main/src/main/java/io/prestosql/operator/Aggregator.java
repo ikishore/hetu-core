@@ -18,17 +18,20 @@ import io.prestosql.operator.aggregation.AccumulatorFactory;
 import io.prestosql.spi.Page;
 import io.prestosql.spi.block.BlockBuilder;
 import io.prestosql.spi.plan.AggregationNode;
+import io.prestosql.spi.snapshot.BlockEncodingSerdeProvider;
+import io.prestosql.spi.snapshot.Restorable;
 import io.prestosql.spi.type.Type;
 
 import static com.google.common.base.Preconditions.checkArgument;
 
-class Aggregator
+public class Aggregator
+        implements Restorable
 {
     private final Accumulator aggregation;
     private final AggregationNode.Step step;
     private final int intermediateChannel;
 
-    Aggregator(AccumulatorFactory accumulatorFactory, AggregationNode.Step step)
+    public Aggregator(AccumulatorFactory accumulatorFactory, AggregationNode.Step step)
     {
         if (step.isInputRaw()) {
             intermediateChannel = -1;
@@ -75,5 +78,17 @@ class Aggregator
     public long getEstimatedSize()
     {
         return aggregation.getEstimatedSize();
+    }
+
+    @Override
+    public Object capture(BlockEncodingSerdeProvider serdeProvider)
+    {
+        return aggregation.capture(serdeProvider);
+    }
+
+    @Override
+    public void restore(Object state, BlockEncodingSerdeProvider serdeProvider)
+    {
+        aggregation.restore(state, serdeProvider);
     }
 }

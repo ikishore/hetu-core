@@ -1,5 +1,5 @@
 /*
- * Copyright (C) 2018-2020. Huawei Technologies Co., Ltd. All rights reserved.
+ * Copyright (C) 2018-2021. Huawei Technologies Co., Ltd. All rights reserved.
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
  * You may obtain a copy of the License at
@@ -25,6 +25,7 @@ import io.prestosql.spi.eventlistener.QueryCreatedEvent;
 import java.io.IOException;
 import java.nio.file.Path;
 import java.nio.file.Paths;
+import java.time.ZoneId;
 import java.util.logging.FileHandler;
 import java.util.logging.SimpleFormatter;
 
@@ -47,13 +48,13 @@ class AuditEventLogger
 
     private static java.util.logging.Logger createLogger(Path filePath, int limit, int count)
     {
-        java.util.logging.Logger logger = java.util.logging.Logger.getLogger(AuditEventLogger.class.getName());
+        java.util.logging.Logger localLogger = java.util.logging.Logger.getLogger(AuditEventLogger.class.getName());
         try {
             FileHandler fileHandler = new FileHandler(filePath.toAbsolutePath().toString(), limit, count, true);
             fileHandler.setFormatter(new SimpleFormatter());
-            logger.addHandler(fileHandler);
-            logger.setUseParentHandlers(false);
-            return logger;
+            localLogger.addHandler(fileHandler);
+            localLogger.setUseParentHandlers(false);
+            return localLogger;
         }
         catch (IOException ex) {
             throw new PrestoException(ListenerErrorCode.LOCAL_FILE_FILESYSTEM_ERROR,
@@ -65,7 +66,7 @@ class AuditEventLogger
     protected void onQueryCreatedEvent(QueryCreatedEvent queryCreatedEvent)
     {
         QueryContext queryContext = queryCreatedEvent.getContext();
-        logger.info(queryCreatedEvent.getCreateTime().toString() +
+        logger.info(queryCreatedEvent.getCreateTime().atZone(ZoneId.systemDefault()) +
                 " UserName=" + queryContext.getUser() +
                 " UserIp=" + queryContext.getRemoteClientAddress().orElse(null) +
                 " queryId=" + queryCreatedEvent.getMetadata().getQueryId() +
@@ -79,7 +80,7 @@ class AuditEventLogger
     protected void onQueryCompletedEvent(QueryCompletedEvent queryCompletedEvent)
     {
         QueryContext queryContext = queryCompletedEvent.getContext();
-        logger.info(queryCompletedEvent.getCreateTime().toString() +
+        logger.info(queryCompletedEvent.getCreateTime().atZone(ZoneId.systemDefault()) +
                 " UserName=" + queryContext.getUser() +
                 " UserIp=" + queryContext.getRemoteClientAddress().orElse(null) +
                 " queryId=" + queryCompletedEvent.getMetadata().getQueryId() +

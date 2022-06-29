@@ -100,8 +100,9 @@ public class InMemoryThriftMetastore
     }
 
     @Override
-    public synchronized void createDatabase(HiveIdentity identity, Database database)
+    public synchronized void createDatabase(HiveIdentity identity, Database inputDatabase)
     {
+        Database database = inputDatabase;
         requireNonNull(database, "database is null");
 
         File directory;
@@ -471,11 +472,11 @@ public class InMemoryThriftMetastore
     }
 
     @Override
-    public void updatePartitionsStatistics(HiveIdentity identity, String databaseName, String tableName, List<String> partitionNames, List<Function<PartitionStatistics, PartitionStatistics>> updateFunctionList)
+    public void updatePartitionsStatistics(HiveIdentity identity, String databaseName, String tableName, Map<String, Function<PartitionStatistics, PartitionStatistics>> partNamesUpdateFunctionMap)
     {
-        for (int i = 0; i < partitionNames.size(); i++) {
-            updatePartitionStatistics(identity, databaseName, tableName, partitionNames.get(i), updateFunctionList.get(i));
-        }
+        partNamesUpdateFunctionMap.entrySet().stream().forEach(e -> {
+            updatePartitionStatistics(identity, databaseName, tableName, e.getKey(), e.getValue());
+        });
     }
 
     @Override

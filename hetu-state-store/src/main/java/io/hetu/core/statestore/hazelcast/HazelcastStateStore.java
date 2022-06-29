@@ -1,5 +1,5 @@
 /*
- * Copyright (C) 2018-2020. Huawei Technologies Co., Ltd. All rights reserved.
+ * Copyright (C) 2018-2021. Huawei Technologies Co., Ltd. All rights reserved.
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
  * You may obtain a copy of the License at
@@ -124,7 +124,7 @@ public class HazelcastStateStore
                         "State collection type: " + type.name() + " not supported");
         }
         collections.putIfAbsent(collectionName, collection);
-        return collection;
+        return collections.get(collectionName);
     }
 
     @Override
@@ -144,7 +144,7 @@ public class HazelcastStateStore
             collection = new EncryptedStateMap(collection, createCipherService(encryptionType));
         }
         collections.putIfAbsent(name, collection);
-        return collection;
+        return (StateMap<K, V>) collections.get(name);
     }
 
     @Override

@@ -73,6 +73,7 @@ import static com.google.common.base.Preconditions.checkArgument;
 import static com.google.common.base.Preconditions.checkState;
 import static com.google.common.collect.ImmutableList.toImmutableList;
 import static com.google.common.collect.ImmutableSet.toImmutableSet;
+import static io.prestosql.spi.function.FunctionKind.AGGREGATE;
 import static io.prestosql.sql.NodeUtils.getSortItemsFromOrderBy;
 import static io.prestosql.sql.analyzer.ExpressionTreeUtils.extractAggregateFunctions;
 import static io.prestosql.sql.analyzer.ExpressionTreeUtils.extractWindowFunctions;
@@ -313,7 +314,7 @@ class AggregationAnalyzer
         @Override
         protected Boolean visitFunctionCall(FunctionCall node, Void context)
         {
-            if (metadata.isAggregationFunction(node.getName())) {
+            if (metadata.getFunctionAndTypeManager().getFunctionMetadata(analysis.getFunctionHandle(node)).getFunctionKind() == AGGREGATE) {
                 if (!node.getWindow().isPresent()) {
                     List<FunctionCall> aggregateFunctions = extractAggregateFunctions(node.getArguments(), metadata);
                     List<FunctionCall> windowFunctions = extractWindowFunctions(node.getArguments());
@@ -541,15 +542,15 @@ class AggregationAnalyzer
         @Override
         protected Boolean visitIfExpression(IfExpression node, Void context)
         {
-            ImmutableList.Builder<Expression> expressions = ImmutableList.<Expression>builder()
+            ImmutableList.Builder<Expression> expressionList = ImmutableList.<Expression>builder()
                     .add(node.getCondition())
                     .add(node.getTrueValue());
 
             if (node.getFalseValue().isPresent()) {
-                expressions.add(node.getFalseValue().get());
+                expressionList.add(node.getFalseValue().get());
             }
 
-            return expressions.build().stream().allMatch(expression -> process(expression, context));
+            return expressionList.build().stream().allMatch(expression -> process(expression, context));
         }
 
         @Override

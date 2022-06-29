@@ -20,11 +20,11 @@ import io.prestosql.cost.StatsCalculator;
 import io.prestosql.metadata.AllNodes;
 import io.prestosql.metadata.InternalNode;
 import io.prestosql.metadata.Metadata;
-import io.prestosql.metadata.QualifiedObjectName;
 import io.prestosql.metadata.SessionPropertyManager;
 import io.prestosql.server.testing.TestingPrestoServer;
 import io.prestosql.spi.Plugin;
 import io.prestosql.spi.connector.CatalogName;
+import io.prestosql.spi.connector.QualifiedObjectName;
 import io.prestosql.split.PageSourceManager;
 import io.prestosql.split.SplitManager;
 import io.prestosql.sql.planner.ConnectorPlanOptimizerManager;
@@ -73,7 +73,7 @@ public final class StandaloneQueryRunner
 
         refreshNodes();
 
-        server.getMetadata().addFunctions(AbstractTestQueries.CUSTOM_FUNCTIONS);
+        server.getMetadata().getFunctionAndTypeManager().registerBuiltInFunctions(AbstractTestQueries.CUSTOM_FUNCTIONS);
 
         SessionPropertyManager sessionPropertyManager = server.getMetadata().getSessionPropertyManager();
         sessionPropertyManager.addSystemSessionProperties(TEST_SYSTEM_PROPERTIES);
@@ -210,6 +210,7 @@ public final class StandaloneQueryRunner
         while (activeNodesWithConnector.isEmpty());
     }
 
+    @Override
     public void installPlugin(Plugin plugin)
     {
         server.installPlugin(plugin);
@@ -220,6 +221,7 @@ public final class StandaloneQueryRunner
         createCatalog(catalogName, connectorName, ImmutableMap.of());
     }
 
+    @Override
     public void createCatalog(String catalogName, String connectorName, Map<String, String> properties)
     {
         CatalogName catalog = server.createCatalog(catalogName, connectorName, properties);

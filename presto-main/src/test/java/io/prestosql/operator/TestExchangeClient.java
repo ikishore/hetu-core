@@ -13,9 +13,11 @@
  */
 package io.prestosql.operator;
 
+import com.google.common.collect.ImmutableList;
 import com.google.common.collect.ImmutableMap;
 import com.google.common.util.concurrent.Futures;
 import com.google.common.util.concurrent.ListenableFuture;
+import io.airlift.http.client.HttpClient;
 import io.airlift.http.client.testing.TestingHttpClient;
 import io.airlift.units.DataSize;
 import io.airlift.units.DataSize.Unit;
@@ -23,8 +25,12 @@ import io.airlift.units.Duration;
 import io.hetu.core.transport.execution.buffer.PagesSerde;
 import io.hetu.core.transport.execution.buffer.SerializedPage;
 import io.prestosql.block.BlockAssertions;
+import io.prestosql.failuredetector.NoOpFailureDetector;
 import io.prestosql.memory.context.SimpleLocalMemoryContext;
 import io.prestosql.spi.Page;
+import io.prestosql.spi.QueryId;
+import io.prestosql.spi.snapshot.MarkerPage;
+import org.apache.commons.lang3.tuple.Pair;
 import org.testng.annotations.AfterClass;
 import org.testng.annotations.BeforeClass;
 import org.testng.annotations.Test;
@@ -41,11 +47,13 @@ import static com.google.common.util.concurrent.Uninterruptibles.sleepUninterrup
 import static io.airlift.concurrent.MoreFutures.tryGetFutureValue;
 import static io.airlift.concurrent.Threads.daemonThreadsNamed;
 import static io.airlift.testing.Assertions.assertLessThan;
-import static io.prestosql.execution.buffer.TestingPagesSerdeFactory.testingPagesSerde;
 import static io.prestosql.memory.context.AggregatedMemoryContext.newSimpleAggregatedMemoryContext;
+import static io.prestosql.testing.TestingPagesSerdeFactory.testingPagesSerde;
+import static io.prestosql.testing.TestingSnapshotUtils.NOOP_SNAPSHOT_UTILS;
 import static java.util.concurrent.Executors.newCachedThreadPool;
 import static java.util.concurrent.Executors.newScheduledThreadPool;
 import static java.util.concurrent.TimeUnit.MILLISECONDS;
+import static org.mockito.Mockito.mock;
 import static org.testng.Assert.assertEquals;
 import static org.testng.Assert.assertFalse;
 import static org.testng.Assert.assertNotNull;
@@ -87,6 +95,7 @@ public class TestExchangeClient
         MockExchangeRequestProcessor processor = new MockExchangeRequestProcessor(maxResponseSize);
 
         URI location = URI.create("http://localhost:8080");
+        String instanceId = "testing instance id";
         processor.addPage(location, createPage(1));
         processor.addPage(location, createPage(2));
         processor.addPage(location, createPage(3));
@@ -102,9 +111,9 @@ public class TestExchangeClient
                 new TestingHttpClient(processor, scheduler),
                 scheduler,
                 new SimpleLocalMemoryContext(newSimpleAggregatedMemoryContext(), "test"),
-                pageBufferClientCallbackExecutor);
+                pageBufferClientCallbackExecutor, new NoOpFailureDetector());
 
-        exchangeClient.addLocation(location);
+        exchangeClient.addLocation(new TaskLocation(location, instanceId));
         exchangeClient.noMoreLocations();
 
         assertEquals(exchangeClient.isClosed(), false);
@@ -124,6 +133,108 @@ public class TestExchangeClient
         assertStatus(status.getPageBufferClientStatuses().get(0), location, "closed", 3, 3, 3, "not scheduled");
     }
 
+    @Test
+    public void testMarkers()
+    {
+        DataSize maxResponseSize = new DataSize(10, Unit.MEGABYTE);
+        MockExchangeRequestProcessor processor = new MockExchangeRequestProcessor(maxResponseSize);
+
+        URI location = URI.create("http://localhost:8080");
+        String instanceId = "testing instance id";
+        processor.addPage(location, createPage(1));
+        MarkerPage marker = MarkerPage.snapshotPage(1);
+        processor.addPage(location, marker);
+        processor.addPage(location, createPage(2));
+        processor.setComplete(location);
+
+        @SuppressWarnings("resource")
+        ExchangeClient exchangeClient = new ExchangeClient(
+                new DataSize(32, Unit.MEGABYTE),
+                maxResponseSize,
+                1,
+                new Duration(1, TimeUnit.MINUTES),
+                true,
+                new TestingHttpClient(processor, scheduler),
+                scheduler,
+                new SimpleLocalMemoryContext(newSimpleAggregatedMemoryContext(), "test"),
+                pageBufferClientCallbackExecutor, new NoOpFailureDetector());
+        exchangeClient.setSnapshotEnabled(NOOP_SNAPSHOT_UTILS.getQuerySnapshotManager(new QueryId("query")));
+
+        final String target1 = "target1";
+        final String target2 = "target2";
+        exchangeClient.addLocation(new TaskLocation(location, instanceId));
+        exchangeClient.noMoreLocations();
+        exchangeClient.addTarget(target1);
+        exchangeClient.addTarget(target2);
+
+        assertEquals(exchangeClient.isClosed(), false);
+        assertPageEquals(getNextPage(exchangeClient, target1), createPage(1));
+        assertEquals(exchangeClient.isClosed(), false);
+        assertPageEquals(getNextPage(exchangeClient, target2), marker);
+        assertEquals(exchangeClient.isClosed(), false);
+        assertPageEquals(getNextPage(exchangeClient, target2), createPage(2));
+        assertEquals(exchangeClient.isClosed(), false);
+        // Target2 won't get any page, but because there are pending markers, it won't cause the client to close either
+        assertTrue(exchangeClient.isBlocked().isDone());
+        assertNull(getNextPage(exchangeClient, target2));
+        assertEquals(exchangeClient.isClosed(), false);
+        assertPageEquals(getNextPage(exchangeClient, target1), marker);
+
+        // New target receives pending marker
+        assertEquals(exchangeClient.isClosed(), false);
+        final String target3 = "target3";
+        exchangeClient.addTarget(target3);
+        assertPageEquals(getNextPage(exchangeClient, target3), marker);
+        assertFalse(exchangeClient.isBlocked().isDone());
+        assertEquals(exchangeClient.isClosed(), false);
+
+        exchangeClient.noMoreTargets();
+        assertNull(getNextPage(exchangeClient));
+        assertEquals(exchangeClient.isClosed(), true);
+        ExchangeClientStatus status = exchangeClient.getStatus();
+        assertEquals(status.getBufferedPages(), 0);
+        assertEquals(status.getBufferedBytes(), 0);
+
+        // client should have sent only 2 requests: one to get all pages and once to get the done signal
+        assertStatus(status.getPageBufferClientStatuses().get(0), location, "closed", 3, 3, 3, "not scheduled");
+    }
+
+    @Test
+    public void testAddTarget()
+    {
+        @SuppressWarnings("resource")
+        ExchangeClient exchangeClient = new ExchangeClient(
+                new DataSize(32, Unit.MEGABYTE),
+                new DataSize(10, Unit.MEGABYTE),
+                1,
+                new Duration(1, TimeUnit.MINUTES),
+                true,
+                mock(HttpClient.class),
+                scheduler,
+                new SimpleLocalMemoryContext(newSimpleAggregatedMemoryContext(), "test"),
+                pageBufferClientCallbackExecutor, new NoOpFailureDetector());
+        exchangeClient.setSnapshotEnabled(NOOP_SNAPSHOT_UTILS.getQuerySnapshotManager(new QueryId("query")));
+
+        String origin1 = "location1";
+        String origin2 = "location2";
+        final String target1 = "target1";
+        final String target2 = "target2";
+
+        PagesSerde serde = testingPagesSerde();
+        exchangeClient.addTarget(target1);
+        exchangeClient.addPages(ImmutableList.of(serde.serialize(createPage(1))), origin1);
+        MarkerPage marker = MarkerPage.snapshotPage(1);
+        exchangeClient.addPages(ImmutableList.of(SerializedPage.forMarker(marker)), origin1);
+        exchangeClient.addPages(ImmutableList.of(serde.serialize(createPage(2))), origin2);
+
+        assertPageEquals(getNextPage(exchangeClient, target1), createPage(1));
+        assertPageEquals(getNextPage(exchangeClient, target1), marker);
+
+        exchangeClient.addTarget(target2);
+        assertPageEquals(getNextPage(exchangeClient, target2, origin1), marker);
+        assertPageEquals(getNextPage(exchangeClient, target1, origin2), createPage(2));
+    }
+
     @Test(timeOut = 10000)
     public void testAddLocation()
             throws Exception
@@ -141,14 +252,15 @@ public class TestExchangeClient
                 new TestingHttpClient(processor, newCachedThreadPool(daemonThreadsNamed("test-%s"))),
                 scheduler,
                 new SimpleLocalMemoryContext(newSimpleAggregatedMemoryContext(), "test"),
-                pageBufferClientCallbackExecutor);
+                pageBufferClientCallbackExecutor, new NoOpFailureDetector());
 
         URI location1 = URI.create("http://localhost:8081/foo");
+        String instanceId1 = "testing instance id";
         processor.addPage(location1, createPage(1));
         processor.addPage(location1, createPage(2));
         processor.addPage(location1, createPage(3));
         processor.setComplete(location1);
-        exchangeClient.addLocation(location1);
+        exchangeClient.addLocation(new TaskLocation(location1, instanceId1));
 
         assertEquals(exchangeClient.isClosed(), false);
         assertPageEquals(getNextPage(exchangeClient), createPage(1));
@@ -161,11 +273,12 @@ public class TestExchangeClient
         assertEquals(exchangeClient.isClosed(), false);
 
         URI location2 = URI.create("http://localhost:8082/bar");
+        String instanceId2 = "testing instance id2";
         processor.addPage(location2, createPage(4));
         processor.addPage(location2, createPage(5));
         processor.addPage(location2, createPage(6));
         processor.setComplete(location2);
-        exchangeClient.addLocation(location2);
+        exchangeClient.addLocation(new TaskLocation(location2, instanceId2));
 
         assertEquals(exchangeClient.isClosed(), false);
         assertPageEquals(getNextPage(exchangeClient), createPage(4));
@@ -196,6 +309,7 @@ public class TestExchangeClient
         MockExchangeRequestProcessor processor = new MockExchangeRequestProcessor(maxResponseSize);
 
         URI location = URI.create("http://localhost:8080");
+        String instanceId = "testing instance id";
 
         // add a pages
         processor.addPage(location, createPage(1));
@@ -213,9 +327,9 @@ public class TestExchangeClient
                 new TestingHttpClient(processor, newCachedThreadPool(daemonThreadsNamed("test-%s"))),
                 scheduler,
                 new SimpleLocalMemoryContext(newSimpleAggregatedMemoryContext(), "test"),
-                pageBufferClientCallbackExecutor);
+                pageBufferClientCallbackExecutor, new NoOpFailureDetector());
 
-        exchangeClient.addLocation(location);
+        exchangeClient.addLocation(new TaskLocation(location, instanceId));
         exchangeClient.noMoreLocations();
         assertEquals(exchangeClient.isClosed(), false);
 
@@ -237,7 +351,7 @@ public class TestExchangeClient
         assertStatus(exchangeClient.getStatus().getPageBufferClientStatuses().get(0), location, "queued", 1, 1, 1, "not scheduled");
 
         // remove the page and wait for the client to fetch another page
-        assertPageEquals(exchangeClient.pollPage(), createPage(1));
+        assertPageEquals(exchangeClient.pollPage(null).getLeft(), createPage(1));
         do {
             assertLessThan(Duration.nanosSince(start), new Duration(5, TimeUnit.SECONDS));
             sleepUninterruptibly(100, MILLISECONDS);
@@ -250,7 +364,7 @@ public class TestExchangeClient
         assertTrue(exchangeClient.getStatus().getBufferedBytes() > 0);
 
         // remove the page and wait for the client to fetch another page
-        assertPageEquals(exchangeClient.pollPage(), createPage(2));
+        assertPageEquals(exchangeClient.pollPage(null).getLeft(), createPage(2));
         do {
             assertLessThan(Duration.nanosSince(start), new Duration(5, TimeUnit.SECONDS));
             sleepUninterruptibly(100, MILLISECONDS);
@@ -281,6 +395,7 @@ public class TestExchangeClient
         MockExchangeRequestProcessor processor = new MockExchangeRequestProcessor(maxResponseSize);
 
         URI location = URI.create("http://localhost:8080");
+        String instanceId = "testing instance id";
         processor.addPage(location, createPage(1));
         processor.addPage(location, createPage(2));
         processor.addPage(location, createPage(3));
@@ -295,8 +410,8 @@ public class TestExchangeClient
                 new TestingHttpClient(processor, newCachedThreadPool(daemonThreadsNamed("test-%s"))),
                 scheduler,
                 new SimpleLocalMemoryContext(newSimpleAggregatedMemoryContext(), "test"),
-                pageBufferClientCallbackExecutor);
-        exchangeClient.addLocation(location);
+                pageBufferClientCallbackExecutor, new NoOpFailureDetector());
+        exchangeClient.addLocation(new TaskLocation(location, instanceId));
         exchangeClient.noMoreLocations();
 
         // fetch a page
@@ -309,7 +424,9 @@ public class TestExchangeClient
             MILLISECONDS.sleep(10);
         }
         assertEquals(exchangeClient.isClosed(), true);
-        assertNull(exchangeClient.pollPage());
+        Pair<SerializedPage, String> pair = exchangeClient.pollPage(null);
+        assertNotNull(pair);
+        assertNull(pair.getLeft());
         assertEquals(exchangeClient.getStatus().getBufferedPages(), 0);
         assertEquals(exchangeClient.getStatus().getBufferedBytes(), 0);
 
@@ -327,7 +444,22 @@ public class TestExchangeClient
 
     private static SerializedPage getNextPage(ExchangeClient exchangeClient)
     {
-        ListenableFuture<SerializedPage> futurePage = Futures.transform(exchangeClient.isBlocked(), ignored -> exchangeClient.pollPage(), directExecutor());
+        return getNextPage(exchangeClient, null);
+    }
+
+    private static SerializedPage getNextPage(ExchangeClient exchangeClient, String target)
+    {
+        ListenableFuture<SerializedPage> futurePage = Futures.transform(exchangeClient.isBlocked(), ignored -> exchangeClient.pollPage(target).getLeft(), directExecutor());
+        return tryGetFutureValue(futurePage, 100, TimeUnit.SECONDS).orElse(null);
+    }
+
+    private static SerializedPage getNextPage(ExchangeClient exchangeClient, String target, String expectedOrigin)
+    {
+        ListenableFuture<SerializedPage> futurePage = Futures.transform(exchangeClient.isBlocked(), ignored -> {
+            Pair<SerializedPage, String> result = exchangeClient.pollPage(target);
+            assertEquals(result.getRight(), expectedOrigin);
+            return result.getLeft();
+        }, directExecutor());
         return tryGetFutureValue(futurePage, 100, TimeUnit.SECONDS).orElse(null);
     }
 

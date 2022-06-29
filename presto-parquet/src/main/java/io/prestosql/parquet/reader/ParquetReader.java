@@ -39,6 +39,7 @@ import org.apache.parquet.hadoop.metadata.ColumnChunkMetaData;
 import org.apache.parquet.hadoop.metadata.ColumnPath;
 import org.apache.parquet.io.MessageColumnIO;
 import org.apache.parquet.io.PrimitiveColumnIO;
+import org.joda.time.DateTimeZone;
 
 import java.io.Closeable;
 import java.io.IOException;
@@ -64,9 +65,11 @@ public class ParquetReader
     private static final int INITIAL_BATCH_SIZE = 1;
     private static final int BATCH_SIZE_GROWTH_FACTOR = 2;
 
+    private final Optional<String> fileCreatedBy;
     private final List<BlockMetaData> blocks;
     private final List<PrimitiveColumnIO> columns;
     private final ParquetDataSource dataSource;
+    private final DateTimeZone timeZone;
     private final AggregatedMemoryContext systemMemoryContext;
 
     private int currentBlock;
@@ -84,14 +87,18 @@ public class ParquetReader
 
     private AggregatedMemoryContext currentRowGroupMemoryContext;
 
-    public ParquetReader(MessageColumnIO messageColumnIO,
-            List<BlockMetaData> blocks,
-            ParquetDataSource dataSource,
-            AggregatedMemoryContext systemMemoryContext,
-            DataSize maxReadBlockSize)
+    public ParquetReader(Optional<String> fileCreatedBy,
+                         MessageColumnIO messageColumnIO,
+                         List<BlockMetaData> blocks,
+                         ParquetDataSource dataSource,
+                         DateTimeZone timeZone,
+                         AggregatedMemoryContext systemMemoryContext,
+                         DataSize maxReadBlockSize)
     {
+        this.fileCreatedBy = requireNonNull(fileCreatedBy, "fileCreatedBy is null");
         this.blocks = blocks;
         this.dataSource = requireNonNull(dataSource, "dataSource is null");
+        this.timeZone = requireNonNull(timeZone, "timeZone is null");
         this.systemMemoryContext = requireNonNull(systemMemoryContext, "systemMemoryContext is null");
         this.currentRowGroupMemoryContext = systemMemoryContext.newAggregatedMemoryContext();
         this.maxReadBlockBytes = requireNonNull(maxReadBlockSize, "maxReadBlockSize is null").toBytes();
@@ -167,15 +174,15 @@ public class ParquetReader
     {
         List<Type> parameters = field.getType().getTypeParameters();
         checkArgument(parameters.size() == 2, "Maps must have two type parameters, found %s", parameters.size());
-        Block[] blocks = new Block[parameters.size()];
+        Block[] localBlocks = new Block[parameters.size()];
 
         ColumnChunk columnChunk = readColumnChunk(field.getChildren().get(0).get());
-        blocks[0] = columnChunk.getBlock();
-        blocks[1] = readColumnChunk(field.getChildren().get(1).get()).getBlock();
+        localBlocks[0] = columnChunk.getBlock();
+        localBlocks[1] = readColumnChunk(field.getChildren().get(1).get()).getBlock();
         IntList offsets = new IntArrayList();
         BooleanList valueIsNull = new BooleanArrayList();
         calculateCollectionOffsets(field, offsets, valueIsNull, columnChunk.getDefinitionLevels(), columnChunk.getRepetitionLevels());
-        Block mapBlock = ((MapType) field.getType()).createBlockFromKeyValue(Optional.of(valueIsNull.toBooleanArray()), offsets.toIntArray(), blocks[0], blocks[1]);
+        Block mapBlock = ((MapType) field.getType()).createBlockFromKeyValue(Optional.of(valueIsNull.toBooleanArray()), offsets.toIntArray(), localBlocks[0], localBlocks[1]);
         return new ColumnChunk(mapBlock, columnChunk.getDefinitionLevels(), columnChunk.getRepetitionLevels());
     }
 
@@ -183,24 +190,24 @@ public class ParquetReader
             throws IOException
     {
         List<TypeSignatureParameter> fields = field.getType().getTypeSignature().getParameters();
-        Block[] blocks = new Block[fields.size()];
+        Block[] localBlocks = new Block[fields.size()];
         ColumnChunk columnChunk = null;
         List<Optional<Field>> parameters = field.getChildren();
         for (int i = 0; i < fields.size(); i++) {
             Optional<Field> parameter = parameters.get(i);
             if (parameter.isPresent()) {
                 columnChunk = readColumnChunk(parameter.get());
-                blocks[i] = columnChunk.getBlock();
+                localBlocks[i] = columnChunk.getBlock();
             }
         }
         for (int i = 0; i < fields.size(); i++) {
-            if (blocks[i] == null) {
-                blocks[i] = RunLengthEncodedBlock.create(field.getType(), null, columnChunk.getBlock().getPositionCount());
+            if (localBlocks[i] == null) {
+                localBlocks[i] = RunLengthEncodedBlock.create(field.getType(), null, columnChunk.getBlock().getPositionCount());
             }
         }
         BooleanList structIsNull = StructColumnReader.calculateStructOffsets(field, columnChunk.getDefinitionLevels(), columnChunk.getRepetitionLevels());
         boolean[] structIsNullVector = structIsNull.toBooleanArray();
-        Block rowBlock = RowBlock.fromFieldBlocks(structIsNullVector.length, Optional.of(structIsNullVector), blocks);
+        Block rowBlock = RowBlock.fromFieldBlocks(structIsNullVector.length, Optional.of(structIsNullVector), localBlocks);
         return new ColumnChunk(rowBlock, columnChunk.getDefinitionLevels(), columnChunk.getRepetitionLevels());
     }
 
@@ -218,7 +225,7 @@ public class ParquetReader
             byte[] buffer = allocateBlock(totalSize);
             dataSource.readFully(startingPosition, buffer);
             ColumnChunkDescriptor descriptor = new ColumnChunkDescriptor(columnDescriptor, metadata, totalSize);
-            ParquetColumnChunk columnChunk = new ParquetColumnChunk(descriptor, buffer, 0);
+            ParquetColumnChunk columnChunk = new ParquetColumnChunk(fileCreatedBy, descriptor, buffer, 0);
             columnReader.setPageReader(columnChunk.readAllPages());
         }
         ColumnChunk columnChunk = columnReader.readPrimitive(field);
@@ -257,7 +264,7 @@ public class ParquetReader
     {
         for (PrimitiveColumnIO columnIO : columns) {
             RichColumnDescriptor column = new RichColumnDescriptor(columnIO.getColumnDescriptor(), columnIO.getType().asPrimitiveType());
-            columnReaders[columnIO.getId()] = PrimitiveColumnReader.createReader(column);
+            columnReaders[columnIO.getId()] = PrimitiveColumnReader.createReader(column, timeZone);
         }
     }
 

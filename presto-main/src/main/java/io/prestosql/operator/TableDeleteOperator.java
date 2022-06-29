@@ -29,6 +29,7 @@ import io.prestosql.spi.predicate.TupleDomain;
 import io.prestosql.spi.relation.ConstantExpression;
 import io.prestosql.spi.relation.RowExpression;
 import io.prestosql.spi.relation.VariableReferenceExpression;
+import io.prestosql.spi.snapshot.RestorableConfig;
 import io.prestosql.spi.type.Type;
 import io.prestosql.sql.planner.LiteralEncoder;
 import io.prestosql.sql.planner.RowExpressionVariableInliner;
@@ -46,6 +47,8 @@ import static com.google.common.base.Preconditions.checkState;
 import static io.prestosql.spi.type.BigintType.BIGINT;
 import static java.util.Objects.requireNonNull;
 
+// Table delete doesn't need snapshot support
+@RestorableConfig(unsupported = true)
 public class TableDeleteOperator
         implements Operator
 {
@@ -212,9 +215,9 @@ public class TableDeleteOperator
             Constraint constraint = new Constraint(tupleDomain);
 
             //Apply the constraint on the table handle
-            Optional<TableHandle> tableHandle = metadata.applyDelete(session, this.tableHandle, constraint);
-            if (tableHandle.isPresent()) {
-                tableHandleForDelete = tableHandle.get();
+            Optional<TableHandle> tableHandleDelete = metadata.applyDelete(session, this.tableHandle, constraint);
+            if (tableHandleDelete.isPresent()) {
+                tableHandleForDelete = tableHandleDelete.get();
             }
         }
         OptionalLong rowsDeletedCount = metadata.executeDelete(session, tableHandleForDelete);
@@ -231,5 +234,11 @@ public class TableDeleteOperator
             rowsBuilder.appendNull();
         }
         return page.build();
+    }
+
+    @Override
+    public Page pollMarker()
+    {
+        return null;
     }
 }

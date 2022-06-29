@@ -19,6 +19,7 @@ import io.airlift.log.Logger;
 import io.airlift.units.DataSize;
 import io.airlift.units.Duration;
 import io.prestosql.client.QueryStatusInfo;
+import io.prestosql.client.SnapshotStats;
 import io.prestosql.client.StageStats;
 import io.prestosql.client.StatementClient;
 import io.prestosql.client.StatementStats;
@@ -30,6 +31,7 @@ import java.io.IOException;
 import java.io.InputStream;
 import java.io.PrintStream;
 import java.util.List;
+import java.util.Locale;
 import java.util.OptionalInt;
 import java.util.concurrent.atomic.AtomicInteger;
 
@@ -59,6 +61,7 @@ public class StatusPrinter
     private final ConsolePrinter console;
 
     private boolean debug;
+    private boolean timeInMilliseconds;
 
     public StatusPrinter(StatementClient client, PrintStream out, boolean debug)
     {
@@ -66,6 +69,7 @@ public class StatusPrinter
         this.out = out;
         this.console = new ConsolePrinter(out);
         this.debug = debug;
+        this.timeInMilliseconds = client.isTimeInMilliseconds();
     }
 
 /*
@@ -182,7 +186,7 @@ Spilled: 20GB
         if (debug) {
             // CPU Time: 565.2s total,   26K rows/s, 3.85MB/s
             Duration cpuTime = millis(stats.getCpuTimeMillis());
-            String cpuTimeSummary = String.format("CPU Time: %.1fs total, %5s rows/s, %8s, %d%% active",
+            String cpuTimeSummary = String.format(Locale.ROOT, "CPU Time: %.1fs total, %5s rows/s, %8s, %d%% active",
                     cpuTime.getValue(SECONDS),
                     FormatUtils.formatCountRate(stats.getProcessedRows(), cpuTime, false),
                     FormatUtils.formatDataRate(bytes(stats.getProcessedBytes()), cpuTime, true),
@@ -204,15 +208,48 @@ Spilled: 20GB
             // Peak Memory: 1.97GB
             reprintLine("Peak Memory: " + FormatUtils.formatDataSize(bytes(stats.getPeakMemoryBytes()), true));
 
-            // Spilled Data: 20GB
+            // Spilled Data: 20GB, Writing Time Per Node: 22s, Reading Time Per Node: 1.2s
             if (stats.getSpilledBytes() > 0) {
-                reprintLine("Spilled: " + FormatUtils.formatDataSize(bytes(stats.getSpilledBytes()), true));
+                Duration readTime = millis(stats.getElapsedSpillReadTimeMillis() / stats.getSpilledNodes());
+                Duration writeTime = millis(stats.getElapsedSpillWriteTimeMillis() / stats.getSpilledNodes());
+                String summary = String.format("Spilled: %s, Writing Time Per Node: %.1fs, Reading Time Per Node: %.1fs",
+                        FormatUtils.formatDataSize(bytes(stats.getSpilledBytes()), true),
+                        writeTime.getValue(SECONDS),
+                        readTime.getValue(SECONDS));
+                reprintLine(summary);
+            }
+
+            // Snapshot Capture stats All: 100MB/22s/18s, Last: 40MB/10s/7s
+            SnapshotStats snapshotStats = stats.getSnapshotStats();
+            // snapshotStats should be null in case snapshot feature is disabled
+            if (snapshotStats != null) {
+                Duration allCaptureCPUTime = millis(snapshotStats.getTotalCaptureCpuTime());
+                Duration allCaptureWallTime = millis(snapshotStats.getTotalCaptureWallTime());
+                Duration lastCaptureCPUTime = millis(snapshotStats.getLastCaptureCpuTime());
+                Duration lastCaptureWallTime = millis(snapshotStats.getLastCaptureWallTime());
+                String allSnapshotsSize = FormatUtils.formatDataSize(bytes(snapshotStats.getAllCaptureSize()), true);
+                String lastSnapshotSize = FormatUtils.formatDataSize(bytes(snapshotStats.getLastCaptureSize()), true);
+                String captureSummary = String.format("Snapshot Capture: All: %s/%.1fs/%.1fs, Last: %s/%.1fs/%.1fs",
+                        allSnapshotsSize, allCaptureCPUTime.getValue(SECONDS), allCaptureWallTime.getValue(SECONDS),
+                        lastSnapshotSize, lastCaptureCPUTime.getValue(SECONDS), lastCaptureWallTime.getValue(SECONDS));
+                reprintLine(captureSummary);
+
+                // Snapshot restore stats: 1/100MB/22s/18s
+                long restoreCount = snapshotStats.getSuccessRestoreCount();
+                if (restoreCount > 0) {
+                    Duration allRestoreCPUTime = millis(snapshotStats.getTotalRestoreCpuTime());
+                    Duration allRestoreWallTime = millis(snapshotStats.getTotalRestoreWallTime());
+                    String allRestoreSize = FormatUtils.formatDataSize(bytes(snapshotStats.getTotalRestoreSize()), true);
+                    String restoreSummary = String.format(Locale.ROOT, "Snapshot Restore: %d/%s/%.1fs/%.1fs", restoreCount,
+                            allRestoreSize, allRestoreCPUTime.getValue(SECONDS), allRestoreWallTime.getValue(SECONDS));
+                    reprintLine(restoreSummary);
+                }
             }
         }
 
         // 0:32 [2.12GB, 15M rows] [67MB/s, 463K rows/s]
         String statsLine = String.format("%s [%s rows, %s] [%s rows/s, %s]",
-                FormatUtils.formatTime(wallTime),
+                FormatUtils.formatTime(wallTime, timeInMilliseconds),
                 FormatUtils.formatCount(stats.getProcessedRows()),
                 FormatUtils.formatDataSize(bytes(stats.getProcessedBytes()), true),
                 FormatUtils.formatCountRate(stats.getProcessedRows(), wallTime, false),
@@ -244,14 +281,14 @@ Spilled: 20GB
                 reprintLine("80 characters wide");
                 reprintLine("");
                 reprintLine(stats.getState());
-                reprintLine(String.format("%s %d%%", FormatUtils.formatTime(wallTime), progressPercentage));
+                reprintLine(String.format(Locale.ROOT, "%s %d%%", FormatUtils.formatTime(wallTime, timeInMilliseconds), progressPercentage));
                 return;
             }
 
             int nodes = stats.getNodes();
 
             // Query 10, RUNNING, 1 node, 778 splits
-            String querySummary = String.format("Query %s, %s, %,d %s, %,d splits",
+            String querySummary = String.format(Locale.ROOT, "Query %s, %s, %,d %s, %,d splits",
                     results.getId(),
                     stats.getState(),
                     nodes,
@@ -278,7 +315,7 @@ Spilled: 20GB
 
                 // CPU Time: 56.5s total, 36.4K rows/s, 4.44MB/s, 60% active
                 Duration cpuTime = millis(stats.getCpuTimeMillis());
-                String cpuTimeSummary = String.format("CPU Time: %.1fs total, %5s rows/s, %8s, %d%% active",
+                String cpuTimeSummary = String.format(Locale.ROOT, "CPU Time: %.1fs total, %5s rows/s, %8s, %d%% active",
                         cpuTime.getValue(SECONDS),
                         FormatUtils.formatCountRate(stats.getProcessedRows(), cpuTime, false),
                         FormatUtils.formatDataRate(bytes(stats.getProcessedBytes()), cpuTime, true),
@@ -300,9 +337,15 @@ Spilled: 20GB
                 // Peak Memory: 1.97GB
                 reprintLine("Peak Memory: " + FormatUtils.formatDataSize(bytes(stats.getPeakMemoryBytes()), true));
 
-                // Spilled Data: 20GB
+                // Spilled Data: 20GB, Writing Time: 25s, Reading Time: 8s
                 if (stats.getSpilledBytes() > 0) {
-                    reprintLine("Spilled: " + FormatUtils.formatDataSize(bytes(stats.getSpilledBytes()), true));
+                    Duration readTime = millis(stats.getElapsedSpillReadTimeMillis() / stats.getSpilledNodes());
+                    Duration writeTime = millis(stats.getElapsedSpillWriteTimeMillis() / stats.getSpilledNodes());
+                    String summary = String.format("Spilled: %s, Writing Time: %.1fs, Reading Time: %.1fs",
+                            FormatUtils.formatDataSize(bytes(stats.getSpilledBytes()), true),
+                            writeTime.getValue(SECONDS),
+                            readTime.getValue(SECONDS));
+                    reprintLine(summary);
                 }
             }
 
@@ -316,8 +359,8 @@ Spilled: 20GB
                         stats.getTotalSplits());
 
                 // 0:17 [ 103MB,  802K rows] [5.74MB/s, 44.9K rows/s] [=====>>                                   ] 10%
-                String progressLine = String.format("%s [%5s rows, %6s] [%5s rows/s, %8s] [%s] %d%%",
-                        FormatUtils.formatTime(wallTime),
+                String progressLine = String.format(Locale.ROOT, "%s [%5s rows, %6s] [%5s rows/s, %8s] [%s] %d%%",
+                        FormatUtils.formatTime(wallTime, timeInMilliseconds),
                         FormatUtils.formatCount(stats.getProcessedRows()),
                         FormatUtils.formatDataSize(bytes(stats.getProcessedBytes()), true),
                         FormatUtils.formatCountRate(stats.getProcessedRows(), wallTime, false),
@@ -331,8 +374,8 @@ Spilled: 20GB
                 String progressBar = FormatUtils.formatProgressBar(progressWidth, Ints.saturatedCast(nanosSince(start).roundTo(SECONDS)));
 
                 // 0:17 [ 103MB,  802K rows] [5.74MB/s, 44.9K rows/s] [    <=>                                  ]
-                String progressLine = String.format("%s [%5s rows, %6s] [%5s rows/s, %8s] [%s]",
-                        FormatUtils.formatTime(wallTime),
+                String progressLine = String.format(Locale.ROOT, "%s [%5s rows, %6s] [%5s rows/s, %8s] [%s]",
+                        FormatUtils.formatTime(wallTime, timeInMilliseconds),
                         FormatUtils.formatCount(stats.getProcessedRows()),
                         FormatUtils.formatDataSize(bytes(stats.getProcessedBytes()), true),
                         FormatUtils.formatCountRate(stats.getProcessedRows(), wallTime, false),
@@ -466,6 +509,7 @@ Spilled: 20GB
         }
         catch (IOException e) {
             // ignore errors reading keyboard input
+            log.warn(e.toString());
         }
         return -1;
     }

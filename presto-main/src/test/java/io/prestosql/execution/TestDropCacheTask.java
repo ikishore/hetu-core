@@ -1,5 +1,5 @@
 /*
- * Copyright (C) 2018-2020. Huawei Technologies Co., Ltd. All rights reserved.
+ * Copyright (C) 2018-2021. Huawei Technologies Co., Ltd. All rights reserved.
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
  * You may obtain a copy of the License at
@@ -17,6 +17,7 @@ package io.prestosql.execution;
 import com.google.common.collect.ImmutableList;
 import com.google.common.collect.ImmutableMap;
 import io.prestosql.Session;
+import io.prestosql.execution.resourcegroups.NoOpResourceGroupManager;
 import io.prestosql.execution.warnings.WarningCollector;
 import io.prestosql.filesystem.FileSystemClientManager;
 import io.prestosql.heuristicindex.HeuristicIndexerManager;
@@ -166,10 +167,10 @@ public class TestDropCacheTask
     public void testDropCacheNotExistsFalse()
     {
         DropCache statement = new DropCache(QualifiedName.of("test_nonexistent_table"), false);
-        QueryStateMachine stateMachine = createQueryStateMachine("START TRANSACTION", testSession, transactionManager);
+        QueryStateMachine queryStateMachine = createQueryStateMachine("START TRANSACTION", testSession, transactionManager);
 
         try {
-            getFutureValue(new DropCacheTask().execute(statement, createTestTransactionManager(), metadata, new AllowAllAccessControl(), stateMachine, Collections.emptyList(), new HeuristicIndexerManager(new FileSystemClientManager(), new HetuMetaStoreManager())));
+            getFutureValue(new DropCacheTask().execute(statement, createTestTransactionManager(), metadata, new AllowAllAccessControl(), queryStateMachine, Collections.emptyList(), new HeuristicIndexerManager(new FileSystemClientManager(), new HetuMetaStoreManager())));
             fail("expected exception");
         }
         catch (RuntimeException e) {
@@ -193,9 +194,9 @@ public class TestDropCacheTask
                 .setCatalog(CATALOG_NAME)
                 .setSchema(schema)
                 .build();
-        QueryStateMachine stateMachine = createQueryStateMachine("START TRANSACTION", session, transactionManager);
+        QueryStateMachine queryStateMachine = createQueryStateMachine("START TRANSACTION", session, transactionManager);
 
-        getFutureValue(new DropCacheTask().execute(statement, createTestTransactionManager(), metadata, new AllowAllAccessControl(), stateMachine, Collections.emptyList(), new HeuristicIndexerManager(new FileSystemClientManager(), new HetuMetaStoreManager())));
+        getFutureValue(new DropCacheTask().execute(statement, createTestTransactionManager(), metadata, new AllowAllAccessControl(), queryStateMachine, Collections.emptyList(), new HeuristicIndexerManager(new FileSystemClientManager(), new HetuMetaStoreManager())));
         assertFalse(SplitCacheMap.getInstance().cacheExists(fullName));
     }
 
@@ -207,6 +208,7 @@ public class TestDropCacheTask
                 session,
                 URI.create("fake://uri"),
                 new ResourceGroupId("test"),
+                new NoOpResourceGroupManager(),
                 true,
                 transactionManager,
                 new AccessControlManager(transactionManager),

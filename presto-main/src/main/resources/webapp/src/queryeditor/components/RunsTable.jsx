@@ -248,9 +248,10 @@ function selectTable(table, e) {
 
 function previewQueryResult(file, query, e) {
   let pageNum = 1;
+  let pageSize = 10;
   e.preventDefault();
   ResultsPreviewActions.selectPreviewQuery(query);
-  ResultsPreviewActions.loadResultsPreview(file, pageNum);
+  ResultsPreviewActions.loadResultsPreview(file, pageNum, pageSize);
   TabActions.selectTab(TabConstants.RESULTS_PREVIEW);
 }
 
@@ -346,7 +347,10 @@ let CellRenderers = {
           </a>
         );
       }
-    } else if (run.state === 'RUNNING' || run.state === RunStateConstants.QUEUED) {
+    } else if (run.state === 'RUNNING'
+        || run.state === RunStateConstants.QUEUED
+        || run.state === RunStateConstants.RESCHEDULING
+        || run.state === RunStateConstants.RESUMING) {
       let progressFromStats = getProgressFromStats(run.queryStats);
       return (
         <div className={classNames({

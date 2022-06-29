@@ -33,6 +33,7 @@ import io.airlift.bytecode.expression.BytecodeExpression;
 import io.airlift.bytecode.instruction.LabelNode;
 import io.airlift.slice.Slice;
 import io.prestosql.Session;
+import io.prestosql.metadata.FunctionAndTypeManager;
 import io.prestosql.metadata.Metadata;
 import io.prestosql.operator.JoinHash;
 import io.prestosql.operator.JoinHashSupplier;
@@ -46,6 +47,7 @@ import io.prestosql.spi.Page;
 import io.prestosql.spi.PageBuilder;
 import io.prestosql.spi.block.Block;
 import io.prestosql.spi.block.BlockBuilder;
+import io.prestosql.spi.function.BuiltInScalarFunctionImplementation;
 import io.prestosql.spi.function.OperatorType;
 import io.prestosql.spi.function.ScalarFunctionImplementation;
 import io.prestosql.spi.type.BigintType;
@@ -83,6 +85,7 @@ import static io.airlift.bytecode.expression.BytecodeExpressions.constantTrue;
 import static io.airlift.bytecode.expression.BytecodeExpressions.getStatic;
 import static io.airlift.bytecode.expression.BytecodeExpressions.newInstance;
 import static io.airlift.bytecode.expression.BytecodeExpressions.notEqual;
+import static io.prestosql.sql.analyzer.TypeSignatureProvider.fromTypes;
 import static io.prestosql.sql.gen.InputReferenceCompiler.generateInputReference;
 import static io.prestosql.sql.gen.SqlTypeBytecodeExpression.constantType;
 import static io.prestosql.util.CompilerUtils.defineClass;
@@ -91,7 +94,7 @@ import static java.util.Objects.requireNonNull;
 
 public class JoinCompiler
 {
-    private final Metadata metadata;
+    private final FunctionAndTypeManager functionAndTypeManager;
 
     private final LoadingCache<CacheKey, LookupSourceSupplierFactory> lookupSourceFactories = CacheBuilder.newBuilder()
             .recordStats()
@@ -129,7 +132,7 @@ public class JoinCompiler
     @Inject
     public JoinCompiler(Metadata metadata)
     {
-        this.metadata = requireNonNull(metadata, "metadata is null");
+        this.functionAndTypeManager = requireNonNull(metadata, "metadata is null").getFunctionAndTypeManager();
     }
 
     @Managed
@@ -266,7 +269,6 @@ public class JoinCompiler
         generateConstructor(classDefinition, joinChannels, sizeField, instanceSizeField, channelFields, joinChannelFields, hashChannelField);
         generateGetChannelCountMethod(classDefinition, outputChannels.size());
         generateGetSizeInBytesMethod(classDefinition, sizeField);
-        generateGetAsInt(classDefinition, callSiteBinder, channelFields, querySetChannel);
         generateAppendToMethod(classDefinition, callSiteBinder, types, outputChannels, channelFields, querySetChannel);
         generateHashPositionMethod(classDefinition, callSiteBinder, joinChannelTypes, joinChannelFields, hashChannelField);
         generateHashRowMethod(classDefinition, callSiteBinder, joinChannelTypes);
@@ -378,47 +380,6 @@ public class JoinCompiler
         getSizeInBytesMethod.getBody()
                 .append(thisVariable.getField(sizeField))
                 .retLong();
-    }
-
-    private static void generateGetAsInt(ClassDefinition classDefinition, CallSiteBinder callSiteBinder, List<FieldDefinition> channelFields, Integer querySetChannel)
-    {
-        if (querySetChannel >= 0) {
-            Parameter blockIndex = arg("blockIndex", int.class);
-            Parameter blockPosition = arg("blockPosition", int.class);
-            Parameter offset = arg("offset", int.class);
-            MethodDefinition getAsIntMethod = classDefinition.declareMethod(a(PUBLIC), "getAsInt", type(long.class), blockIndex, blockPosition, offset);
-
-            Variable thisVariable = getAsIntMethod.getThis();
-            BytecodeBlock getAsIntBody = getAsIntMethod.getBody();
-
-            Variable resultVariable = getAsIntMethod.getScope().declareVariable(long.class, "result");
-
-            BytecodeExpression block = thisVariable
-                    .getField(channelFields.get(querySetChannel))
-                    .invoke("get", Object.class, blockIndex)
-                    .cast(Block.class)
-                    .invoke("getLong", long.class, blockPosition, constantInt(0))
-                    .cast(long.class);
-
-            getAsIntBody
-                    .append(block)
-                    .retLong();
-        }
-        else {
-            Parameter blockIndex = arg("blockIndex", int.class);
-            Parameter blockPosition = arg("blockPosition", int.class);
-            Parameter offset = arg("offset", int.class);
-            MethodDefinition getAsIntMethod = classDefinition.declareMethod(a(PUBLIC), "getAsInt", type(long.class), blockIndex, blockPosition, offset);
-
-            Variable thisVariable = getAsIntMethod.getThis();
-            BytecodeBlock getAsIntBody = getAsIntMethod.getBody();
-
-            //BytecodeExpression block = thisVariable.set(constantLong(0));
-
-            getAsIntBody
-                    .append(constantLong(0))
-                    .retLong();
-        }
     }
 
     private static void generateAppendToMethod(ClassDefinition classDefinition, CallSiteBinder callSiteBinder, List<Type> types, List<Integer> outputChannels, List<FieldDefinition> channelFields, Integer querySetChannel)
@@ -783,7 +744,7 @@ public class JoinCompiler
                         continue;
                 }
             }
-            ScalarFunctionImplementation operator = metadata.getScalarFunctionImplementation(metadata.resolveOperator(OperatorType.IS_DISTINCT_FROM, ImmutableList.of(type, type)));
+            BuiltInScalarFunctionImplementation operator = functionAndTypeManager.getBuiltInScalarFunctionImplementation(functionAndTypeManager.resolveOperatorFunctionHandle(OperatorType.IS_DISTINCT_FROM, fromTypes(type, type)));
             Binding binding = callSiteBinder.bind(operator.getMethodHandle());
             List<BytecodeNode> argumentsBytecode = new ArrayList<>();
             argumentsBytecode.add(generateInputReference(callSiteBinder, scope, type, leftBlock, leftBlockPosition));

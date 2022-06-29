@@ -24,3 +24,41 @@ For more detailed information about a query, simply click the query ID link. The
 
 The summary section has a button to kill the currently running query. There are two visualizations available in the summary section: task execution and timeline. The full JSON document containing information
 and statistics about the query is available by clicking the *JSON* link. These visualizations and other statistics can be used to analyze where time is being spent for a query.
+
+## General Properties
+
+### `hetu.queryeditor-ui.allow-insecure-over-http`
+
+> -   **Type:** `boolean`
+> -   **Allowed values:** `true`, `false`
+> -   **Default value:** `false`
+>
+> Insecure authentication over HTTP is disabled by default. This could be overridden via `hetu.queryeditor-ui.allow-insecure-over-http` property of `etc/config.properties` (e.g. hetu.queryeditor-ui.allow-insecure-over-http=true).
+
+### `hetu.queryeditor-ui.execution-timeout`
+
+> -   **Type:** `duration`
+> -   **Default value:** `100 DAYS`
+>
+> UI Execution timeout is set to 100 days as default. This could be overridden via `hetu.queryeditor-ui.execution-timeout` of `etc/config.properties`
+
+### `hetu.queryeditor-ui.max-result-count`
+
+> - **Type:** `int`
+> - **Default value:** `1000`
+>
+> UI max result count is set to 1000 as default. This could be overridden via `hetu.queryeditor-ui.max-result-count` of `etc/config.properties`
+
+### `hetu.queryeditor-ui.max-result-size-mb`
+
+>- **Type:** `size`
+>- **Default value:** `1GB`
+>
+> UI max result size is set to 1 GB as default. This could be overridden via `hetu.queryeditor-ui.max-result-size-mb` of `etc/config.properties`
+
+### `hetu.queryeditor-ui.session-timeout`
+
+> -   **Type:** `duration`
+> -   **Default value:** `1 DAYS`
+>
+> UI session timeout is set to 1 day as default. This could be overridden via `hetu.queryeditor-ui.session-timeout` of `etc/config.properties`

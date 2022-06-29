@@ -19,12 +19,16 @@ import com.google.common.collect.ImmutableMap;
 import com.google.common.collect.ImmutableSet;
 import com.google.common.collect.ListMultimap;
 import com.google.common.collect.Maps;
+import io.prestosql.Session;
+import io.prestosql.execution.warnings.WarningCollector;
 import io.prestosql.metadata.IndexHandle;
 import io.prestosql.metadata.Metadata;
 import io.prestosql.spi.block.SortOrder;
 import io.prestosql.spi.connector.CatalogName;
 import io.prestosql.spi.connector.ColumnHandle;
 import io.prestosql.spi.connector.SchemaTableName;
+import io.prestosql.spi.function.BuiltInFunctionHandle;
+import io.prestosql.spi.function.FunctionHandle;
 import io.prestosql.spi.function.OperatorType;
 import io.prestosql.spi.function.Signature;
 import io.prestosql.spi.metadata.TableHandle;
@@ -56,6 +60,7 @@ import io.prestosql.spi.relation.RowExpression;
 import io.prestosql.spi.relation.VariableReferenceExpression;
 import io.prestosql.spi.type.Type;
 import io.prestosql.sql.ExpressionUtils;
+import io.prestosql.sql.analyzer.ExpressionAnalyzer;
 import io.prestosql.sql.analyzer.TypeSignatureProvider;
 import io.prestosql.sql.parser.SqlParser;
 import io.prestosql.sql.planner.OrderingSchemeUtils;
@@ -87,8 +92,10 @@ import io.prestosql.sql.planner.plan.TableFinishNode;
 import io.prestosql.sql.planner.plan.TableWriterNode;
 import io.prestosql.sql.planner.plan.TableWriterNode.DeleteTarget;
 import io.prestosql.sql.relational.OriginalExpressionUtils;
+import io.prestosql.sql.relational.SqlToRowExpressionTranslator;
 import io.prestosql.sql.tree.Expression;
 import io.prestosql.sql.tree.FunctionCall;
+import io.prestosql.sql.tree.NodeRef;
 import io.prestosql.sql.tree.NullLiteral;
 import io.prestosql.testing.TestingHandle;
 import io.prestosql.testing.TestingMetadata.TestingTableHandle;
@@ -108,14 +115,19 @@ import java.util.stream.Stream;
 import static com.google.common.base.Preconditions.checkArgument;
 import static com.google.common.base.Preconditions.checkState;
 import static com.google.common.collect.ImmutableList.toImmutableList;
+import static io.prestosql.SessionTestUtils.TEST_SESSION;
+import static io.prestosql.metadata.FunctionAndTypeManager.qualifyObjectName;
+import static io.prestosql.spi.function.FunctionKind.SCALAR;
 import static io.prestosql.spi.type.BigintType.BIGINT;
 import static io.prestosql.spi.type.BooleanType.BOOLEAN;
 import static io.prestosql.spi.type.VarbinaryType.VARBINARY;
+import static io.prestosql.sql.analyzer.TypeSignatureProvider.fromTypes;
 import static io.prestosql.sql.planner.SystemPartitioningHandle.FIXED_HASH_DISTRIBUTION;
 import static io.prestosql.sql.planner.SystemPartitioningHandle.SINGLE_DISTRIBUTION;
 import static io.prestosql.sql.relational.Expressions.call;
 import static io.prestosql.sql.relational.Expressions.constant;
 import static io.prestosql.sql.tree.BooleanLiteral.TRUE_LITERAL;
+import static io.prestosql.testing.TestingSession.testSessionBuilder;
 import static io.prestosql.util.MoreLists.nElements;
 import static java.lang.String.format;
 import static java.util.Collections.emptyList;
@@ -342,14 +354,14 @@ public class PlanBuilder
 
     public CallExpression binaryOperation(OperatorType operatorType, RowExpression left, RowExpression right)
     {
-        Signature signature = Signature.internalOperator(operatorType, left.getType().getTypeSignature(), left.getType().getTypeSignature(), right.getType().getTypeSignature());
-        return call(signature, left.getType(), left, right);
+        FunctionHandle functionHandle = metadata.getFunctionAndTypeManager().resolveOperatorFunctionHandle(operatorType, fromTypes(left.getType(), right.getType()));
+        return call(operatorType.name(), functionHandle, left.getType(), left, right);
     }
 
     public static CallExpression comparison(OperatorType operatorType, RowExpression left, RowExpression right)
     {
         Signature signature = Signature.internalOperator(operatorType, BOOLEAN.getTypeSignature(), left.getType().getTypeSignature(), right.getType().getTypeSignature());
-        return call(signature, BOOLEAN, left, right);
+        return call(operatorType.name(), new BuiltInFunctionHandle(signature), BOOLEAN, left, right);
     }
 
     public class AggregationBuilder
@@ -361,6 +373,7 @@ public class PlanBuilder
         private Step step = Step.SINGLE;
         private Optional<Symbol> hashSymbol = Optional.empty();
         private Optional<Symbol> groupIdSymbol = Optional.empty();
+        private Session session = testSessionBuilder().build();
 
         public AggregationBuilder source(PlanNode source)
         {
@@ -382,9 +395,17 @@ public class PlanBuilder
         {
             checkArgument(expression instanceof FunctionCall);
             FunctionCall aggregation = (FunctionCall) expression;
-            Signature signature = metadata.resolveFunction(aggregation.getName(), TypeSignatureProvider.fromTypes(inputTypes));
+            FunctionHandle functionHandle = metadata.getFunctionAndTypeManager().resolveFunction(
+                    session.getTransactionId(),
+                    qualifyObjectName(aggregation.getName()),
+                    TypeSignatureProvider.fromTypes(inputTypes));
+
             return addAggregation(output, new Aggregation(
-                    signature,
+                    new CallExpression(
+                            aggregation.getName().getSuffix(),
+                            functionHandle,
+                            metadata.getType(metadata.getFunctionAndTypeManager().getFunctionMetadata(functionHandle).getReturnType()),
+                            aggregation.getArguments().stream().map(OriginalExpressionUtils::castToRowExpression).collect(toImmutableList())),
                     aggregation.getArguments().stream().map(OriginalExpressionUtils::castToRowExpression).collect(toImmutableList()),
                     aggregation.isDistinct(),
                     aggregation.getFilter().map(SymbolUtils::from),
@@ -414,7 +435,7 @@ public class PlanBuilder
             checkArgument(expression instanceof CallExpression);
             CallExpression call = (CallExpression) expression;
             return addAggregation(output,
-                new Aggregation(call.getSignature(), call.getArguments(), isDistinct, filter, orderingScheme, mask));
+                    new Aggregation(call, call.getArguments(), isDistinct, filter, orderingScheme, mask));
         }
 
         public AggregationBuilder globalGrouping()
@@ -472,7 +493,9 @@ public class PlanBuilder
                     preGroupedSymbols,
                     step,
                     hashSymbol,
-                    groupIdSymbol);
+                    groupIdSymbol,
+                    AggregationNode.AggregationType.HASH,
+                    Optional.empty());
         }
     }
 
@@ -745,7 +768,7 @@ public class PlanBuilder
 
         protected ExchangeNode build()
         {
-            return new ExchangeNode(idAllocator.getNextId(), type, scope, partitioningScheme, sources, inputs, Optional.ofNullable(orderingScheme));
+            return new ExchangeNode(idAllocator.getNextId(), type, scope, partitioningScheme, sources, inputs, Optional.ofNullable(orderingScheme), AggregationNode.AggregationType.HASH);
         }
     }
 
@@ -950,6 +973,29 @@ public class PlanBuilder
     public RemoteSourceNode remoteSourceNode(List<PlanFragmentId> fragmentIds, List<Symbol> symbols, ExchangeNode.Type exchangeType)
     {
         return new RemoteSourceNode(idAllocator.getNextId(), fragmentIds, symbols, Optional.empty(), exchangeType);
+    }
+
+    public RowExpression rowExpression(String sql)
+    {
+        Expression expression = expression(sql);
+        Map<NodeRef<Expression>, Type> expressionTypes = ExpressionAnalyzer.analyzeExpressions(
+                TEST_SESSION,
+                metadata,
+                new SqlParser(),
+                getTypes(),
+                ImmutableList.of(expression),
+                ImmutableList.of(),
+                WarningCollector.NOOP,
+                false
+        ).getExpressionTypes();
+        return SqlToRowExpressionTranslator.translate(
+                expression,
+                SCALAR,
+                expressionTypes,
+                ImmutableMap.of(),
+                metadata.getFunctionAndTypeManager(),
+                TEST_SESSION,
+                false);
     }
 
     public static RowExpression castToRowExpression(String sql)

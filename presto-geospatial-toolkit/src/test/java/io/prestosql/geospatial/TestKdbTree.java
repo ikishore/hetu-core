@@ -31,8 +31,8 @@ public class TestKdbTree
     {
         Rectangle extent = new Rectangle(0, 0, 9, 4);
         ImmutableList.Builder<Rectangle> rectangles = ImmutableList.builder();
-        for (double x = 0; x < 10; x += 1) {
-            for (double y = 0; y < 5; y += 1) {
+        for (int x = 0; x < 10; x += 1) {
+            for (int y = 0; y < 5; y += 1) {
                 rectangles.add(new Rectangle(x, y, x + 0.1, y + 0.2));
             }
         }
@@ -59,8 +59,8 @@ public class TestKdbTree
     {
         Rectangle extent = new Rectangle(0, 0, 9, 4);
         ImmutableList.Builder<Rectangle> rectangles = ImmutableList.builder();
-        for (double x = 0; x < 10; x += 1) {
-            for (double y = 0; y < 5; y += 1) {
+        for (int x = 0; x < 10; x += 1) {
+            for (int y = 0; y < 5; y += 1) {
                 rectangles.add(new Rectangle(x, y, x + width, y + height));
             }
         }
@@ -197,9 +197,11 @@ public class TestKdbTree
             }
         }
 
-        for (double x = 5; x < 6; x += 0.2) {
-            for (double y = 1; y < 2; y += 0.5) {
-                rectangles.add(new Rectangle(x, y, x + width, y + height));
+        int devid = 10;
+        for (int x = 50; x < 60; x += 2) {
+            for (int y = 10; y < 20; y += 5) {
+                rectangles.add(new Rectangle((double) x / devid, (double) y / devid,
+                        (double) (x + width) / devid, (double) (y + height) / devid));
             }
         }
 

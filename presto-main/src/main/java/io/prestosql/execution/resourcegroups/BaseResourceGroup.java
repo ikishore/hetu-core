@@ -21,6 +21,7 @@ import io.prestosql.execution.ManagedQueryExecution;
 import io.prestosql.server.QueryStateInfo;
 import io.prestosql.server.ResourceGroupInfo;
 import io.prestosql.spi.PrestoException;
+import io.prestosql.spi.resourcegroups.KillPolicy;
 import io.prestosql.spi.resourcegroups.ResourceGroup;
 import io.prestosql.spi.resourcegroups.ResourceGroupId;
 import io.prestosql.spi.resourcegroups.ResourceGroupState;
@@ -89,6 +90,12 @@ public abstract class BaseResourceGroup
     protected SchedulingPolicy schedulingPolicy = FAIR;
     @GuardedBy("root")
     protected boolean jmxExport;
+    @GuardedBy("root")
+    protected KillPolicy killPolicy = KillPolicy.NO_KILL;
+    @GuardedBy("root")
+    protected int memoryMarginPercent = 10;
+    @GuardedBy("root")
+    protected int queryProgressMarginPercent = 5;
 
     // Live data structures
     // ====================
@@ -142,6 +149,7 @@ public abstract class BaseResourceGroup
                     hardConcurrencyLimit,
                     hardReservedConcurrency,
                     maxQueuedQueries,
+                    killPolicy,
                     DataSize.succinctBytes(cachedMemoryUsageBytes),
                     getQueuedQueries(),
                     getRunningQueries(),
@@ -173,6 +181,7 @@ public abstract class BaseResourceGroup
                     hardConcurrencyLimit,
                     hardReservedConcurrency,
                     maxQueuedQueries,
+                    killPolicy,
                     DataSize.succinctBytes(cachedMemoryUsageBytes),
                     getQueuedQueries(),
                     getRunningQueries(),
@@ -199,6 +208,7 @@ public abstract class BaseResourceGroup
                     hardConcurrencyLimit,
                     hardReservedConcurrency,
                     maxQueuedQueries,
+                    killPolicy,
                     DataSize.succinctBytes(cachedMemoryUsageBytes),
                     getQueuedQueries(),
                     getRunningQueries(),
@@ -369,6 +379,14 @@ public abstract class BaseResourceGroup
     }
 
     @Override
+    public KillPolicy getKillPolicy()
+    {
+        synchronized (root) {
+            return killPolicy;
+        }
+    }
+
+    @Override
     public boolean getJmxExport()
     {
         synchronized (root) {
@@ -383,6 +401,30 @@ public abstract class BaseResourceGroup
             jmxExport = export;
         }
         jmxExportListener.accept(this, export);
+    }
+
+    public int getMemoryMarginPercent()
+    {
+        return memoryMarginPercent;
+    }
+
+    public void setMemoryMarginPercent(int memoryMarginPercent)
+    {
+        synchronized (root) {
+            this.memoryMarginPercent = memoryMarginPercent;
+        }
+    }
+
+    public int getQueryProgressMarginPercent()
+    {
+        return queryProgressMarginPercent;
+    }
+
+    public void setQueryProgressMarginPercent(int queryProgressMarginPercent)
+    {
+        synchronized (root) {
+            this.queryProgressMarginPercent = queryProgressMarginPercent;
+        }
     }
 
     /**
@@ -435,22 +477,23 @@ public abstract class BaseResourceGroup
      */
     protected int adjustHardConcurrency(int hardConcurrencyLimit, long cpuUsageMillis)
     {
+        int concurrencyLimit = hardConcurrencyLimit;
         // No need to apply penalty if softCpuLimit is bigger than hardCpuLimit
         if (hardCpuLimitMillis <= softCpuLimitMillis) {
-            return hardConcurrencyLimit;
+            return concurrencyLimit;
         }
 
         if (cpuUsageMillis >= softCpuLimitMillis) {
             // TODO: Consider whether cpu limit math should be performed on softConcurrency or hardConcurrency
             // Linear penalty between soft and hard limit
             double penalty = (cpuUsageMillis - softCpuLimitMillis) / (double) (hardCpuLimitMillis - softCpuLimitMillis);
-            hardConcurrencyLimit = (int) Math.floor(hardConcurrencyLimit * (1 - penalty));
+            concurrencyLimit = (int) Math.floor(concurrencyLimit * (1 - penalty));
             // Always penalize by at least one
-            hardConcurrencyLimit = min(this.hardConcurrencyLimit - 1, hardConcurrencyLimit);
+            concurrencyLimit = min(this.hardConcurrencyLimit - 1, concurrencyLimit);
             // Always allow at least one running query
-            hardConcurrencyLimit = Math.max(1, hardConcurrencyLimit);
+            concurrencyLimit = Math.max(1, concurrencyLimit);
         }
-        return hardConcurrencyLimit;
+        return concurrencyLimit;
     }
 
     @Override
@@ -546,4 +589,6 @@ public abstract class BaseResourceGroup
      * @param elapsedSeconds Elapsed seconds since last quota generation
      */
     public abstract void generateCpuQuota(long elapsedSeconds);
+
+    public abstract long getCachedMemoryUsageBytes();
 }

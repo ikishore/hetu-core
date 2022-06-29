@@ -1,5 +1,5 @@
 /*
- * Copyright (C) 2018-2020. Huawei Technologies Co., Ltd. All rights reserved.
+ * Copyright (C) 2018-2021. Huawei Technologies Co., Ltd. All rights reserved.
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
  * You may obtain a copy of the License at
@@ -15,8 +15,8 @@
 
 package io.prestosql.sql.rewrite;
 
-import com.google.common.collect.ImmutableList;
 import com.google.common.collect.Lists;
+import io.hetu.core.spi.cube.CubeFilter;
 import io.hetu.core.spi.cube.CubeMetadata;
 import io.hetu.core.spi.cube.aggregator.AggregationSignature;
 import io.hetu.core.spi.cube.io.CubeMetaStore;
@@ -25,14 +25,17 @@ import io.prestosql.cube.CubeManager;
 import io.prestosql.execution.warnings.WarningCollector;
 import io.prestosql.heuristicindex.HeuristicIndexerManager;
 import io.prestosql.metadata.Metadata;
-import io.prestosql.metadata.QualifiedObjectName;
 import io.prestosql.security.AccessControl;
 import io.prestosql.spi.PrestoException;
 import io.prestosql.spi.StandardErrorCode;
+import io.prestosql.spi.connector.QualifiedObjectName;
+import io.prestosql.sql.ExpressionFormatter;
+import io.prestosql.sql.ExpressionUtils;
+import io.prestosql.sql.ParsingUtil;
 import io.prestosql.sql.analyzer.QueryExplainer;
+import io.prestosql.sql.parser.ParsingOptions;
 import io.prestosql.sql.parser.SqlParser;
 import io.prestosql.sql.tree.AstVisitor;
-import io.prestosql.sql.tree.DefaultExpressionTraversalVisitor;
 import io.prestosql.sql.tree.Expression;
 import io.prestosql.sql.tree.FunctionCall;
 import io.prestosql.sql.tree.GroupBy;
@@ -77,7 +80,7 @@ public class InsertCubeRewrite
             WarningCollector warningCollector,
             HeuristicIndexerManager heuristicIndexerManager)
     {
-        return (Statement) new Visitor(session, cubeManager).process(node, null);
+        return (Statement) new Visitor(session, cubeManager, parser).process(node, null);
     }
 
     private static class Visitor
@@ -85,11 +88,13 @@ public class InsertCubeRewrite
     {
         private final Session session;
         private final CubeManager cubeManager;
+        private final SqlParser sqlParser;
 
-        public Visitor(Session session, CubeManager cubeManager)
+        public Visitor(Session session, CubeManager cubeManager, SqlParser parser)
         {
             this.session = requireNonNull(session, "session is null");
             this.cubeManager = requireNonNull(cubeManager, "cubeManager is null");
+            this.sqlParser = parser;
         }
 
         @Override
@@ -98,29 +103,47 @@ public class InsertCubeRewrite
             QualifiedObjectName targetCube = createQualifiedObjectName(session, node, node.getCubeName());
             Optional<CubeMetaStore> optionalCubeMetaStore = cubeManager.getMetaStore(STAR_TREE);
             CubeMetaStore cubeMetaStore = optionalCubeMetaStore.orElseThrow(() -> new PrestoException(StandardErrorCode.CUBE_ERROR, "Hetu metastore must be initialized."));
-            CubeMetadata cubeMetadata = cubeMetaStore.getMetadataFromCubeName(targetCube.toString()).orElseThrow(() -> new PrestoException(StandardErrorCode.CUBE_ERROR, String.format("Cube not found '%s'", targetCube.toString())));
+            CubeMetadata cubeMetadata = cubeMetaStore.getMetadataFromCubeName(targetCube.toString()).orElseThrow(() -> new PrestoException(StandardErrorCode.CUBE_ERROR, String.format("Cube not found '%s'", targetCube)));
             Set<String> group = cubeMetadata.getGroup();
-            ImmutableList.Builder<Identifier> builder = ImmutableList.builder();
-            new IdentifierBuilderVisitor().process(node.getWhere(), builder);
-            Set<String> whereColumns = builder.build()
+            if (!node.getWhere().isPresent()) {
+                return buildCubeInsert(cubeMetadata, node, group);
+            }
+            Set<String> queryWhereColumns = ExpressionUtils.getIdentifiers(node.getWhere().get())
                     .stream()
                     .map(Identifier::getValue)
                     .collect(Collectors.toCollection(() -> new TreeSet<>(String.CASE_INSENSITIVE_ORDER)));
-            if (!group.containsAll(whereColumns)) {
-                throw new IllegalArgumentException("All columns in where clause must be part Cube group.");
+
+            if (queryWhereColumns.isEmpty()) {
+                throw new IllegalArgumentException("Invalid predicate. " + ExpressionFormatter.formatExpression(node.getWhere().get(), Optional.empty()));
+            }
+            if (!group.containsAll(queryWhereColumns)) {
+                throw new IllegalArgumentException("Some columns in '" + String.join(",", queryWhereColumns) + "' in where clause are not part of Cube.");
+            }
+            CubeFilter cubeFilter = cubeMetadata.getCubeFilter();
+            if (cubeFilter != null && cubeFilter.getCubePredicate() != null) {
+                Expression cubePredicate = sqlParser.createExpression(cubeFilter.getCubePredicate(), new ParsingOptions());
+                Set<String> cubeWhereColumns = ExpressionUtils.getIdentifiers(cubePredicate)
+                        .stream()
+                        .map(Identifier::getValue)
+                        .collect(Collectors.toCollection(() -> new TreeSet<>(String.CASE_INSENSITIVE_ORDER)));
+                if (cubeWhereColumns.size() != 0) {
+                    if (queryWhereColumns.size() != cubeWhereColumns.size() || !cubeWhereColumns.containsAll(queryWhereColumns)) {
+                        throw new IllegalArgumentException(String.format("Where condition must only use the columns from the first insert: %s.",
+                                String.join(", ", cubeWhereColumns)));
+                    }
+                }
             }
             return buildCubeInsert(cubeMetadata, node, group);
         }
 
         private InsertCube buildCubeInsert(CubeMetadata cubeMetadata, InsertCube node, Set<String> cubeGroup)
         {
-            Expression newDataPredicate = node.getWhere();
-            QualifiedObjectName originalTableName = QualifiedObjectName.valueOf(cubeMetadata.getOriginalTableName());
+            QualifiedObjectName sourceTableName = QualifiedObjectName.valueOf(cubeMetadata.getSourceTableName());
             List<Identifier> insertColumns = new ArrayList<>();
-            QualifiedName sourceTable = QualifiedName.of(originalTableName.getCatalogName(), originalTableName.getSchemaName(), originalTableName.getObjectName());
+            QualifiedName sourceTable = QualifiedName.of(sourceTableName.getCatalogName(), sourceTableName.getSchemaName(), sourceTableName.getObjectName());
             List<SelectItem> selectItems = new ArrayList<>();
             cubeMetadata.getAggregations().forEach(aggColumn -> {
-                AggregationSignature aggregationSignature = cubeMetadata.getAggregationSignature(aggColumn).get();
+                AggregationSignature aggregationSignature = cubeMetadata.getAggregationSignature(aggColumn).orElseThrow(() -> new PrestoException(StandardErrorCode.CUBE_ERROR, String.format("Cannot find aggregation column '%s'", aggColumn)));
                 FunctionCall aggFunction = new FunctionCall(
                         Optional.empty(),
                         QualifiedName.of(aggregationSignature.getFunction()),
@@ -146,13 +169,21 @@ public class InsertCubeRewrite
             List<List<Expression>> groupingSets = new ArrayList<>();
             groupingSets.add(cubeGroup
                     .stream()
+                    .filter(column -> !column.isEmpty())
                     .map(Identifier::new)
                     .collect(Collectors.toList()));
             GroupBy groupBy = new GroupBy(false, Lists.newArrayList(new GroupingSets(groupingSets)));
+            Expression filterPredicate = null;
+            if (cubeMetadata.getCubeFilter() != null && cubeMetadata.getCubeFilter().getSourceTablePredicate() != null) {
+                filterPredicate = sqlParser.createExpression(cubeMetadata.getCubeFilter().getSourceTablePredicate(), ParsingUtil.createParsingOptions(session));
+            }
+            if (node.getWhere().isPresent()) {
+                filterPredicate = filterPredicate != null ? ExpressionUtils.and(filterPredicate, node.getWhere().get()) : node.getWhere().get();
+            }
             QuerySpecification selectQuery = new QuerySpecification(
                     new Select(false, selectItems),
                     Optional.of(new Table(sourceTable)),
-                    Optional.of(newDataPredicate),
+                    Optional.ofNullable(filterPredicate),
                     Optional.of(groupBy),
                     Optional.empty(),
                     Optional.empty(),
@@ -164,17 +195,6 @@ public class InsertCubeRewrite
             }
             else {
                 return new InsertCube(node.getCubeName(), node.getWhere(), insertColumns, node.isOverwrite(), query);
-            }
-        }
-
-        private static class IdentifierBuilderVisitor
-                extends DefaultExpressionTraversalVisitor<Void, ImmutableList.Builder<Identifier>>
-        {
-            @Override
-            protected Void visitIdentifier(Identifier node, ImmutableList.Builder<Identifier> builder)
-            {
-                builder.add(node);
-                return null;
             }
         }
 

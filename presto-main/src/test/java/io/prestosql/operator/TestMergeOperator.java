@@ -17,12 +17,28 @@ import com.google.common.cache.CacheBuilder;
 import com.google.common.cache.CacheLoader;
 import com.google.common.cache.LoadingCache;
 import com.google.common.collect.ImmutableList;
+import com.google.inject.Binder;
+import com.google.inject.Injector;
+import com.google.inject.Key;
+import com.google.inject.Module;
+import io.airlift.bootstrap.Bootstrap;
+import io.airlift.discovery.client.ServiceSelector;
+import io.airlift.discovery.client.testing.TestingDiscoveryModule;
 import io.airlift.http.client.HttpClient;
 import io.airlift.http.client.testing.TestingHttpClient;
-import io.hetu.core.transport.execution.buffer.PagesSerdeFactory;
+import io.airlift.http.server.testing.TestingHttpServerModule;
+import io.airlift.jaxrs.JaxrsModule;
+import io.airlift.jmx.testing.TestingJmxModule;
+import io.airlift.json.JsonModule;
+import io.airlift.node.testing.TestingNodeModule;
+import io.airlift.tracetoken.TraceTokenModule;
 import io.prestosql.execution.Lifespan;
-import io.prestosql.execution.buffer.TestingPagesSerdeFactory;
+import io.prestosql.execution.QueryManagerConfig;
+import io.prestosql.failuredetector.FailureDetectorModule;
+import io.prestosql.failuredetector.HeartbeatFailureDetector;
+import io.prestosql.failuredetector.TestHeartbeatFailureDetector;
 import io.prestosql.metadata.Split;
+import io.prestosql.server.InternalCommunicationConfig;
 import io.prestosql.spi.Page;
 import io.prestosql.spi.block.SortOrder;
 import io.prestosql.spi.plan.PlanNodeId;
@@ -36,12 +52,18 @@ import org.testng.annotations.Test;
 import java.net.URI;
 import java.util.ArrayList;
 import java.util.List;
+import java.util.Optional;
+import java.util.Set;
 import java.util.concurrent.ScheduledExecutorService;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicInteger;
 
 import static com.google.common.collect.Iterables.getOnlyElement;
 import static io.airlift.concurrent.Threads.daemonThreadsNamed;
+import static io.airlift.configuration.ConfigBinder.configBinder;
+import static io.airlift.discovery.client.DiscoveryBinder.discoveryBinder;
+import static io.airlift.discovery.client.ServiceTypes.serviceType;
+import static io.airlift.jaxrs.JaxrsBinder.jaxrsBinder;
 import static io.prestosql.RowPagesBuilder.rowPagesBuilder;
 import static io.prestosql.SessionTestUtils.TEST_SESSION;
 import static io.prestosql.operator.OperatorAssertion.assertOperatorIsBlocked;
@@ -53,6 +75,7 @@ import static io.prestosql.spi.type.BigintType.BIGINT;
 import static io.prestosql.spi.type.IntegerType.INTEGER;
 import static io.prestosql.testing.TestingTaskContext.createTaskContext;
 import static java.util.concurrent.Executors.newSingleThreadScheduledExecutor;
+import static org.testng.Assert.assertEquals;
 import static org.testng.Assert.assertFalse;
 import static org.testng.Assert.assertNull;
 import static org.testng.Assert.assertTrue;
@@ -64,10 +87,9 @@ public class TestMergeOperator
     private static final String TASK_2_ID = "task2";
     private static final String TASK_3_ID = "task3";
 
-    private AtomicInteger operatorId = new AtomicInteger();
+    private final AtomicInteger operatorId = new AtomicInteger();
 
     private ScheduledExecutorService executor;
-    private PagesSerdeFactory serdeFactory;
     private HttpClient httpClient;
     private ExchangeClientFactory exchangeClientFactory;
     private OrderingCompiler orderingCompiler;
@@ -77,19 +99,53 @@ public class TestMergeOperator
     @BeforeMethod
     public void setUp()
     {
+        Bootstrap app = new Bootstrap(
+                new TestingNodeModule(),
+                new TestingJmxModule(),
+                new TestingDiscoveryModule(),
+                new TestingHttpServerModule(),
+                new TraceTokenModule(),
+                new JsonModule(),
+                new JaxrsModule(),
+                new FailureDetectorModule(),
+                new Module()
+                {
+                    @Override
+                    public void configure(Binder binder)
+                    {
+                        configBinder(binder).bindConfig(InternalCommunicationConfig.class);
+                        configBinder(binder).bindConfig(QueryManagerConfig.class);
+                        discoveryBinder(binder).bindSelector("presto");
+                        discoveryBinder(binder).bindHttpAnnouncement("presto");
+
+                        // Jersey with jetty 9 requires at least one resource
+                        // todo add a dummy resource to airlift jaxrs in this case
+                        jaxrsBinder(binder).bind(TestHeartbeatFailureDetector.FooResource.class);
+                    }
+                });
+
+        Injector injector = app
+                .strictConfig()
+                .doNotInitializeLogging()
+                .quiet()
+                .initialize();
+
+        ServiceSelector selector = injector.getInstance(Key.get(ServiceSelector.class, serviceType("presto")));
+        assertEquals(selector.selectAllServices().size(), 1);
+
+        HeartbeatFailureDetector detector = injector.getInstance(HeartbeatFailureDetector.class);
+
         executor = newSingleThreadScheduledExecutor(daemonThreadsNamed("test-merge-operator-%s"));
-        serdeFactory = new TestingPagesSerdeFactory();
 
         taskBuffers = CacheBuilder.newBuilder().build(CacheLoader.from(TestingTaskBuffer::new));
         httpClient = new TestingHttpClient(new TestingExchangeHttpClientHandler(taskBuffers), executor);
-        exchangeClientFactory = new ExchangeClientFactory(new ExchangeClientConfig(), httpClient, executor);
+        exchangeClientFactory = new ExchangeClientFactory(new ExchangeClientConfig(), httpClient, executor, detector);
         orderingCompiler = new OrderingCompiler();
     }
 
     @AfterMethod(alwaysRun = true)
     public void tearDown()
     {
-        serdeFactory = null;
         orderingCompiler = null;
 
         httpClient.close();
@@ -336,7 +392,6 @@ public class TestMergeOperator
                 mergeOperatorId,
                 new PlanNodeId("plan_node_id" + mergeOperatorId),
                 exchangeClientFactory,
-                serdeFactory,
                 orderingCompiler,
                 sourceTypes,
                 outputChannels,
@@ -350,7 +405,7 @@ public class TestMergeOperator
 
     private static Split createRemoteSplit(String taskId)
     {
-        return new Split(ExchangeOperator.REMOTE_CONNECTOR_ID, new RemoteSplit(URI.create("http://localhost/" + taskId)), Lifespan.taskWide());
+        return new Split(ExchangeOperator.REMOTE_CONNECTOR_ID, new RemoteSplit(URI.create("http://localhost/" + taskId), "new split test instance id"), Lifespan.taskWide());
     }
 
     private static List<Page> pullAvailablePages(Operator operator)
@@ -377,5 +432,33 @@ public class TestMergeOperator
         assertTrue(operator.isFinished(), "Expected operator to be finished");
 
         return outputPages;
+    }
+
+    @Test
+    public void testGetInputChannels()
+    {
+        List<Type> types = ImmutableList.of(BIGINT);
+        MergeOperator operator = createMergeOperator(types, ImmutableList.of(0), ImmutableList.of(0), ImmutableList.of(ASC_NULLS_FIRST));
+
+        // Not enough channels are known
+        assertFalse(operator.getInputChannels().isPresent());
+
+        operator.addSplit(createRemoteSplit(TASK_1_ID));
+        // Not all channels are known
+        assertFalse(operator.getInputChannels().isPresent());
+        // Not enough channels are known
+        assertFalse(operator.getInputChannels().isPresent());
+
+        operator.addSplit(createRemoteSplit(TASK_2_ID));
+        // Not all channels are known
+        assertFalse(operator.getInputChannels().isPresent());
+
+        operator.noMoreSplits();
+        Optional<Set<String>> channels = operator.getInputChannels();
+        assertTrue(channels.isPresent());
+        assertEquals(channels.get().size(), 2);
+
+        Optional<Set<String>> channels1 = operator.getInputChannels();
+        assertTrue(channels == channels1);
     }
 }

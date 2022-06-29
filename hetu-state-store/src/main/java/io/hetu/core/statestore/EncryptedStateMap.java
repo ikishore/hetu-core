@@ -1,5 +1,5 @@
 /*
- * Copyright (C) 2018-2020. Huawei Technologies Co., Ltd. All rights reserved.
+ * Copyright (C) 2018-2021. Huawei Technologies Co., Ltd. All rights reserved.
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
  * You may obtain a copy of the License at
@@ -22,6 +22,7 @@ import io.prestosql.spi.statestore.listener.MapListener;
 import java.io.Serializable;
 import java.util.Map;
 import java.util.Set;
+import java.util.function.Function;
 
 import static java.util.Objects.requireNonNull;
 
@@ -145,6 +146,12 @@ public class EncryptedStateMap<K, V extends Serializable>
     public void removeEntryListener(MapListener listener)
     {
         encryptedValues.removeEntryListener(listener);
+    }
+
+    @Override
+    public V computeIfAbsent(K key, Function<? super K, ? extends V> mappingFunction)
+    {
+        return null;
     }
 
     @Override

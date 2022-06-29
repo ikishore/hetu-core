@@ -35,11 +35,11 @@ public class ByteArrayBlock
 {
     private static final int INSTANCE_SIZE = ClassLayout.parseClass(ByteArrayBlock.class).instanceSize();
 
-    private final int arrayOffset;
+    protected final int arrayOffset;
     private final int positionCount;
     @Nullable
-    private final boolean[] valueIsNull;
-    private final byte[] values;
+    protected final boolean[] valueIsNull;
+    protected final byte[] values;
 
     private final long sizeInBytes;
     private final long retainedSizeInBytes;
@@ -196,9 +196,10 @@ public class ByteArrayBlock
     {
         checkValidRegion(getPositionCount(), positionOffset, length);
 
-        positionOffset += arrayOffset;
-        boolean[] newValueIsNull = valueIsNull == null ? null : compactArray(valueIsNull, positionOffset, length);
-        byte[] newValues = compactArray(values, positionOffset, length);
+        int finalPositionOffset = positionOffset;
+        finalPositionOffset += arrayOffset;
+        boolean[] newValueIsNull = valueIsNull == null ? null : compactArray(valueIsNull, finalPositionOffset, length);
+        byte[] newValues = compactArray(values, finalPositionOffset, length);
 
         if (newValueIsNull == valueIsNull && newValues == values) {
             return this;
@@ -231,8 +232,13 @@ public class ByteArrayBlock
     @Override
     public boolean[] filter(BloomFilter filter, boolean[] validPositions)
     {
-        for (int i = 0; i < values.length; i++) {
-            validPositions[i] = validPositions[i] && filter.test(values[i]);
+        for (int i = 0; i < positionCount; i++) {
+            if (valueIsNull != null && valueIsNull[i + arrayOffset]) {
+                validPositions[i] = validPositions[i] && filter.test((byte[]) null);
+            }
+            else {
+                validPositions[i] = validPositions[i] && filter.test(values[i + arrayOffset]);
+            }
         }
         return validPositions;
     }

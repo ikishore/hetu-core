@@ -20,6 +20,12 @@ import io.airlift.slice.Slice;
 import io.airlift.slice.Slices;
 import io.prestosql.spi.HostAddress;
 
+import java.util.ArrayList;
+import java.util.Collections;
+import java.util.HashMap;
+import java.util.List;
+import java.util.Map;
+
 import static com.google.common.base.Preconditions.checkArgument;
 import static io.airlift.json.JsonCodec.jsonCodec;
 import static java.util.Objects.requireNonNull;
@@ -30,15 +36,21 @@ public class MemoryDataFragment
 
     private final HostAddress hostAddress;
     private final long rows;
+    private final int logicalPartCount;
+    private final Map<String, List<Integer>> logicalPartPartitionMap;
 
     @JsonCreator
     public MemoryDataFragment(
             @JsonProperty("hostAddress") HostAddress hostAddress,
-            @JsonProperty("rows") long rows)
+            @JsonProperty("rows") long rows,
+            @JsonProperty("logicalPartCount") int logicalPartCount,
+            @JsonProperty("logicalPartPartitionMap") Map<String, List<Integer>> logicalPartPartitionMap)
     {
         this.hostAddress = requireNonNull(hostAddress, "hostAddress is null");
         checkArgument(rows >= 0, "Rows number can not be negative");
         this.rows = rows;
+        this.logicalPartCount = logicalPartCount;
+        this.logicalPartPartitionMap = logicalPartPartitionMap;
     }
 
     @JsonProperty
@@ -53,6 +65,18 @@ public class MemoryDataFragment
         return rows;
     }
 
+    @JsonProperty
+    public int getLogicalPartCount()
+    {
+        return logicalPartCount;
+    }
+
+    @JsonProperty
+    public Map<String, List<Integer>> getLogicalPartPartitionMap()
+    {
+        return logicalPartPartitionMap;
+    }
+
     public Slice toSlice()
     {
         return Slices.wrappedBuffer(MEMORY_DATA_FRAGMENT_CODEC.toJsonBytes(this));
@@ -63,9 +87,33 @@ public class MemoryDataFragment
         return MEMORY_DATA_FRAGMENT_CODEC.fromJson(fragment.getBytes());
     }
 
+    public static Map<String, List<Integer>> getMergedPartitionMap(Map<String, List<Integer>> a, Map<String, List<Integer>> b)
+    {
+        Map<String, List<Integer>> result = new HashMap<>();
+        for (Map.Entry<String, List<Integer>> entry : a.entrySet()) {
+            List<Integer> merged = new ArrayList<>(entry.getValue());
+            List<Integer> bValue = b.get(entry.getKey());
+            if (bValue != null) {
+                merged.addAll(bValue);
+            }
+            result.put(entry.getKey(), merged);
+        }
+        for (Map.Entry<String, List<Integer>> entry : b.entrySet()) {
+            if (!result.containsKey(entry.getKey())) {
+                result.put(entry.getKey(), new ArrayList<>(entry.getValue()));
+            }
+        }
+        return result;
+    }
+
     public static MemoryDataFragment merge(MemoryDataFragment a, MemoryDataFragment b)
     {
         checkArgument(a.getHostAddress().equals(b.getHostAddress()), "Can not merge fragments from different hosts");
-        return new MemoryDataFragment(a.getHostAddress(), a.getRows() + b.getRows());
+        if (a.getLogicalPartPartitionMap().size() == 0 && b.getLogicalPartPartitionMap().size() == 0) {
+            return new MemoryDataFragment(a.getHostAddress(), a.getRows() + b.getRows(), Math.max(a.getLogicalPartCount(), b.getLogicalPartCount()), Collections.emptyMap());
+        }
+        else {
+            return new MemoryDataFragment(a.getHostAddress(), a.getRows() + b.getRows(), Math.max(a.getLogicalPartCount(), b.getLogicalPartCount()), getMergedPartitionMap(a.getLogicalPartPartitionMap(), b.getLogicalPartPartitionMap()));
+        }
     }
 }

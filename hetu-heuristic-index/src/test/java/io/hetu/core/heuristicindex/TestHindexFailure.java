@@ -1,5 +1,5 @@
 /*
- * Copyright (C) 2018-2020. Huawei Technologies Co., Ltd. All rights reserved.
+ * Copyright (C) 2018-2021. Huawei Technologies Co., Ltd. All rights reserved.
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
  * You may obtain a copy of the License at
@@ -27,14 +27,15 @@ public class TestHindexFailure
     // using catalog name, wrong catalog name, schema name, wrong schema name, table name, wrong table name, column name, wrong column name
     @Test(dataProvider = "indexTypes")
     public void testIndexDeletionWithWrongNames(String indexType)
-            throws Exception
     {
+        System.out.println("Running testIndexDeletionWithWrongNames[indexType: " + indexType + "]");
+
         String tableName = getNewTableName();
         String indexName = getNewIndexName();
         createTable1(tableName);
 
         // Create index
-        safeCreateIndex("CREATE INDEX " + indexName + " USING " +
+        assertQuerySucceeds("CREATE INDEX " + indexName + " USING " +
                 indexType + " ON " + tableName + " (id)");
 
         assertContains("DROP INDEX hive", "Index 'hive' does not exist");
@@ -52,14 +53,15 @@ public class TestHindexFailure
     // Tests the case of failing to delete index because index is already deleted
     @Test(dataProvider = "indexTypes")
     public void testIndexDuplicateDeletion(String indexType)
-            throws Exception
     {
+        System.out.println("Running testIndexDuplicateDeletion[indexType: " + indexType + "]");
+
         String tableName = getNewTableName();
         String indexName = getNewIndexName();
         createTable1(tableName);
 
         // Create index
-        safeCreateIndex("CREATE INDEX " + indexName + " USING " +
+        assertQuerySucceeds("CREATE INDEX " + indexName + " USING " +
                 indexType + " ON " + tableName + " (id)");
 
         assertQuerySucceeds("DROP INDEX " + indexName);
@@ -70,13 +72,14 @@ public class TestHindexFailure
     // Tests the case where more than one index is created on the same table and same column (Error case).
     @Test(dataProvider = "tableData3")
     public void testMultipleSameIndexCreation(String indexType, String queryVariable)
-            throws Exception
     {
+        System.out.println("Running testMultipleSameIndexCreation[indexType: " + indexType + " , queryVariable: " + queryVariable + "]");
+
         String tableName = getNewTableName();
         createTable1(tableName);
 
         String indexName1 = getNewIndexName();
-        safeCreateIndex("CREATE INDEX " + indexName1 + " USING " +
+        assertQuerySucceeds("CREATE INDEX " + indexName1 + " USING " +
                 indexType + " ON " + tableName + " (" + queryVariable + ")");
 
         String indexName2 = getNewIndexName();
@@ -90,6 +93,8 @@ public class TestHindexFailure
     public void testEmptyTableIndexCreation(String indexType, String queryVariable)
             throws IllegalStateException
     {
+        System.out.println("Running testEmptyTableIndexCreation[indexType: " + indexType + ", queryVariable: " + queryVariable + "]");
+
         String tableName = getNewTableName();
         createEmptyTable(tableName);
 
@@ -104,6 +109,8 @@ public class TestHindexFailure
     public void testIndexWithoutCatalogCreation(String indexType, String queryVariable)
             throws IllegalStateException
     {
+        System.out.println("Running testIndexWithoutCatalogCreation[indexType: " + indexType + ", queryVariable: " + queryVariable + "]");
+
         String tableName = getNewTableName();
         String wrongTableName = tableName.substring(5);
         createEmptyTable(tableName);
@@ -119,6 +126,8 @@ public class TestHindexFailure
     public void testIndexWithWrongCatalogCreation(String indexType, String queryVariable)
             throws PrestoException
     {
+        System.out.println("Running testIndexWithWrongCatalogCreation[indexType: " + indexType + ", queryVariable: " + queryVariable + "]");
+
         String tableName = getNewTableName();
         String wrongTableName = "system." + tableName.substring(5);
         createEmptyTable(tableName);
@@ -134,6 +143,8 @@ public class TestHindexFailure
     public void testIndexErrorCatalogCreation(String indexType, String queryVariable)
             throws PrestoException
     {
+        System.out.println("Running testIndexErrorCatalogCreation[indexType: " + indexType + ", queryVariable: " + queryVariable + "]");
+
         String tableName = getNewTableName();
         String wrongTableName = "nonexisting." + tableName.substring(5);
         createEmptyTable(tableName);
@@ -149,6 +160,8 @@ public class TestHindexFailure
     public void testIndexWithoutSchemaCreation(String indexType, String queryVariable)
             throws SemanticException
     {
+        System.out.println("Running testIndexWithoutSchemaCreation[indexType: " + indexType + ", queryVariable: " + queryVariable + "]");
+
         String tableName = getNewTableName();
         String wrongTableName = "hive.nonexistingschema." + tableName.substring(10);
         createEmptyTable(tableName);
@@ -164,6 +177,8 @@ public class TestHindexFailure
     public void testIndexWithWrongSchemaCreation(String indexType, String queryVariable)
             throws SemanticException
     {
+        System.out.println("Running testIndexWithWrongSchemaCreation[indexType: " + indexType + ", queryVariable: " + queryVariable + "]");
+
         String tableName = getNewTableName();
         String wrongTableName = "hive.nonexisting." + tableName.substring(10);
         createEmptyTable(tableName);
@@ -179,6 +194,8 @@ public class TestHindexFailure
     public void testIndexWithoutTableCreation(String indexType, String queryVariable)
             throws SemanticException
     {
+        System.out.println("Running testIndexWithoutTableCreation[indexType: " + indexType + ", queryVariable: " + queryVariable + "]");
+
         String wrongTableName = "hive.test";
 
         String indexName = getNewIndexName();
@@ -192,6 +209,8 @@ public class TestHindexFailure
     public void testIndexWithWrongTableCreation(String indexType, String queryVariable)
             throws SemanticException
     {
+        System.out.println("Running testIndexWithWrongTableCreation[indexType: " + indexType + ", queryVariable: " + queryVariable + "]");
+
         String tableName = getNewTableName();
         String wrongTableName = "hive.test.nonexisting" + tableName.substring(10);
         createEmptyTable(tableName);
@@ -206,6 +225,8 @@ public class TestHindexFailure
     @Test(dataProvider = "indexTypes")
     public void testIndexWithoutColumnCreation(String indexType)
     {
+        System.out.println("Running testIndexWithoutColumnCreation[indexType: " + indexType + "]");
+
         String tableName = getNewTableName();
         createTable1(tableName);
         // Error of "mismatched input ')'. Expecting: <identifier>" exists
@@ -221,6 +242,8 @@ public class TestHindexFailure
     public void testIndexWithWrongColumnCreation(String indexType)
             throws SemanticException
     {
+        System.out.println("Running testIndexWithWrongColumnCreation[indexType: " + indexType + "]");
+
         String tableName = getNewTableName();
         createTable1(tableName);
 

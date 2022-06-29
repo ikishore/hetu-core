@@ -14,7 +14,10 @@
 package io.prestosql.operator;
 
 import io.prestosql.operator.LookupJoinOperators.JoinType;
+import io.prestosql.spi.snapshot.BlockEncodingSerdeProvider;
+import io.prestosql.spi.snapshot.Restorable;
 
+import java.io.Serializable;
 import java.util.Optional;
 import java.util.function.Supplier;
 
@@ -22,7 +25,7 @@ import static io.prestosql.operator.JoinOperatorInfo.createJoinOperatorInfo;
 import static java.util.Objects.requireNonNull;
 
 public class JoinStatisticsCounter
-        implements Supplier<OperatorInfo>
+        implements Supplier<OperatorInfo>, Restorable
 {
     public static final int HISTOGRAM_BUCKETS = 8;
 
@@ -74,5 +77,34 @@ public class JoinStatisticsCounter
     public JoinOperatorInfo get()
     {
         return createJoinOperatorInfo(joinType, logHistogramCounters, lookupSourcePositions);
+    }
+
+    @Override
+    public Object capture(BlockEncodingSerdeProvider serdeProvider)
+    {
+        JoinStatisticsCounterState myState = new JoinStatisticsCounterState();
+        myState.logHistogramCounters = logHistogramCounters.clone();
+        if (lookupSourcePositions.isPresent()) {
+            myState.lookupSourcePositions = lookupSourcePositions.get();
+        }
+        return myState;
+    }
+
+    @Override
+    public void restore(Object state, BlockEncodingSerdeProvider serdeProvider)
+    {
+        JoinStatisticsCounterState myState = (JoinStatisticsCounterState) state;
+        System.arraycopy(myState.logHistogramCounters, 0, this.logHistogramCounters, 0, myState.logHistogramCounters.length);
+        this.lookupSourcePositions = Optional.empty();
+        if (myState.lookupSourcePositions != null) {
+            this.lookupSourcePositions = Optional.of(myState.lookupSourcePositions);
+        }
+    }
+
+    private static class JoinStatisticsCounterState
+            implements Serializable
+    {
+        private long[] logHistogramCounters;
+        private Long lookupSourcePositions;
     }
 }

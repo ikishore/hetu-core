@@ -108,7 +108,7 @@ public class ImplementFilteredAggregations
             }
 
             aggregations.put(output, new Aggregation(
-                    aggregation.getSignature(),
+                    aggregation.getFunctionCall(),
                     aggregation.getArguments(),
                     aggregation.isDistinct(),
                     Optional.empty(),
@@ -139,6 +139,8 @@ public class ImplementFilteredAggregations
                         ImmutableList.of(),
                         aggregationNode.getStep(),
                         aggregationNode.getHashSymbol(),
-                        aggregationNode.getGroupIdSymbol()));
+                        aggregationNode.getGroupIdSymbol(),
+                        aggregationNode.getAggregationType(),
+                        aggregationNode.getFinalizeSymbol()));
     }
 }

@@ -1,5 +1,5 @@
 /*
- * Copyright (C) 2018-2020. Huawei Technologies Co., Ltd. All rights reserved.
+ * Copyright (C) 2018-2021. Huawei Technologies Co., Ltd. All rights reserved.
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
  * You may obtain a copy of the License at
@@ -14,6 +14,7 @@
  */
 package io.hetu.core.plugin.hbase.client;
 
+import io.airlift.log.Logger;
 import io.hetu.core.plugin.hbase.utils.TestSliceUtils;
 import org.apache.hadoop.conf.Configuration;
 import org.apache.hadoop.hbase.HBaseConfiguration;
@@ -39,14 +40,12 @@ import org.mockito.invocation.InvocationOnMock;
 import org.mockito.stubbing.Answer;
 
 import java.io.IOException;
-import java.sql.Date;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Optional;
 import java.util.concurrent.ExecutorService;
 
 import static java.nio.charset.StandardCharsets.UTF_8;
-import static java.util.concurrent.TimeUnit.DAYS;
 import static org.testng.Assert.assertEquals;
 
 /**
@@ -71,6 +70,8 @@ public class TestHBaseConnection
      * mockito hbase admin
      */
     public static Table htable;
+
+    private static final Logger LOG = Logger.get(TestHBaseConnection.class);
 
     static {
         Configuration conf = HBaseConfiguration.create();
@@ -110,7 +111,7 @@ public class TestHBaseConnection
             Mockito.when(admin.listNamespaceDescriptors()).thenReturn(listNamespaceDescriptors());
         }
         catch (IOException e) {
-            e.printStackTrace();
+            LOG.info("Error message: " + e.getStackTrace());
         }
 
         htable = Mockito.mock(Table.class);
@@ -122,7 +123,7 @@ public class TestHBaseConnection
             }).when(htable).put(Mockito.anyListOf(Put.class));
         }
         catch (IOException e) {
-            e.printStackTrace();
+            LOG.info("Error message: " + e.getStackTrace());
         }
     }
 
@@ -243,8 +244,8 @@ public class TestHBaseConnection
         Long longs = Long.valueOf(12);
         put.addColumn("age".getBytes(UTF_8), "lit_age".getBytes(UTF_8), longs.toString().getBytes(UTF_8));
         Integer ints = Integer.valueOf(17832);
-        byte[] gender = new Date(DAYS.toMillis(ints.longValue())).toString().getBytes(UTF_8);
-        put.addColumn("gender".getBytes(UTF_8), "gender".getBytes(UTF_8), gender);
+        Long gender = ints.longValue();
+        put.addColumn("gender".getBytes(UTF_8), "gender".getBytes(UTF_8), gender.toString().getBytes(UTF_8));
         put.addColumn("t".getBytes(UTF_8), "t".getBytes(UTF_8), longs.toString().getBytes(UTF_8));
         List<Put> expected = new ArrayList<>();
         expected.add(put);

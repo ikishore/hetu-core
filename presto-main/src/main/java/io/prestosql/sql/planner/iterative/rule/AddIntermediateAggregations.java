@@ -24,6 +24,7 @@ import io.prestosql.spi.plan.PlanNode;
 import io.prestosql.spi.plan.PlanNodeIdAllocator;
 import io.prestosql.spi.plan.ProjectNode;
 import io.prestosql.spi.plan.Symbol;
+import io.prestosql.spi.relation.CallExpression;
 import io.prestosql.sql.planner.Partitioning;
 import io.prestosql.sql.planner.PartitioningScheme;
 import io.prestosql.sql.planner.SymbolsExtractor;
@@ -120,7 +121,9 @@ public class AddIntermediateAggregations
                     aggregation.getPreGroupedSymbols(),
                     AggregationNode.Step.INTERMEDIATE,
                     aggregation.getHashSymbol(),
-                    aggregation.getGroupIdSymbol());
+                    aggregation.getGroupIdSymbol(),
+                    aggregation.getAggregationType(),
+                    aggregation.getFinalizeSymbol());
             source = ExchangeNode.gatheringExchange(idAllocator.getNextId(), ExchangeNode.Scope.LOCAL, source);
         }
 
@@ -163,7 +166,9 @@ public class AddIntermediateAggregations
                 aggregation.getPreGroupedSymbols(),
                 AggregationNode.Step.INTERMEDIATE,
                 aggregation.getHashSymbol(),
-                aggregation.getGroupIdSymbol());
+                aggregation.getGroupIdSymbol(),
+                aggregation.getAggregationType(),
+                aggregation.getFinalizeSymbol());
     }
 
     /**
@@ -183,7 +188,12 @@ public class AddIntermediateAggregations
             builder.put(
                     output,
                     new AggregationNode.Aggregation(
-                            aggregation.getSignature(),
+                            new CallExpression(
+                                    aggregation.getFunctionCall().getDisplayName(),
+                                    aggregation.getFunctionCall().getFunctionHandle(),
+                                    aggregation.getFunctionCall().getType(),
+                                    ImmutableList.of(castToRowExpression(toSymbolReference(output))),
+                                    Optional.empty()),
                             ImmutableList.of(castToRowExpression(toSymbolReference(output))),
                             false,
                             Optional.empty(),

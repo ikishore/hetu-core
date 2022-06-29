@@ -1,5 +1,5 @@
 /*
- * Copyright (C) 2018-2020. Huawei Technologies Co., Ltd. All rights reserved.
+ * Copyright (C) 2018-2021. Huawei Technologies Co., Ltd. All rights reserved.
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
  * You may obtain a copy of the License at
@@ -21,6 +21,7 @@ import java.io.IOException;
 import java.io.InputStream;
 import java.io.OutputStream;
 import java.nio.file.AccessDeniedException;
+import java.nio.file.FileStore;
 import java.nio.file.FileSystemException;
 import java.nio.file.Files;
 import java.nio.file.OpenOption;
@@ -29,6 +30,10 @@ import java.util.Collection;
 import java.util.LinkedList;
 import java.util.Locale;
 import java.util.stream.Stream;
+import java.util.stream.StreamSupport;
+
+import static java.nio.file.Files.getFileStore;
+import static java.nio.file.Files.newDirectoryStream;
 
 /**
  * HetuFileSystemClient implementation for local file system
@@ -215,5 +220,38 @@ public class HetuLocalFileSystemClient
     @Override
     public void close()
     {
+    }
+
+    @Override
+    public long getTotalSpace(Path path) throws IOException
+    {
+        FileStore fileStore = getFileStore(path);
+        return fileStore.getTotalSpace();
+    }
+
+    @Override
+    public long getUsableSpace(Path path) throws IOException
+    {
+        FileStore fileStore = getFileStore(path);
+        return fileStore.getUsableSpace();
+    }
+
+    @Override
+    public Path createTemporaryFile(Path path, String prefix, String suffix) throws IOException
+    {
+        return Files.createTempFile(path, prefix, suffix);
+    }
+
+    @Override
+    public Path createFile(Path path) throws IOException
+    {
+        return Files.createFile(path);
+    }
+
+    @Override
+    public Stream<Path> getDirectoryStream(Path path, String prefix, String suffix) throws IOException
+    {
+        String glob = prefix + "*" + suffix;
+        return StreamSupport.stream(newDirectoryStream(path, glob).spliterator(), false);
     }
 }

@@ -46,6 +46,8 @@ public class QueryRunner
     private final boolean debug;
     private final OkHttpClient httpClient;
     private final Consumer<OkHttpClient.Builder> sslSetup;
+    private CubeConsole cubeConsole;
+    private ReloadCubeConsole reloadCubeConsole;
 
     public QueryRunner(
             ClientSession session,
@@ -118,6 +120,26 @@ public class QueryRunner
     public Query startQuery(String query)
     {
         return new Query(startInternalQuery(session.get(), query), debug);
+    }
+
+    public void setCubeConsole(CubeConsole cubeConsole)
+    {
+        this.cubeConsole = cubeConsole;
+    }
+
+    public void setReloadCubeConsole(ReloadCubeConsole reloadCubeConsole)
+    {
+        this.reloadCubeConsole = reloadCubeConsole;
+    }
+
+    public CubeConsole getCubeConsole()
+    {
+        return cubeConsole;
+    }
+
+    public CubeQuery startCubeQuery(String query)
+    {
+        return new CubeQuery(startInternalQuery(session.get(), query), debug, cubeConsole);
     }
 
     public StatementClient startInternalQuery(String query)

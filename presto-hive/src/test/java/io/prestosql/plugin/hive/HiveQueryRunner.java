@@ -18,17 +18,16 @@ import com.google.common.collect.ImmutableMap;
 import com.google.common.collect.ImmutableSet;
 import io.airlift.log.Logger;
 import io.airlift.log.Logging;
-import io.airlift.testing.mysql.TestingMySqlServer;
 import io.airlift.tpch.TpchTable;
 import io.hetu.core.cube.startree.StarTreePlugin;
 import io.hetu.core.metastore.HetuMetastorePlugin;
 import io.prestosql.Session;
-import io.prestosql.metadata.QualifiedObjectName;
 import io.prestosql.plugin.hive.authentication.HiveIdentity;
 import io.prestosql.plugin.hive.authentication.NoHdfsAuthentication;
 import io.prestosql.plugin.hive.metastore.Database;
 import io.prestosql.plugin.hive.metastore.file.FileHiveMetastore;
 import io.prestosql.plugin.tpch.TpchPlugin;
+import io.prestosql.spi.connector.QualifiedObjectName;
 import io.prestosql.spi.security.Identity;
 import io.prestosql.spi.security.PrincipalType;
 import io.prestosql.spi.security.SelectedRole;
@@ -85,12 +84,6 @@ public final class HiveQueryRunner
             throws Exception
     {
         return createQueryRunner(tables, ImmutableMap.of(), Optional.empty());
-    }
-
-    public static DistributedQueryRunner createQueryRunnerWithMetaStore(Iterable<TpchTable<?>> tables, TestingMySqlServer mySqlServer)
-            throws Exception
-    {
-        return createQueryRunner(tables, ImmutableMap.of(), "sql-standard", ImmutableMap.of(), Optional.empty(), false, mySqlServer.getJdbcUrl("hive"));
     }
 
     public static DistributedQueryRunner createQueryRunnerWithStateStore(Iterable<TpchTable<?>> tables)
@@ -160,7 +153,7 @@ public final class HiveQueryRunner
                         file2.createNewFile();
                     }
                     catch (IOException e) {
-                        e.printStackTrace();
+                        log.info(e.getMessage());
                     }
                 }
 
@@ -170,6 +163,7 @@ public final class HiveQueryRunner
                     bufferedWriter.write("hetu.metastore.type = jdbc\n");
                     bufferedWriter.write("hetu.metastore.db.user = user\n");
                     bufferedWriter.write("hetu.metastore.db.password = testpass\n");
+                    bufferedWriter.write("hetu.metastore.cache.ttl = 0s");
                 }
                 queryRunner.installPlugin(new HetuMetastorePlugin());
                 queryRunner.getCoordinator().loadMetastore();
@@ -190,7 +184,8 @@ public final class HiveQueryRunner
 
             Map<String, String> hiveProperties = ImmutableMap.<String, String>builder()
                     .putAll(extraHiveProperties)
-                    .put("hive.time-zone", TIME_ZONE.getID())
+                    .put("hive.rcfile.time-zone", TIME_ZONE.getID())
+                    .put("hive.parquet.time-zone", TIME_ZONE.getID())
                     .put("hive.security", security)
                     .put("hive.max-partitions-per-scan", "1000")
                     .put("hive.assume-canonical-partition-keys", "true")
@@ -348,8 +343,8 @@ public final class HiveQueryRunner
 
         DistributedQueryRunner queryRunner = createQueryRunner(TpchTable.getTables(), ImmutableMap.of("http-server.http.port", "8080"), baseDataDir);
         Thread.sleep(10);
-        Logger log = Logger.get(DistributedQueryRunner.class);
-        log.info("======== SERVER STARTED ========");
-        log.info("\n====\n%s\n====", queryRunner.getCoordinator().getBaseUrl());
+        Logger logger = Logger.get(DistributedQueryRunner.class);
+        logger.info("======== SERVER STARTED ========");
+        logger.info("\n====\n%s\n====", queryRunner.getCoordinator().getBaseUrl());
     }
 }

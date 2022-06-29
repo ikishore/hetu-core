@@ -14,11 +14,13 @@
 package io.prestosql.execution;
 
 import io.airlift.concurrent.SetThreadName;
+import io.hetu.core.transport.execution.buffer.PagesSerdeFactory;
 import io.prestosql.Session;
 import io.prestosql.event.SplitMonitor;
 import io.prestosql.execution.buffer.OutputBuffer;
 import io.prestosql.execution.executor.TaskExecutor;
 import io.prestosql.memory.QueryContext;
+import io.prestosql.metadata.Metadata;
 import io.prestosql.operator.CommonTableExecutionContext;
 import io.prestosql.operator.RouterContext;
 import io.prestosql.operator.TaskContext;
@@ -35,6 +37,7 @@ import java.util.OptionalInt;
 import java.util.concurrent.Executor;
 
 import static com.google.common.base.Throwables.throwIfUnchecked;
+import static io.prestosql.SystemSessionProperties.isExchangeCompressionEnabled;
 import static io.prestosql.execution.SqlTaskExecution.createSqlTaskExecution;
 import static java.util.Objects.requireNonNull;
 
@@ -48,13 +51,15 @@ public class SqlTaskExecutionFactory
     private final SplitMonitor splitMonitor;
     private final boolean perOperatorCpuTimerEnabled;
     private final boolean cpuTimerEnabled;
+    private final Metadata metadata;
 
     public SqlTaskExecutionFactory(
             Executor taskNotificationExecutor,
             TaskExecutor taskExecutor,
             LocalExecutionPlanner planner,
             SplitMonitor splitMonitor,
-            TaskManagerConfig config)
+            TaskManagerConfig config,
+            Metadata metadata)
     {
         this.taskNotificationExecutor = requireNonNull(taskNotificationExecutor, "taskNotificationExecutor is null");
         this.taskExecutor = requireNonNull(taskExecutor, "taskExecutor is null");
@@ -63,20 +68,21 @@ public class SqlTaskExecutionFactory
         requireNonNull(config, "config is null");
         this.perOperatorCpuTimerEnabled = config.isPerOperatorCpuTimerEnabled();
         this.cpuTimerEnabled = config.isTaskCpuTimerEnabled();
+        this.metadata = metadata;
     }
 
-    public SqlTaskExecution create(Session session, QueryContext queryContext, TaskStateMachine taskStateMachine, OutputBuffer outputBuffer, PlanFragment fragment, List<TaskSource> sources, OptionalInt totalPartitions, Optional<PlanNodeId> consumer,
-                                        Map<String, CommonTableExecutionContext> cteCtx, Map<String, RouterContext> routerCtx)
+    public SqlTaskExecution create(String taskInstanceId, Session session, QueryContext queryContext, TaskStateMachine taskStateMachine, OutputBuffer outputBuffer, PlanFragment fragment, List<TaskSource> sources, OptionalInt totalPartitions, Optional<PlanNodeId> consumer,
+            Map<String, CommonTableExecutionContext> cteCtx, Map<String, RouterContext> routerCtx)
     {
         TaskContext taskContext = queryContext.addTaskContext(
+                taskInstanceId,
                 taskStateMachine,
                 session,
                 perOperatorCpuTimerEnabled,
                 cpuTimerEnabled,
                 totalPartitions,
-                consumer);
-
-        //System.out.println("Factory:" + this);
+                consumer,
+                new PagesSerdeFactory(metadata.getFunctionAndTypeManager().getBlockEncodingSerde(), isExchangeCompressionEnabled(session)));
 
         LocalExecutionPlan localExecutionPlan;
         try (SetThreadName ignored = new SetThreadName("Task-%s", taskStateMachine.getTaskId())) {
@@ -89,8 +95,8 @@ public class SqlTaskExecutionFactory
                         fragment.getStageExecutionDescriptor(),
                         fragment.getPartitionedSources(),
                         outputBuffer,
-                        fragment.getProducerCTEId(),
-                        fragment.getProducerCTEParentId(),
+                        fragment.getFeederCTEId(),
+                        fragment.getFeederCTEParentId(),
                         cteCtx,
                         routerCtx);
             }

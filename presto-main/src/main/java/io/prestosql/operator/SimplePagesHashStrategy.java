@@ -14,11 +14,13 @@
 package io.prestosql.operator;
 
 import com.google.common.collect.ImmutableList;
+import io.prestosql.metadata.FunctionAndTypeManager;
 import io.prestosql.metadata.Metadata;
 import io.prestosql.spi.Page;
 import io.prestosql.spi.PageBuilder;
 import io.prestosql.spi.block.Block;
 import io.prestosql.spi.type.Type;
+import io.prestosql.sql.analyzer.TypeSignatureProvider;
 import io.prestosql.type.TypeUtils;
 import org.openjdk.jol.info.ClassLayout;
 
@@ -83,10 +85,12 @@ public class SimplePagesHashStrategy
         this.sortChannel = requireNonNull(sortChannel, "sortChannel is null");
         this.querySetChannel = querySetChannel;
         requireNonNull(metadata, "metadata is null");
+        FunctionAndTypeManager functionAndTypeManager = metadata.getFunctionAndTypeManager();
+        requireNonNull(metadata, "functionManager is null");
         ImmutableList.Builder<MethodHandle> distinctFromMethodHandlesBuilder = ImmutableList.builder();
         for (Type type : types) {
             distinctFromMethodHandlesBuilder.add(
-                    metadata.getScalarFunctionImplementation(metadata.resolveOperator(IS_DISTINCT_FROM, ImmutableList.of(type, type))).getMethodHandle());
+                    functionAndTypeManager.getBuiltInScalarFunctionImplementation(functionAndTypeManager.resolveOperatorFunctionHandle(IS_DISTINCT_FROM, TypeSignatureProvider.fromTypes(type, type))).getMethodHandle());
         }
         distinctFromMethodHandles = distinctFromMethodHandlesBuilder.build();
     }
@@ -109,6 +113,7 @@ public class SimplePagesHashStrategy
     @Override
     public void appendTo(int blockIndex, int position, PageBuilder pageBuilder, int outputChannelOffset)
     {
+        int channelOffset = outputChannelOffset;
         for (int outputIndex : outputChannels) {
             if (outputIndex == querySetChannel) {
                 continue;
@@ -117,12 +122,11 @@ public class SimplePagesHashStrategy
             Type type = types.get(outputIndex);
             List<Block> channel = channels.get(outputIndex);
             Block block = channel.get(blockIndex);
-            type.appendTo(block, position, pageBuilder.getBlockBuilder(outputChannelOffset));
-            outputChannelOffset++;
+            type.appendTo(block, position, pageBuilder.getBlockBuilder(channelOffset));
+            channelOffset++;
         }
     }
-
-    @Override
+@Override
     public long getAsInt(int blockIndex, int position, int offset)
     {
         List<Block> channel = channels.get(offset);

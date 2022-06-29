@@ -36,11 +36,15 @@ import io.prestosql.array.IntBigArray;
 import io.prestosql.array.LongBigArray;
 import io.prestosql.array.SliceBigArray;
 import io.prestosql.operator.aggregation.GroupedAccumulator;
+import io.prestosql.snapshot.SnapshotUtils;
 import io.prestosql.spi.block.Block;
 import io.prestosql.spi.block.BlockBuilder;
+import io.prestosql.spi.block.BlockEncodingSerde;
 import io.prestosql.spi.function.AccumulatorStateFactory;
 import io.prestosql.spi.function.AccumulatorStateMetadata;
 import io.prestosql.spi.function.AccumulatorStateSerializer;
+import io.prestosql.spi.snapshot.BlockEncodingSerdeProvider;
+import io.prestosql.spi.snapshot.Restorable;
 import io.prestosql.spi.type.RowType;
 import io.prestosql.spi.type.Type;
 import io.prestosql.sql.gen.CallSiteBinder;
@@ -80,6 +84,7 @@ import static io.airlift.bytecode.expression.BytecodeExpressions.constantNumber;
 import static io.airlift.bytecode.expression.BytecodeExpressions.defaultValue;
 import static io.airlift.bytecode.expression.BytecodeExpressions.equal;
 import static io.airlift.bytecode.expression.BytecodeExpressions.getStatic;
+import static io.airlift.bytecode.expression.BytecodeExpressions.invokeStatic;
 import static io.airlift.bytecode.expression.BytecodeExpressions.newInstance;
 import static io.prestosql.spi.type.BigintType.BIGINT;
 import static io.prestosql.spi.type.BooleanType.BOOLEAN;
@@ -413,7 +418,8 @@ public class StateCompiler
                 a(PUBLIC, FINAL),
                 makeClassName("Single" + clazz.getSimpleName()),
                 type(Object.class),
-                type(clazz));
+                type(clazz),
+                type(Restorable.class));
 
         FieldDefinition instanceSize = generateInstanceSize(definition);
 
@@ -438,6 +444,37 @@ public class StateCompiler
 
         constructor.getBody()
                 .ret();
+
+        Parameter captureSerdeProvider = arg("serdeProvider", BlockEncodingSerdeProvider.class);
+        MethodDefinition capture = definition.declareMethod(a(PUBLIC), "capture", type(Object.class), captureSerdeProvider);
+        Variable myState = capture.getScope().declareVariable(List.class, "myState");
+        capture.getBody().append(myState.set(newInstance(ArrayList.class)));
+        Variable captureBlockEncodingSerde = capture.getScope().declareVariable(BlockEncodingSerde.class, "captureBlockEncodingSerde");
+        capture.getBody().append(captureBlockEncodingSerde.set(captureSerdeProvider.invoke("getBlockEncodingSerde", BlockEncodingSerde.class)));
+        Variable obj = capture.getScope().declareVariable(Object.class, "obj");
+
+        for (int i = 1; i < definition.getFields().size(); i++) {
+            capture.getBody().append(obj.set(invokeStatic(SnapshotUtils.class, "captureHelper", Object.class, capture.getThis().getField(definition.getFields().get(i)).cast(Object.class), captureSerdeProvider)));
+            capture.getBody().append(myState.invoke("add", boolean.class, obj));
+        }
+
+        capture.getBody().append(myState.ret());
+
+        Parameter state = arg("state", Object.class);
+        Parameter restoreSerdeProvider = arg("serdeProvider", BlockEncodingSerdeProvider.class);
+        MethodDefinition restore = definition.declareMethod(a(PUBLIC), "restore", type(void.class), state, restoreSerdeProvider);
+        Variable restoreBlockEncodingSerde = restore.getScope().declareVariable(BlockEncodingSerde.class, "restoreBlockEncodingSerde");
+        restore.getBody().append(restoreBlockEncodingSerde.set(restoreSerdeProvider.invoke("getBlockEncodingSerde", BlockEncodingSerde.class)));
+        Variable restoreState = restore.getScope().declareVariable(List.class, "restoreState");
+        restore.getBody().append(restoreState.set(state.cast(List.class)));
+        Variable value = restore.getScope().declareVariable(Object.class, "value");
+
+        for (int i = 0; i < fields.size(); i++) {
+            restore.getBody().append(value.set(restoreState.invoke("get", Object.class, constantInt(i))));
+            restore.getBody().append(value.set(invokeStatic(SnapshotUtils.class, "restoreHelper", Object.class, value, constantClass(fields.get(i).getType()), restoreSerdeProvider)));
+            restore.getBody().append(restore.getThis().invoke(fields.get(i).getSetterName(), void.class, value.cast(fields.get(i).getType())));
+        }
+        restore.getBody().ret();
 
         return defineClass(definition, clazz, classLoader);
     }
@@ -464,7 +501,8 @@ public class StateCompiler
                 makeClassName("Grouped" + clazz.getSimpleName()),
                 type(AbstractGroupedAccumulatorState.class),
                 type(clazz),
-                type(GroupedAccumulator.class));
+                type(GroupedAccumulator.class),
+                type(Restorable.class));
 
         FieldDefinition instanceSize = generateInstanceSize(definition);
 
@@ -504,6 +542,32 @@ public class StateCompiler
 
         // return size
         body.append(size.ret());
+
+        //Generate capture
+        Parameter captureSerdeProvider = arg("serdeProvider", BlockEncodingSerdeProvider.class);
+        MethodDefinition capture = definition.declareMethod(a(PUBLIC), "capture", type(Object.class), captureSerdeProvider);
+        Variable myState = capture.getScope().declareVariable(List.class, "myState");
+        capture.getBody().append(myState.set(newInstance(ArrayList.class)));
+        for (int i = 1; i < definition.getFields().size(); i++) {
+            capture.getBody().append(myState.invoke("add", boolean.class, capture.getThis().getField(definition.getFields().get(i)).invoke("capture", Object.class, captureSerdeProvider)));
+        }
+        capture.getBody().append(myState.invoke("add", boolean.class, capture.getThis().invoke("getGroupId", long.class).cast(Object.class)));
+        capture.getBody().append(myState.ret());
+
+        //Generate restore
+        Parameter state = arg("state", Object.class);
+        Parameter restoreSerdeProvider = arg("serdeProvider", BlockEncodingSerdeProvider.class);
+        MethodDefinition restore = definition.declareMethod(a(PUBLIC), "restore", type(void.class), state, restoreSerdeProvider);
+        Variable restoreState = restore.getScope().declareVariable(List.class, "restoreState");
+        restore.getBody().append(restoreState.set(state.cast(List.class)));
+        Variable listPosition = restore.getScope().declareVariable(int.class, "listPosition");
+        restore.getBody().append(listPosition.set(constantInt(0)));
+        for (int i = 1; i < definition.getFields().size(); i++) {
+            restore.getBody().append(restore.getThis().getField(definition.getFields().get(i)).invoke("restore", void.class, restoreState.invoke("get", Object.class, listPosition), restoreSerdeProvider));
+            restore.getBody().append(listPosition.increment());
+        }
+        restore.getBody().append(restore.getThis().invoke("setGroupId", void.class, restoreState.invoke("get", Object.class, listPosition).cast(long.class)));
+        restore.getBody().ret();
 
         return defineClass(definition, clazz, classLoader);
     }
@@ -703,25 +767,23 @@ public class StateCompiler
         private final Object initialValue;
         private final Optional<Type> sqlType;
 
-        private StateField(String name, Class<?> type, Object initialValue, String getterName, Optional<Type> sqlType)
+        private StateField(String name, Class<?> type, Object initialValue, String getterName, Optional<Type> tmpSqlType)
         {
             this.name = requireNonNull(name, "name is null");
             checkArgument(!name.isEmpty(), "name is empty");
             this.type = requireNonNull(type, "type is null");
             this.getterName = requireNonNull(getterName, "getterName is null");
             this.initialValue = initialValue;
-            checkArgument(sqlType != null, "sqlType is null");
-            if (sqlType.isPresent()) {
+            checkArgument(tmpSqlType != null, "sqlType is null");
+            boolean isPresent = tmpSqlType.isPresent();
+            if (isPresent) {
                 checkArgument(
-                        (sqlType.get().getJavaType() == type) ||
-                                ((type == byte.class) && TINYINT.equals(sqlType.get())) ||
-                                ((type == int.class) && INTEGER.equals(sqlType.get())),
-                        "Stack type (%s) and provided sql type (%s) are incompatible", type.getName(), sqlType.get().getDisplayName());
+                        (tmpSqlType.get().getJavaType() == type) ||
+                                ((type == byte.class) && TINYINT.equals(tmpSqlType.get())) ||
+                                ((type == int.class) && INTEGER.equals(tmpSqlType.get())),
+                        "Stack type (%s) and provided sql type (%s) are incompatible", type.getName(), tmpSqlType.get().getDisplayName());
             }
-            else {
-                sqlType = sqlTypeFromStackType(type);
-            }
-            this.sqlType = sqlType;
+            this.sqlType = isPresent ? tmpSqlType : sqlTypeFromStackType(type);
         }
 
         private static Optional<Type> sqlTypeFromStackType(Class<?> stackType)
@@ -779,8 +841,8 @@ public class StateCompiler
 
         boolean isPrimitiveType()
         {
-            Class<?> type = getType();
-            return (type == long.class || type == double.class || type == boolean.class || type == byte.class || type == int.class);
+            Class<?> tmpType = getType();
+            return (tmpType == long.class || tmpType == double.class || tmpType == boolean.class || tmpType == byte.class || tmpType == int.class);
         }
 
         public BytecodeExpression initialValueExpression()

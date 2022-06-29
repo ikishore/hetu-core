@@ -18,6 +18,7 @@ import com.google.common.util.concurrent.ListenableFuture;
 import com.google.common.util.concurrent.SettableFuture;
 import io.airlift.units.Duration;
 import io.prestosql.spi.Page;
+import io.prestosql.spi.snapshot.RestorableConfig;
 import io.prestosql.testing.assertions.Assert;
 import org.testng.annotations.AfterClass;
 import org.testng.annotations.BeforeClass;
@@ -55,6 +56,7 @@ public class TestOperatorAssertion
         Assert.assertEquals(pages, ImmutableList.of());
     }
 
+    @RestorableConfig(unsupported = true)
     private class BlockedOperator
             implements Operator
     {
@@ -97,9 +99,9 @@ public class TestOperatorAssertion
         public void finish()
         {
             if (this.isBlocked == NOT_BLOCKED) {
-                SettableFuture<?> isBlocked = SettableFuture.create();
-                this.isBlocked = isBlocked;
-                executor.schedule(() -> isBlocked.set(null), unblockAfter.toMillis(), TimeUnit.MILLISECONDS);
+                SettableFuture<?> isBlockedFuture = SettableFuture.create();
+                this.isBlocked = isBlockedFuture;
+                executor.schedule(() -> isBlockedFuture.set(null), unblockAfter.toMillis(), TimeUnit.MILLISECONDS);
             }
         }
 
@@ -112,6 +114,12 @@ public class TestOperatorAssertion
 
         @Override
         public Page getOutput()
+        {
+            return null;
+        }
+
+        @Override
+        public Page pollMarker()
         {
             return null;
         }

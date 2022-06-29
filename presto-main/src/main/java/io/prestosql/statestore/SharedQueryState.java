@@ -1,5 +1,5 @@
 /*
- * Copyright (C) 2018-2020. Huawei Technologies Co., Ltd. All rights reserved.
+ * Copyright (C) 2018-2021. Huawei Technologies Co., Ltd. All rights reserved.
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
  * You may obtain a copy of the License at
@@ -26,6 +26,7 @@ import org.joda.time.DateTime;
 import org.joda.time.DateTimeZone;
 
 import java.util.Optional;
+import java.util.OptionalDouble;
 
 import static java.util.Objects.requireNonNull;
 
@@ -38,7 +39,6 @@ import static java.util.Objects.requireNonNull;
 public class SharedQueryState
 {
     private final BasicQueryInfo basicQueryInfo;
-    private final SessionRepresentation session;
     private final Optional<ErrorCode> errorCode;
     private final Duration totalCpuTime;
     private final DataSize totalMemoryReservation;
@@ -49,7 +49,6 @@ public class SharedQueryState
     @JsonCreator
     public SharedQueryState(
             @JsonProperty("basicQueryInfo") BasicQueryInfo basicQueryInfo,
-            @JsonProperty("session") SessionRepresentation session,
             @JsonProperty("errorCode") Optional<ErrorCode> errorCode,
             @JsonProperty("userMemoryReservation") DataSize userMemoryReservation,
             @JsonProperty("totalMemoryReservation") DataSize totalMemoryReservation,
@@ -58,7 +57,6 @@ public class SharedQueryState
             @JsonProperty("executionStartTime") Optional<DateTime> executionStartTime)
     {
         this.basicQueryInfo = basicQueryInfo;
-        this.session = session;
         this.errorCode = errorCode;
         this.userMemoryReservation = userMemoryReservation;
         this.totalMemoryReservation = totalMemoryReservation;
@@ -79,7 +77,6 @@ public class SharedQueryState
 
         return new SharedQueryState(
                 query.getBasicQueryInfo(),
-                query.getSession().toSessionRepresentation(),
                 query.getErrorCode(),
                 query.getUserMemoryReservation(),
                 query.getTotalMemoryReservation(),
@@ -97,7 +94,7 @@ public class SharedQueryState
     @JsonProperty
     public SessionRepresentation getSession()
     {
-        return session;
+        return basicQueryInfo.getSession();
     }
 
     @JsonProperty
@@ -134,5 +131,11 @@ public class SharedQueryState
     public Optional<DateTime> getExecutionStartTime()
     {
         return executionStartTime;
+    }
+
+    @JsonProperty
+    public OptionalDouble getQueryProgress()
+    {
+        return basicQueryInfo.getQueryStats().getProgressPercentage();
     }
 }

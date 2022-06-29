@@ -24,6 +24,7 @@ import io.prestosql.execution.StateMachine.StateChangeListener;
 import io.prestosql.execution.TaskId;
 import io.prestosql.execution.buffer.OutputBuffers.OutputBufferId;
 import io.prestosql.memory.context.LocalMemoryContext;
+import io.prestosql.operator.TaskContext;
 
 import javax.annotation.concurrent.GuardedBy;
 
@@ -48,7 +49,6 @@ public class LazyOutputBuffer
         implements OutputBuffer
 {
     private final StateMachine<BufferState> state;
-    private final String taskInstanceId;
     private final DataSize maxBufferSize;
     private final Supplier<LocalMemoryContext> systemMemoryContextSupplier;
     private final Executor executor;
@@ -64,13 +64,11 @@ public class LazyOutputBuffer
 
     public LazyOutputBuffer(
             TaskId taskId,
-            String taskInstanceId,
             Executor executor,
             DataSize maxBufferSize,
             Supplier<LocalMemoryContext> systemMemoryContextSupplier)
     {
         requireNonNull(taskId, "taskId is null");
-        this.taskInstanceId = requireNonNull(taskInstanceId, "taskInstanceId is null");
         this.executor = requireNonNull(executor, "executor is null");
         state = new StateMachine<>(taskId + "-buffer", executor, OPEN, TERMINAL_BUFFER_STATES);
         this.maxBufferSize = requireNonNull(maxBufferSize, "maxBufferSize is null");
@@ -129,13 +127,13 @@ public class LazyOutputBuffer
             //
             // NOTE: this code must be lock free to not hanging state machine updates
             //
-            BufferState state = this.state.get();
+            BufferState bufferState = this.state.get();
 
             return new OutputBufferInfo(
                     "UNINITIALIZED",
-                    state,
-                    state.canAddBuffers(),
-                    state.canAddPages(),
+                    bufferState,
+                    bufferState.canAddBuffers(),
+                    bufferState.canAddPages(),
                     0,
                     0,
                     0,
@@ -148,8 +146,8 @@ public class LazyOutputBuffer
     @Override
     public void setOutputBuffers(OutputBuffers newOutputBuffers)
     {
-        Set<OutputBufferId> abortedBuffers = ImmutableSet.of();
-        List<PendingRead> pendingReads = ImmutableList.of();
+        Set<OutputBufferId> abortedBuffersIds = ImmutableSet.of();
+        List<PendingRead> bufferPendingReads = ImmutableList.of();
         OutputBuffer outputBuffer;
         synchronized (this) {
             if (delegate == null) {
@@ -159,20 +157,20 @@ public class LazyOutputBuffer
                 }
                 switch (newOutputBuffers.getType()) {
                     case PARTITIONED:
-                        delegate = new PartitionedOutputBuffer(taskInstanceId, state, newOutputBuffers, maxBufferSize, systemMemoryContextSupplier, executor);
+                        delegate = new PartitionedOutputBuffer(state, newOutputBuffers, maxBufferSize, systemMemoryContextSupplier, executor);
                         break;
                     case BROADCAST:
-                        delegate = new BroadcastOutputBuffer(taskInstanceId, state, maxBufferSize, systemMemoryContextSupplier, executor);
+                        delegate = new BroadcastOutputBuffer(state, maxBufferSize, systemMemoryContextSupplier, executor);
                         break;
                     case ARBITRARY:
-                        delegate = new ArbitraryOutputBuffer(taskInstanceId, state, maxBufferSize, systemMemoryContextSupplier, executor);
+                        delegate = new ArbitraryOutputBuffer(state, maxBufferSize, systemMemoryContextSupplier, executor);
                         break;
                 }
 
                 // process pending aborts and reads outside of synchronized lock
-                abortedBuffers = ImmutableSet.copyOf(this.abortedBuffers);
+                abortedBuffersIds = ImmutableSet.copyOf(this.abortedBuffers);
                 this.abortedBuffers.clear();
-                pendingReads = ImmutableList.copyOf(this.pendingReads);
+                bufferPendingReads = ImmutableList.copyOf(this.pendingReads);
                 this.pendingReads.clear();
             }
             outputBuffer = delegate;
@@ -181,8 +179,8 @@ public class LazyOutputBuffer
         outputBuffer.setOutputBuffers(newOutputBuffers);
 
         // process pending aborts and reads outside of synchronized lock
-        abortedBuffers.forEach(outputBuffer::abort);
-        for (PendingRead pendingRead : pendingReads) {
+        abortedBuffersIds.forEach(outputBuffer::abort);
+        for (PendingRead pendingRead : bufferPendingReads) {
             pendingRead.process(outputBuffer);
         }
     }
@@ -194,7 +192,7 @@ public class LazyOutputBuffer
         synchronized (this) {
             if (delegate == null) {
                 if (state.get() == FINISHED) {
-                    return immediateFuture(emptyResults(taskInstanceId, 0, true));
+                    return immediateFuture(emptyResults(0, true));
                 }
 
                 PendingRead pendingRead = new PendingRead(bufferId, token, maxSize);
@@ -245,25 +243,25 @@ public class LazyOutputBuffer
     }
 
     @Override
-    public void enqueue(List<SerializedPage> pages)
+    public void enqueue(List<SerializedPage> pages, String origin)
     {
         OutputBuffer outputBuffer;
         synchronized (this) {
             checkState(delegate != null, "Buffer has not been initialized");
             outputBuffer = delegate;
         }
-        outputBuffer.enqueue(pages);
+        outputBuffer.enqueue(pages, origin);
     }
 
     @Override
-    public void enqueue(int partition, List<SerializedPage> pages)
+    public void enqueue(int partition, List<SerializedPage> pages, String origin)
     {
         OutputBuffer outputBuffer;
         synchronized (this) {
             checkState(delegate != null, "Buffer has not been initialized");
             outputBuffer = delegate;
         }
-        outputBuffer.enqueue(partition, pages);
+        outputBuffer.enqueue(partition, pages, origin);
     }
 
     @Override
@@ -281,7 +279,7 @@ public class LazyOutputBuffer
     public void destroy()
     {
         OutputBuffer outputBuffer;
-        List<PendingRead> pendingReads = ImmutableList.of();
+        List<PendingRead> bufferPendingReads = ImmutableList.of();
         synchronized (this) {
             if (delegate == null) {
                 // ignore destroy if the buffer already in a terminal state.
@@ -289,7 +287,7 @@ public class LazyOutputBuffer
                     return;
                 }
 
-                pendingReads = ImmutableList.copyOf(this.pendingReads);
+                bufferPendingReads = ImmutableList.copyOf(this.pendingReads);
                 this.pendingReads.clear();
             }
             outputBuffer = delegate;
@@ -297,8 +295,8 @@ public class LazyOutputBuffer
 
         // if there is no output buffer, free the pending reads
         if (outputBuffer == null) {
-            for (PendingRead pendingRead : pendingReads) {
-                pendingRead.getFutureResult().set(emptyResults(taskInstanceId, 0, true));
+            for (PendingRead pendingRead : bufferPendingReads) {
+                pendingRead.getFutureResult().set(emptyResults(0, true));
             }
             return;
         }
@@ -371,5 +369,38 @@ public class LazyOutputBuffer
                 futureResult.setException(e);
             }
         }
+    }
+
+    @Override
+    public void setTaskContext(TaskContext taskContext)
+    {
+        OutputBuffer outputBuffer;
+        synchronized (this) {
+            checkState(delegate != null, "delegate is null");
+            outputBuffer = delegate;
+        }
+        outputBuffer.setTaskContext(taskContext);
+    }
+
+    @Override
+    public void setNoMoreInputChannels()
+    {
+        OutputBuffer outputBuffer;
+        synchronized (this) {
+            checkState(delegate != null, "delegate is null");
+            outputBuffer = delegate;
+        }
+        outputBuffer.setNoMoreInputChannels();
+    }
+
+    @Override
+    public void addInputChannel(String inputId)
+    {
+        OutputBuffer outputBuffer;
+        synchronized (this) {
+            checkState(delegate != null, "delegate is null");
+            outputBuffer = delegate;
+        }
+        outputBuffer.addInputChannel(inputId);
     }
 }

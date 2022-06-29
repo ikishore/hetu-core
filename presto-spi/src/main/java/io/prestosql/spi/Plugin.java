@@ -18,10 +18,12 @@ import io.prestosql.spi.connector.ConnectorFactory;
 import io.prestosql.spi.cube.CubeProvider;
 import io.prestosql.spi.eventlistener.EventListenerFactory;
 import io.prestosql.spi.filesystem.HetuFileSystemClientFactory;
+import io.prestosql.spi.function.FunctionNamespaceManagerFactory;
 import io.prestosql.spi.heuristicindex.IndexFactory;
 import io.prestosql.spi.metastore.HetuMetaStoreFactory;
 import io.prestosql.spi.queryeditorui.ConnectorWithProperties;
 import io.prestosql.spi.resourcegroups.ResourceGroupConfigurationManagerFactory;
+import io.prestosql.spi.security.GroupProviderFactory;
 import io.prestosql.spi.security.PasswordAuthenticatorFactory;
 import io.prestosql.spi.security.SystemAccessControlFactory;
 import io.prestosql.spi.seedstore.SeedStoreFactory;
@@ -71,6 +73,11 @@ public interface Plugin
     }
 
     default Iterable<SystemAccessControlFactory> getSystemAccessControlFactories()
+    {
+        return emptyList();
+    }
+
+    default Iterable<GroupProviderFactory> getGroupProviderFactories()
     {
         return emptyList();
     }
@@ -146,4 +153,9 @@ public interface Plugin
 
     default void setFunctionRunningThreadPoolSize(int size)
     {}
+
+    default Iterable<FunctionNamespaceManagerFactory> getFunctionNamespaceManagerFactories()
+    {
+        return emptyList();
+    }
 }

@@ -48,6 +48,7 @@ import java.util.Optional;
 import java.util.Set;
 import java.util.stream.IntStream;
 
+import static com.google.common.collect.ImmutableList.toImmutableList;
 import static com.google.common.collect.Iterables.getOnlyElement;
 import static com.google.common.collect.Iterables.transform;
 import static io.prestosql.connector.informationschema.InformationSchemaMetadata.INFORMATION_SCHEMA;
@@ -2551,7 +2552,7 @@ public abstract class AbstractTestQueries
     {
         MaterializedResult result = computeActual("SHOW FUNCTIONS");
         ImmutableMultimap<String, MaterializedRow> functions = Multimaps.index(result.getMaterializedRows(), input -> {
-            assertEquals(input.getFieldCount(), 6);
+            assertEquals(input.getFieldCount(), 8);
             return (String) input.getField(0);
         });
 
@@ -2593,6 +2594,41 @@ public abstract class AbstractTestQueries
         assertEquals(functions.get("split_part").asList().get(0).getField(3), "scalar");
 
         assertFalse(functions.containsKey("like"), "Expected function names " + functions + " not to contain 'like'");
+    }
+
+    @Test
+    public void testShowFunctionsLike()
+    {
+        // the precondition for this test is that we have built in functions named "var_pop", "var_samp" and "variance"
+        // Match function names with prefix var
+        MaterializedResult functionsLike = computeActual("SHOW FUNCTIONS LIKE 'var%'");
+        List<String> functionNamesLike = functionsLike.getMaterializedRows().stream()
+                .map(MaterializedRow::getFields)
+                .map(list -> list.get(0))
+                .map(String.class::cast)
+                .distinct()
+                .collect(toImmutableList());
+        assertEquals(functionNamesLike, ImmutableList.of("var_pop", "var_samp", "variance"));
+
+        // Match both "var_" and "variance" because '_' is treated as a wildcard, not a literal
+        MaterializedResult functionsLikeWithoutEscape = computeActual("SHOW FUNCTIONS LIKE 'var_%'");
+        List<String> functionNamesLikeWithoutEscape = functionsLikeWithoutEscape.getMaterializedRows().stream()
+                .map(MaterializedRow::getFields)
+                .map(list -> list.get(0))
+                .map(String.class::cast)
+                .distinct()
+                .collect(toImmutableList());
+        assertEquals(functionNamesLikeWithoutEscape, ImmutableList.of("var_pop", "var_samp", "variance"));
+
+        // Match "var_" but not "variance" because '_' is now escaped
+        MaterializedResult functionsLikeWithEscape = computeActual("SHOW FUNCTIONS LIKE 'var$_%' ESCAPE '$'");
+        List<String> functionNamesLikeWithEscape = functionsLikeWithEscape.getMaterializedRows().stream()
+                .map(MaterializedRow::getFields)
+                .map(list -> list.get(0))
+                .map(String.class::cast)
+                .distinct()
+                .collect(toImmutableList());
+        assertEquals(functionNamesLikeWithEscape, ImmutableList.of("var_pop", "var_samp"));
     }
 
     @Test
@@ -2839,6 +2875,11 @@ public abstract class AbstractTestQueries
     @Test
     public void testChainedUnionsWithOrder()
     {
+        Session session1 = Session.builder(getSession())
+                .setSystemProperty("spill_non_blocking_orderby", "true")
+                .build();
+        assertQueryOrdered(session1,
+                "SELECT orderkey FROM orders UNION (SELECT custkey FROM orders UNION SELECT linenumber FROM lineitem) UNION ALL SELECT orderkey FROM lineitem ORDER BY orderkey");
         assertQueryOrdered(
                 "SELECT orderkey FROM orders UNION (SELECT custkey FROM orders UNION SELECT linenumber FROM lineitem) UNION ALL SELECT orderkey FROM lineitem ORDER BY orderkey");
     }
@@ -3266,11 +3307,11 @@ public abstract class AbstractTestQueries
                         "GROUP BY o1.orderkey ORDER BY o1.orderkey LIMIT 5",
                 joinType,
                 condition);
-        List<QueryTemplate.Parameter> conditions = condition.of(
+        List<QueryTemplate.Parameter> conditions = condition.ofStringList(
                 "EXISTS(SELECT avg(orderkey) FROM orders)",
                 "(SELECT avg(orderkey) FROM orders) > 3");
         for (QueryTemplate.Parameter actualCondition : conditions) {
-            for (QueryTemplate.Parameter actualJoinType : joinType.of("", "LEFT", "RIGHT")) {
+            for (QueryTemplate.Parameter actualJoinType : joinType.ofStringList("", "LEFT", "RIGHT")) {
                 assertQuery(queryTemplate.replace(actualJoinType, actualCondition));
             }
             assertQuery(
@@ -4877,20 +4918,20 @@ public abstract class AbstractTestQueries
         //the %subquery% is wrapped in a SELECT so that H2 does not blow up on the VALUES subquery
         return queryTemplate("SELECT %value% %operator% %quantifier% (SELECT * FROM (%subquery%))")
                 .replaceAll(
-                        parameter("subquery").of(
+                        parameter("subquery").ofStringList(
                                 "SELECT 1 WHERE false",
                                 "SELECT CAST(NULL AS INTEGER)",
                                 "VALUES (1), (NULL)"),
-                        parameter("quantifier").of("ALL", "ANY"),
-                        parameter("value").of("1", "NULL"),
-                        parameter("operator").of("=", "!=", "<", ">", "<=", ">="))
+                        parameter("quantifier").ofStringList("ALL", "ANY"),
+                        parameter("value").ofStringList("1", "NULL"),
+                        parameter("operator").ofStringList("=", "!=", "<", ">", "<=", ">="))
                 .collect(toDataProvider());
     }
 
     @Test
     public void testPreparedStatementWithSubqueries()
     {
-        List<QueryTemplate.Parameter> leftValues = parameter("left").of(
+        List<QueryTemplate.Parameter> leftValues = parameter("left").ofStringList(
                 "", "1 = ",
                 "EXISTS",
                 "1 IN",
@@ -4946,7 +4987,6 @@ public abstract class AbstractTestQueries
     public void testDescribeOutputNonSelect()
     {
         assertDescribeOutputRowCount("CREATE TABLE foo AS SELECT * FROM nation");
-        assertDescribeOutputRowCount("DELETE FROM orders");
 
         assertDescribeOutputEmpty("CALL foo()");
         assertDescribeOutputEmpty("SET SESSION optimize_hash_generation=false");
@@ -5033,8 +5073,8 @@ public abstract class AbstractTestQueries
     @Test
     public void testSubqueriesWithDisjunction()
     {
-        List<QueryTemplate.Parameter> projections = parameter("projection").of("count(*)", "*", "%condition%");
-        List<QueryTemplate.Parameter> conditions = parameter("condition").of(
+        List<QueryTemplate.Parameter> projections = parameter("projection").ofStringList("count(*)", "*", "%condition%");
+        List<QueryTemplate.Parameter> conditions = parameter("condition").ofStringList(
                 "nationkey IN (SELECT 1) OR TRUE",
                 "EXISTS(SELECT 1) OR TRUE");
 

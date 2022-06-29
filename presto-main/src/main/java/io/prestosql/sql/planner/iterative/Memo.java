@@ -115,25 +115,26 @@ public class Memo
     {
         PlanNode old = getGroup(group).membership;
 
-        /*checkArgument(new HashSet<>(old.getOutputSymbols()).equals(new HashSet<>(node.getOutputSymbols())),
+        checkArgument(new HashSet<>(old.getOutputSymbols()).equals(new HashSet<>(node.getOutputSymbols())),
                 "%s: transformed expression doesn't produce same outputs: %s vs %s",
                 reason,
                 old.getOutputSymbols(),
-                node.getOutputSymbols());*/
+                node.getOutputSymbols());
 
-        if (node instanceof GroupReference) {
-            node = getNode(((GroupReference) node).getGroupId());
+        PlanNode tmpNode = node;
+        if (tmpNode instanceof GroupReference) {
+            tmpNode = getNode(((GroupReference) tmpNode).getGroupId());
         }
         else {
-            node = insertChildrenAndRewrite(node);
+            tmpNode = insertChildrenAndRewrite(tmpNode);
         }
 
-        incrementReferenceCounts(node, group);
-        getGroup(group).membership = node;
+        incrementReferenceCounts(tmpNode, group);
+        getGroup(group).membership = tmpNode;
         decrementReferenceCounts(old, group);
         evictStatisticsAndCost(group);
 
-        return node;
+        return tmpNode;
     }
 
     private void evictStatisticsAndCost(int group)

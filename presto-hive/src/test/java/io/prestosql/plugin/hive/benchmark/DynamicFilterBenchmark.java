@@ -1,5 +1,5 @@
 /*
- * Copyright (C) 2018-2020. Huawei Technologies Co., Ltd. All rights reserved.
+ * Copyright (C) 2018-2021. Huawei Technologies Co., Ltd. All rights reserved.
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
  * You may obtain a copy of the License at
@@ -14,6 +14,7 @@
  */
 package io.prestosql.plugin.hive.benchmark;
 
+import com.google.common.collect.ImmutableList;
 import io.prestosql.plugin.hive.HiveColumnHandle;
 import io.prestosql.plugin.hive.HivePageSource;
 import io.prestosql.plugin.hive.HivePartitionKey;
@@ -116,22 +117,24 @@ public class DynamicFilterBenchmark
             return partitions;
         }
 
-        public Map<Integer, ColumnHandle> getEligibleColumns()
+        public List<Map<Integer, ColumnHandle>> getEligibleColumns()
         {
-            return eligibleColumns;
+            return ImmutableList.of(eligibleColumns);
         }
     }
 
     @Benchmark
     public void testFilterRows(BenchmarkData data)
     {
-        Page filteredPage = HivePageSource.filter(data.getDynamicFilters(), data.getPage(), data.getEligibleColumns(), new Type[] {BIGINT, BIGINT});
+        List<Map<ColumnHandle, DynamicFilter>> dynamicFilters = new ArrayList<>();
+        dynamicFilters.add(data.getDynamicFilters());
+        Page filteredPage = HivePageSource.filter(dynamicFilters, data.getPage(), data.getEligibleColumns(), new Type[] {BIGINT, BIGINT});
     }
 
     @Benchmark
     public void testIsPartitionFiltered(BenchmarkData data)
     {
-        isPartitionFiltered(data.getPartitions(), new HashSet(data.getDynamicFilters().values()), null);
+        isPartitionFiltered(data.getPartitions(), ImmutableList.of(new HashSet<>(data.getDynamicFilters().values())), null);
     }
 
     public static void main(String[] args)

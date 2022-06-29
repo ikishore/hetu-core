@@ -127,12 +127,6 @@ public class HiveSplitWrapper
                 .build();
     }
 
-    @Override
-    public String toString()
-    {
-        return "HiveSplitWrapper " + bucketNumber + " " + splits.size();
-    }
-
     public static HiveSplitWrapper wrap(HiveSplit hiveSplit)
     {
         return new HiveSplitWrapper(ImmutableList.of(hiveSplit), hiveSplit.getBucketNumber());

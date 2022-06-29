@@ -36,6 +36,7 @@ public class InternalNode
     private final URI internalUri;
     private final NodeVersion nodeVersion;
     private final boolean coordinator;
+    private final boolean worker;
 
     @JsonCreator
     public InternalNode(
@@ -44,11 +45,28 @@ public class InternalNode
             @JsonProperty("nodeVersion") NodeVersion nodeVersion,
             @JsonProperty("coordinator") boolean coordinator)
     {
-        nodeIdentifier = emptyToNull(nullToEmpty(nodeIdentifier).trim());
-        this.nodeIdentifier = requireNonNull(nodeIdentifier, "nodeIdentifier is null or empty");
+        String trimNodeIdentifier = emptyToNull(nullToEmpty(nodeIdentifier).trim());
+        this.nodeIdentifier = requireNonNull(trimNodeIdentifier, "nodeIdentifier is null or empty");
         this.internalUri = requireNonNull(internalUri, "internalUri is null");
         this.nodeVersion = requireNonNull(nodeVersion, "nodeVersion is null");
         this.coordinator = coordinator;
+        this.worker = !coordinator;
+    }
+
+    @JsonCreator
+    public InternalNode(
+            @JsonProperty("nodeIdentifier") String nodeIdentifier,
+            @JsonProperty("internalUri") URI internalUri,
+            @JsonProperty("nodeVersion") NodeVersion nodeVersion,
+            @JsonProperty("coordinator") boolean coordinator,
+            @JsonProperty("worker") boolean worker)
+    {
+        String trimNodeIdentifier = emptyToNull(nullToEmpty(nodeIdentifier).trim());
+        this.nodeIdentifier = requireNonNull(trimNodeIdentifier, "nodeIdentifier is null or empty");
+        this.internalUri = requireNonNull(internalUri, "internalUri is null");
+        this.nodeVersion = requireNonNull(nodeVersion, "nodeVersion is null");
+        this.coordinator = coordinator;
+        this.worker = worker;
     }
 
     @Override
@@ -97,6 +115,13 @@ public class InternalNode
     public boolean isCoordinator()
     {
         return coordinator;
+    }
+
+    @Override
+    @JsonProperty
+    public boolean isWorker()
+    {
+        return worker;
     }
 
     @JsonProperty

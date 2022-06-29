@@ -13,19 +13,30 @@
  */
 package io.prestosql.operator.exchange;
 
+import com.google.common.collect.Sets;
 import com.google.common.util.concurrent.ListenableFuture;
 import com.google.common.util.concurrent.SettableFuture;
+import io.hetu.core.transport.execution.buffer.PagesSerde;
+import io.hetu.core.transport.execution.buffer.SerializedPage;
 import io.prestosql.operator.WorkProcessor;
 import io.prestosql.operator.WorkProcessor.ProcessState;
+import io.prestosql.snapshot.MultiInputSnapshotState;
 import io.prestosql.spi.Page;
+import io.prestosql.spi.snapshot.BlockEncodingSerdeProvider;
+import io.prestosql.spi.snapshot.MarkerPage;
+import org.apache.commons.lang3.tuple.Pair;
 
 import javax.annotation.concurrent.GuardedBy;
 import javax.annotation.concurrent.ThreadSafe;
+import javax.validation.constraints.NotNull;
 
 import java.util.ArrayList;
+import java.util.Collections;
+import java.util.LinkedList;
 import java.util.List;
-import java.util.concurrent.BlockingQueue;
-import java.util.concurrent.LinkedBlockingDeque;
+import java.util.Optional;
+import java.util.Queue;
+import java.util.Set;
 import java.util.concurrent.atomic.AtomicLong;
 import java.util.function.Consumer;
 
@@ -42,9 +53,15 @@ public class LocalExchangeSource
         NOT_EMPTY.set(null);
     }
 
+    // Snapshot: all local-sinks that send markers to this local-source
+    // Should include all sinks for local-exchange operator; but only 1 sink for local-merge, because of pass-through exchanger
+    private final Set<String> inputChannels = Sets.newConcurrentHashSet();
+
     private final Consumer<LocalExchangeSource> onFinish;
 
-    private final BlockingQueue<PageReference> buffer = new LinkedBlockingDeque<>();
+    private final Queue<PageReference> buffer = new LinkedList<>();
+    // originBuffer mirrors buffer, but keeps track of the origin of each page
+    private final Queue<Optional<String>> originBuffer = new LinkedList<>();
     private final AtomicLong bufferedBytes = new AtomicLong();
 
     private final Object lock = new Object();
@@ -55,9 +72,14 @@ public class LocalExchangeSource
     @GuardedBy("lock")
     private boolean finishing;
 
-    public LocalExchangeSource(Consumer<LocalExchangeSource> onFinish)
+    // Only set for local-merge, to record markers.
+    // Markers may not reach the local-merge operator because it may be blocked on other channels.
+    private final MultiInputSnapshotState snapshotState;
+
+    public LocalExchangeSource(Consumer<LocalExchangeSource> onFinish, MultiInputSnapshotState snapshotState)
     {
         this.onFinish = requireNonNull(onFinish, "onFinish is null");
+        this.snapshotState = snapshotState;
     }
 
     public LocalExchangeBufferInfo getBufferInfo()
@@ -67,24 +89,61 @@ public class LocalExchangeSource
         return new LocalExchangeBufferInfo(bufferedBytes.get(), buffer.size());
     }
 
-    void addPage(PageReference pageReference)
+    void addInputChannel(String inputChannel)
+    {
+        inputChannels.add(inputChannel);
+    }
+
+    Set<String> getAllInputChannels()
+    {
+        return Collections.unmodifiableSet(inputChannels);
+    }
+
+    void addPage(PageReference pageReference, String origin)
     {
         checkNotHoldsLock();
 
         boolean added = false;
-        SettableFuture<?> notEmptyFuture;
+        SettableFuture<?> notEmptySettableFuture;
         synchronized (lock) {
             // ignore pages after finish
             if (!finishing) {
+                if (snapshotState != null) {
+                    // For local-merge
+                    Page page;
+                    synchronized (snapshotState) {
+                        // This may look suspicious, in that if there are "pending pages" in the snapshot state, then
+                        // a) those pages were associated with specific input channels (exchange source/sink) when the state
+                        // was captured, but now they would be returned to any channel asking for the next page, and
+                        // b) when the pending page is returned, the current page (in pageReference) is discarded and lost.
+                        // But the above never happens because "merge" operators are always preceded by OrderByOperators,
+                        // which only send data pages at the end, *after* all markers. That means when snapshot is taken,
+                        // no data page has been received, so when the snapshot is restored, there won't be any pending pages.
+                        page = snapshotState.processPage(() -> Pair.of(pageReference.peekPage(), origin)).orElse(null);
+                    }
+                    //if new input page is marker, we don't add it to buffer, it will be obtained through MultiInputSnapshotState's getPendingMarker()
+                    if (page instanceof MarkerPage || page == null) {
+                        pageReference.removePage();
+                        // whenever local exchange source sees a marker page, it's going to check whether operator after local merge is blocked by it.
+                        // if it is, this local exchange source will unblock in order for next operator to ask for output to pass down the marker.
+                        if (!this.notEmptyFuture.isDone()) {
+                            notEmptySettableFuture = this.notEmptyFuture;
+                            this.notEmptyFuture = NOT_EMPTY;
+                            notEmptySettableFuture.set(null);
+                        }
+                        return;
+                    }
+                }
                 // buffered bytes must be updated before adding to the buffer to assure
                 // the count does not go negative
                 bufferedBytes.addAndGet(pageReference.getRetainedSizeInBytes());
                 buffer.add(pageReference);
+                originBuffer.add(Optional.ofNullable(origin));
                 added = true;
             }
 
             // we just added a page (or we are finishing) so we are not empty
-            notEmptyFuture = this.notEmptyFuture;
+            notEmptySettableFuture = this.notEmptyFuture;
             this.notEmptyFuture = NOT_EMPTY;
         }
 
@@ -94,41 +153,81 @@ public class LocalExchangeSource
         }
 
         // notify readers outside of lock since this may result in a callback
-        notEmptyFuture.set(null);
+        notEmptySettableFuture.set(null);
     }
 
     public WorkProcessor<Page> pages()
     {
-        return WorkProcessor.create(() -> {
-            Page page = removePage();
-            if (page == null) {
-                if (isFinished()) {
-                    return ProcessState.finished();
-                }
+        return WorkProcessor.create(
+                new WorkProcessor.Process<Page>()
+                {
+                    @Override
+                    public ProcessState<Page> process()
+                    {
+                        Pair<Page, String> pair = removePage();
+                        // all work has already been done with origin, so the right element can be ignored
+                        Page page = pair.getLeft();
 
-                ListenableFuture<?> blocked = waitForReading();
-                if (!blocked.isDone()) {
-                    return ProcessState.blocked(blocked);
-                }
+                        if (page == null) {
+                            if (isFinished()) {
+                                return ProcessState.finished();
+                            }
 
-                return ProcessState.yield();
-            }
+                            ListenableFuture<?> blocked = waitForReading();
+                            if (!blocked.isDone()) {
+                                return ProcessState.blocked(blocked);
+                            }
 
-            return ProcessState.ofResult(page);
-        });
+                            return ProcessState.yield();
+                        }
+
+                        return ProcessState.ofResult(page);
+                    }
+
+                    @Override
+                    public Object capture(BlockEncodingSerdeProvider serdeProvider)
+                    {
+                        return 0;
+                    }
+
+                    @Override
+                    public void restore(Object state, BlockEncodingSerdeProvider serdeProvider)
+                    {
+                    }
+
+                    @Override
+                    public Object captureResult(@NotNull Page result, BlockEncodingSerdeProvider serdeProvider)
+                    {
+                        SerializedPage serializedPage = ((PagesSerde) serdeProvider).serialize(result);
+                        return serializedPage.capture(serdeProvider);
+                    }
+
+                    @Override
+                    public Page restoreResult(Object resultState, BlockEncodingSerdeProvider serdeProvider)
+                    {
+                        checkState(resultState != null);
+                        SerializedPage serializedPage = SerializedPage.restoreSerializedPage(resultState);
+                        return ((PagesSerde) serdeProvider).deserialize(serializedPage);
+                    }
+                });
     }
 
-    public Page removePage()
+    public Pair<Page, String> removePage()
     {
         checkNotHoldsLock();
 
-        // NOTE: there is no need to acquire a lock here. The buffer is concurrent
-        // and buffered bytes is not expected to be consistent with the buffer (only
-        // best effort).
-        PageReference pageReference = buffer.poll();
-        if (pageReference == null) {
-            return null;
+        PageReference pageReference;
+        Optional<String> origin;
+        // NOTE: need a lock to poll from the buffers. Lock not needed when updating buffered bytes,
+        // as it is not expected to be consistent with the buffer (only best effort).
+        synchronized (lock) {
+            pageReference = buffer.poll();
+            origin = originBuffer.poll();
         }
+        if (pageReference == null) {
+            return Pair.of(null, null);
+        }
+        checkState(origin != null, "pageReference is not null, but origin is");
 
         // dereference the page outside of lock, since may trigger a callback
         Page page = pageReference.removePage();
@@ -136,7 +235,7 @@ public class LocalExchangeSource
 
         checkFinished();
 
-        return page;
+        return Pair.of(page, origin.orElse(null));
     }
 
     public ListenableFuture<?> waitForReading()
@@ -163,19 +262,19 @@ public class LocalExchangeSource
     {
         checkNotHoldsLock();
 
-        SettableFuture<?> notEmptyFuture;
+        SettableFuture<?> notEmptySettableFuture;
         synchronized (lock) {
             if (finishing) {
                 return;
             }
             finishing = true;
 
-            notEmptyFuture = this.notEmptyFuture;
+            notEmptySettableFuture = this.notEmptyFuture;
             this.notEmptyFuture = NOT_EMPTY;
         }
 
         // notify readers outside of lock since this may result in a callback
-        notEmptyFuture.set(null);
+        notEmptySettableFuture.set(null);
 
         checkFinished();
     }
@@ -184,15 +283,17 @@ public class LocalExchangeSource
     {
         checkNotHoldsLock();
 
-        List<PageReference> remainingPages = new ArrayList<>();
-        SettableFuture<?> notEmptyFuture;
+        List<PageReference> remainingPages;
+        SettableFuture<?> notEmptySettableFuture;
         synchronized (lock) {
             finishing = true;
 
-            buffer.drainTo(remainingPages);
+            remainingPages = new ArrayList<>(buffer);
+            buffer.clear();
+            originBuffer.clear();
             bufferedBytes.addAndGet(-remainingPages.stream().mapToLong(PageReference::getRetainedSizeInBytes).sum());
 
-            notEmptyFuture = this.notEmptyFuture;
+            notEmptySettableFuture = this.notEmptyFuture;
             this.notEmptyFuture = NOT_EMPTY;
         }
 
@@ -200,7 +301,7 @@ public class LocalExchangeSource
         remainingPages.forEach(PageReference::removePage);
 
         // notify readers outside of lock since this may result in a callback
-        notEmptyFuture.set(null);
+        notEmptySettableFuture.set(null);
 
         // this will always fire the finished event
         checkState(isFinished(), "Expected buffer to be finished");

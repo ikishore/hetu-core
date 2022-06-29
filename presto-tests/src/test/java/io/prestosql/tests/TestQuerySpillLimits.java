@@ -14,8 +14,8 @@
 package io.prestosql.tests;
 
 import com.google.common.collect.ImmutableMap;
-import com.google.common.io.Files;
 import io.airlift.units.DataSize;
+import io.hetu.core.filesystem.HetuFileSystemClientPlugin;
 import io.prestosql.Session;
 import io.prestosql.plugin.tpch.TpchConnectorFactory;
 import io.prestosql.spiller.NodeSpillConfig;
@@ -27,6 +27,8 @@ import org.testng.annotations.BeforeMethod;
 import org.testng.annotations.Test;
 
 import java.io.File;
+import java.io.IOException;
+import java.nio.file.Files;
 
 import static com.google.common.io.MoreFiles.deleteRecursively;
 import static com.google.common.io.RecursiveDeleteOption.ALLOW_INSECURE;
@@ -44,8 +46,9 @@ public class TestQuerySpillLimits
 
     @BeforeMethod
     public void setUp()
+            throws IOException
     {
-        this.spillPath = Files.createTempDir();
+        this.spillPath = Files.createTempDirectory(getClass().getSimpleName()).toFile();
     }
 
     @AfterMethod(alwaysRun = true)
@@ -73,19 +76,27 @@ public class TestQuerySpillLimits
 
     private LocalQueryRunner createLocalQueryRunner(NodeSpillConfig nodeSpillConfig)
     {
-        LocalQueryRunner queryRunner = new LocalQueryRunner(
-                SESSION,
-                new FeaturesConfig()
-                        .setSpillerSpillPaths(spillPath.getAbsolutePath())
-                        .setSpillEnabled(true),
-                nodeSpillConfig,
-                false,
-                true);
+        LocalQueryRunner queryRunner = null;
+        try {
+            String canonicalPath = spillPath.getCanonicalPath();
+            queryRunner = new LocalQueryRunner(
+                    SESSION,
+                    new FeaturesConfig()
+                            .setSpillerSpillPaths(canonicalPath)
+                            .setSpillEnabled(true),
+                    nodeSpillConfig,
+                    false,
+                    true);
+        }
+        catch (IOException e) {
+            throw new IllegalArgumentException(e);
+        }
 
         queryRunner.createCatalog(
                 SESSION.getCatalog().get(),
                 new TpchConnectorFactory(1),
                 ImmutableMap.of());
+        queryRunner.installPlugin(new HetuFileSystemClientPlugin());
 
         return queryRunner;
     }

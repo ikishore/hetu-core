@@ -1,5 +1,5 @@
 /*
- * Copyright (C) 2018-2020. Huawei Technologies Co., Ltd. All rights reserved.
+ * Copyright (C) 2018-2021. Huawei Technologies Co., Ltd. All rights reserved.
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
  * You may obtain a copy of the License at
@@ -81,7 +81,7 @@ public class TestQuery
         hCConf.setZkQuorum("zk1");
         hetuMetastore = new TestingHetuMetastore();
         hconn = new TestHBaseClientConnection(hCConf, hetuMetastore.getHetuMetastore());
-        hconn.getConn();
+        hconn.createConnection();
         session = new TestingConnectorSession("root");
         split =
                 new HBaseSplit(
@@ -280,7 +280,7 @@ public class TestQuery
                 .put(fieldToColumnName[4], new String(serializer.setObjectBytes(VARCHAR, expectedSlice)));
 
         HBaseRecordCursor hrc =
-                new HBaseRecordCursor(columnHandles, null, serializer, "rowkey", fieldToColumnName, "defaultValue");
+                new HBaseRecordCursor(columnHandles, null, serializer, fieldToColumnName, "rowkey", "defaultValue");
 
         assertEquals(flag, hrc.getBoolean(1));
         assertEquals(expectedDouble, hrc.getDouble(2));

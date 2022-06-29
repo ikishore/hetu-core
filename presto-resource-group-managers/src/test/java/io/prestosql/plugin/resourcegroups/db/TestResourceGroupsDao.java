@@ -58,6 +58,14 @@ public class TestResourceGroupsDao
     private static final JsonCodec<List<String>> LIST_STRING_CODEC = listJsonCodec(String.class);
     private static final JsonCodec<SelectorResourceEstimate> SELECTOR_RESOURCE_ESTIMATE_JSON_CODEC = jsonCodec(SelectorResourceEstimate.class);
 
+    private static final Pattern PING_USER = Pattern.compile("ping_user");
+    private static final Pattern ANY = Pattern.compile(".*");
+    private static final Pattern ADMIN_USER = Pattern.compile("admin_user");
+    private static final Pattern PING = Pattern.compile("ping.*");
+    private static final Pattern PING_SOURCE = Pattern.compile("ping_source");
+    private static final Pattern USER1 = Pattern.compile("user1");
+    private static final Pattern PIPELINE = Pattern.compile("pipeline");
+
     static H2ResourceGroupsDao setup(String prefix)
     {
         DbResourceGroupConfig config = new DbResourceGroupConfig().setConfigDbUrl("jdbc:h2:mem:test_" + prefix + System.nanoTime() + ThreadLocalRandom.current().nextLong());
@@ -78,20 +86,20 @@ public class TestResourceGroupsDao
     private static void testResourceGroupInsert(H2ResourceGroupsDao dao, Map<Long, ResourceGroupSpecBuilder> map)
     {
         // Hetu: add values for new parameters softReservedMemory and hardReservedConcurrency
-        dao.insertResourceGroup(1, "global", "100%", "10%", 100, 100, 100, 50, null, null, null, null, null, null, ENVIRONMENT);
-        dao.insertResourceGroup(2, "bi", "50%", "10%", 50, 50, 50, 50, null, null, null, null, null, 1L, ENVIRONMENT);
+        dao.insertResourceGroup(1, "global", "100%", "10%", 100, 100, 100, 50, null, null, null, null, null, "RECENT_QUERIES", null, ENVIRONMENT);
+        dao.insertResourceGroup(2, "bi", "50%", "10%", 50, 50, 50, 50, null, null, null, null, null, "RECENT_QUERIES", 1L, ENVIRONMENT);
         List<ResourceGroupSpecBuilder> records = dao.getResourceGroups(ENVIRONMENT);
         assertEquals(records.size(), 2);
-        map.put(1L, new ResourceGroupSpecBuilder(1, new ResourceGroupNameTemplate("global"), "100%", "10%", 100, Optional.of(100), 100, Optional.of(50), Optional.empty(), Optional.empty(), Optional.empty(), Optional.empty(), Optional.empty(), null));
-        map.put(2L, new ResourceGroupSpecBuilder(2, new ResourceGroupNameTemplate("bi"), "50%", "10%", 50, Optional.of(50), 50, Optional.of(50), Optional.empty(), Optional.empty(), Optional.empty(), Optional.empty(), Optional.empty(), Optional.of(1L)));
+        map.put(1L, new ResourceGroupSpecBuilder(1, new ResourceGroupNameTemplate("global"), "100%", "10%", 100, Optional.of(100), 100, Optional.of(50), Optional.empty(), Optional.empty(), Optional.empty(), Optional.empty(), Optional.empty(), Optional.of("RECENT_QUERIES"), null));
+        map.put(2L, new ResourceGroupSpecBuilder(2, new ResourceGroupNameTemplate("bi"), "50%", "10%", 50, Optional.of(50), 50, Optional.of(50), Optional.empty(), Optional.empty(), Optional.empty(), Optional.empty(), Optional.empty(), Optional.of("RECENT_QUERIES"), Optional.of(1L)));
         compareResourceGroups(map, records);
     }
 
     private static void testResourceGroupUpdate(H2ResourceGroupsDao dao, Map<Long, ResourceGroupSpecBuilder> map)
     {
         // Hetu: add values for new parameters softReservedMemory and hardReservedConcurrency
-        dao.updateResourceGroup(2, "bi", "40%", "10%", 40, 30, 50, 50, null, null, true, null, null, 1L, ENVIRONMENT);
-        ResourceGroupSpecBuilder updated = new ResourceGroupSpecBuilder(2, new ResourceGroupNameTemplate("bi"), "40%", "10%", 40, Optional.of(30), 50, Optional.of(50), Optional.empty(), Optional.empty(), Optional.of(true), Optional.empty(), Optional.empty(), Optional.of(1L));
+        dao.updateResourceGroup(2, "bi", "40%", "10%", 40, 30, 50, 50, null, null, true, null, null, "RECENT_QUERIES", 1L, ENVIRONMENT);
+        ResourceGroupSpecBuilder updated = new ResourceGroupSpecBuilder(2, new ResourceGroupNameTemplate("bi"), "40%", "10%", 40, Optional.of(30), 50, Optional.of(50), Optional.empty(), Optional.empty(), Optional.of(true), Optional.empty(), Optional.empty(), Optional.of("RECENT_QUERIES"), Optional.of(1L));
         map.put(2L, updated);
         compareResourceGroups(map, dao.getResourceGroups(ENVIRONMENT));
     }
@@ -124,8 +132,8 @@ public class TestResourceGroupsDao
                 new SelectorRecord(
                         2L,
                         1L,
-                        Optional.of(Pattern.compile("ping_user")),
-                        Optional.of(Pattern.compile(".*")),
+                        Optional.of(PING_USER),
+                        Optional.of(ANY),
                         Optional.empty(),
                         Optional.empty(),
                         Optional.empty()));
@@ -133,8 +141,8 @@ public class TestResourceGroupsDao
                 new SelectorRecord(
                         3L,
                         2L,
-                        Optional.of(Pattern.compile("admin_user")),
-                        Optional.of(Pattern.compile(".*")),
+                        Optional.of(ADMIN_USER),
+                        Optional.of(ANY),
                         Optional.of(EXPLAIN.name()),
                         Optional.of(ImmutableList.of("tag1", "tag2")),
                         Optional.empty()));
@@ -148,10 +156,10 @@ public class TestResourceGroupsDao
                         Optional.empty(),
                         Optional.of(SELECTOR_RESOURCE_ESTIMATE)));
         // Hetu: add values for new parameters softReservedMemory and hardReservedConcurrency
-        dao.insertResourceGroup(1, "admin", "100%", "10%", 100, 100, 100, 50, null, null, null, null, null, null, ENVIRONMENT);
-        dao.insertResourceGroup(2, "ping_query", "50%", "10%", 50, 50, 50, 50, null, null, null, null, null, 1L, ENVIRONMENT);
-        dao.insertResourceGroup(3, "config", "50%", "10%", 50, 50, 50, 50, null, null, null, null, null, 1L, ENVIRONMENT);
-        dao.insertResourceGroup(4, "config", "50%", "10%", 50, 50, 50, 50, null, null, null, null, null, 1L, ENVIRONMENT);
+        dao.insertResourceGroup(1, "admin", "100%", "10%", 100, 100, 100, 50, null, null, null, null, null, "RECENT_QUERIES", null, ENVIRONMENT);
+        dao.insertResourceGroup(2, "ping_query", "50%", "10%", 50, 50, 50, 50, null, null, null, null, null, "RECENT_QUERIES", 1L, ENVIRONMENT);
+        dao.insertResourceGroup(3, "config", "50%", "10%", 50, 50, 50, 50, null, null, null, null, null, "RECENT_QUERIES", 1L, ENVIRONMENT);
+        dao.insertResourceGroup(4, "config", "50%", "10%", 50, 50, 50, 50, null, null, null, null, null, "RECENT_QUERIES", 1L, ENVIRONMENT);
 
         dao.insertSelector(2, 1, "ping_user", ".*", null, null, null);
         dao.insertSelector(3, 2, "admin_user", ".*", EXPLAIN.name(), LIST_STRING_CODEC.toJson(ImmutableList.of("tag1", "tag2")), null);
@@ -166,8 +174,8 @@ public class TestResourceGroupsDao
         SelectorRecord updated = new SelectorRecord(
                 2,
                 1L,
-                Optional.of(Pattern.compile("ping.*")),
-                Optional.of(Pattern.compile("ping_source")),
+                Optional.of(PING),
+                Optional.of(PING_SOURCE),
                 Optional.empty(),
                 Optional.of(ImmutableList.of("tag1")),
                 Optional.empty());
@@ -184,8 +192,8 @@ public class TestResourceGroupsDao
         updated = new SelectorRecord(
                 2,
                 2L,
-                Optional.of(Pattern.compile("ping.*")),
-                Optional.of(Pattern.compile("ping_source")),
+                Optional.of(PING),
+                Optional.of(PING_SOURCE),
                 Optional.of(EXPLAIN.name()),
                 Optional.of(ImmutableList.of("tag1", "tag2")),
                 Optional.empty());
@@ -221,8 +229,8 @@ public class TestResourceGroupsDao
         map.put(3L, new SelectorRecord(
                 3L,
                 3L,
-                Optional.of(Pattern.compile("user1")),
-                Optional.of(Pattern.compile("pipeline")),
+                Optional.of(USER1),
+                Optional.of(PIPELINE),
                 Optional.empty(),
                 Optional.empty(),
                 Optional.empty()));

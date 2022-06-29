@@ -1,5 +1,5 @@
 /*
- * Copyright (C) 2018-2020. Huawei Technologies Co., Ltd. All rights reserved.
+ * Copyright (C) 2018-2021. Huawei Technologies Co., Ltd. All rights reserved.
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
  * You may obtain a copy of the License at
@@ -56,11 +56,11 @@ public final class DataCenterTableHandle
      */
     public DataCenterTableHandle(String catalogName, String schemaName, String tableName, OptionalLong limit)
     {
-        this.catalogName = catalogName;
-        this.schemaName = requireNonNull(schemaName, "schemaName is null");
-        this.tableName = requireNonNull(tableName, "tableName is null");
-        this.limit = requireNonNull(limit, "limit is null");
-        this.pushDownSql = "";
+        this(catalogName,
+                requireNonNull(schemaName, "schemaName is null"),
+                requireNonNull(tableName, "tableName is null"),
+                requireNonNull(limit, "limit is null"),
+                "");
     }
 
     /**
@@ -125,6 +125,7 @@ public final class DataCenterTableHandle
         return new SchemaTableName(schemaName, tableName);
     }
 
+    @Override
     public String getSchemaPrefixedTableName()
     {
         return catalogName + SPLIT_DOT + schemaName + SPLIT_DOT + tableName;

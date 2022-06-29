@@ -1,5 +1,5 @@
 /*
- * Copyright (C) 2018-2020. Huawei Technologies Co., Ltd. All rights reserved.
+ * Copyright (C) 2018-2021. Huawei Technologies Co., Ltd. All rights reserved.
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
  * You may obtain a copy of the License at
@@ -261,8 +261,8 @@ class EchartPart extends React.Component{
             //heatMap data
             let heatMapData = this.state.heatMapChart;
             Object.keys(data.memoryData).map(key => {
-                let id = key.slice(0, key.indexOf(" "));
-                let name = key.slice(key.indexOf("[") + 1, key.indexOf("]"));
+                let id = data.memoryData[key].id;
+                let name = key;
                 let index = _.findIndex(heatMapData, {id: id});
                 let newDataPoint = Number((data.memoryData[key].systemCpuLoad * 100).toFixed(2));
                 if (index == -1) {
@@ -306,10 +306,16 @@ class EchartPart extends React.Component{
             //heatMap memory data
             let heatMapMemoryData = this.state.heatMapMemoryChart;
             Object.keys(data.memoryData).map(key => {
-                let id = key.slice(0, key.indexOf(" "));
-                let name = key.slice(key.indexOf("[") + 1, key.indexOf("]"));
+                let id = data.memoryData[key].id;
+                let name = key;
                 let index = _.findIndex(heatMapMemoryData, {id: id});
-                let newDataPoint = data.memoryData[key].pools.general.freeBytes + (data.memoryData[key].pools.reserved ? data.memoryData[key].pools.reserved.freeBytes : 0);
+                let newDataPoint = 0;
+                if (typeof (data.memoryData[key].pools.general) != "undefined"){
+                    newDataPoint += data.memoryData[key].pools.general.freeBytes;
+                    if (typeof (data.memoryData[key].pools.reserved) != "undefined"){
+                        newDataPoint += data.memoryData[key].pools.reserved.freeBytes;
+                    }
+                }
                 newDataPoint = Number(newDataPoint);
                 if (index == -1) {
                     let newData = {};

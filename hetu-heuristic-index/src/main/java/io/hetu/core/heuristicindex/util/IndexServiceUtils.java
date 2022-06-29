@@ -1,5 +1,5 @@
 /*
- * Copyright (C) 2018-2020. Huawei Technologies Co., Ltd. All rights reserved.
+ * Copyright (C) 2018-2021. Huawei Technologies Co., Ltd. All rights reserved.
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
  * You may obtain a copy of the License at
@@ -18,6 +18,7 @@ package io.hetu.core.heuristicindex.util;
 import io.airlift.slice.Slice;
 import io.hetu.core.common.util.SecurePathWhiteList;
 import io.prestosql.spi.filesystem.HetuFileSystemClient;
+import io.prestosql.spi.function.BuiltInFunctionHandle;
 import io.prestosql.spi.function.OperatorType;
 import io.prestosql.spi.function.Signature;
 import io.prestosql.spi.relation.CallExpression;
@@ -39,7 +40,6 @@ import java.util.Collection;
 import java.util.Date;
 import java.util.Optional;
 import java.util.Properties;
-import java.util.concurrent.atomic.AtomicReference;
 import java.util.function.Function;
 import java.util.stream.Collectors;
 
@@ -235,7 +235,6 @@ public class IndexServiceUtils
     public static void writeToHdfs(HetuFileSystemClient srcFs, HetuFileSystemClient targetFs, Path srcDir, Path tarPath)
             throws IOException
     {
-        AtomicReference<String> tarFileName = new AtomicReference<>();
         Collection<File> filesToArchive = srcFs
                 .list(srcDir)
                 .map(Path::toFile)
@@ -262,7 +261,14 @@ public class IndexServiceUtils
     {
         if (expression instanceof CallExpression) {
             CallExpression callExp = (CallExpression) expression;
-            Optional<OperatorType> operatorOptional = Signature.getOperatorType(((CallExpression) expression).getSignature().getName());
+            BuiltInFunctionHandle builtInFunctionHandle;
+            if (callExp.getFunctionHandle() instanceof BuiltInFunctionHandle) {
+                builtInFunctionHandle = (BuiltInFunctionHandle) callExp.getFunctionHandle();
+            }
+            else {
+                throw new UnsupportedOperationException("Unsupported function: " + callExp.getDisplayName());
+            }
+            Optional<OperatorType> operatorOptional = Signature.getOperatorType(builtInFunctionHandle.getSignature().getNameSuffix());
 
             Object value = extractValueFromRowExpression(callExp.getArguments().get(1));
 
@@ -312,6 +318,8 @@ public class IndexServiceUtils
                 return Serializer.BIG_DECIMAL;
             case "Date":
                 return Serializer.DATE;
+            default:
+                break;
         }
         throw new RuntimeException("Index is not supported for type: (" + type + ")");
     }

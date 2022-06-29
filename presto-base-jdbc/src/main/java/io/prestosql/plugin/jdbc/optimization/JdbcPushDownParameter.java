@@ -1,5 +1,5 @@
 /*
- * Copyright (C) 2018-2020. Huawei Technologies Co., Ltd. All rights reserved.
+ * Copyright (C) 2018-2021. Huawei Technologies Co., Ltd. All rights reserved.
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
  * You may obtain a copy of the License at
@@ -14,6 +14,8 @@
  */
 package io.prestosql.plugin.jdbc.optimization;
 
+import io.prestosql.spi.function.StandardFunctionResolution;
+
 /**
  * Push Down parameter module
  */
@@ -22,12 +24,14 @@ public class JdbcPushDownParameter
     private final boolean nameCaseInsensitive;
     private final JdbcPushDownModule pushDownModule;
     private final String identifierQuote;
+    private final StandardFunctionResolution functionResolution;
 
-    public JdbcPushDownParameter(String identifierQuote, boolean nameCaseInsensitive, JdbcPushDownModule pushDownModule)
+    public JdbcPushDownParameter(String identifierQuote, boolean nameCaseInsensitive, JdbcPushDownModule pushDownModule, StandardFunctionResolution functionResolution)
     {
         this.identifierQuote = identifierQuote;
         this.nameCaseInsensitive = nameCaseInsensitive;
         this.pushDownModule = pushDownModule;
+        this.functionResolution = functionResolution;
     }
 
     public String getIdentifierQuote()
@@ -43,5 +47,10 @@ public class JdbcPushDownParameter
     public JdbcPushDownModule getPushDownModuleParameter()
     {
         return pushDownModule;
+    }
+
+    public StandardFunctionResolution getFunctionResolution()
+    {
+        return this.functionResolution;
     }
 }

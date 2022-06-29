@@ -19,6 +19,7 @@ import io.airlift.units.Duration;
 import io.prestosql.spi.PrestoException;
 import io.prestosql.spi.memory.ClusterMemoryPoolManager;
 import io.prestosql.spi.memory.MemoryPoolId;
+import io.prestosql.spi.resourcegroups.KillPolicy;
 import io.prestosql.spi.resourcegroups.QueryType;
 import io.prestosql.spi.resourcegroups.ResourceGroup;
 import io.prestosql.spi.resourcegroups.ResourceGroupConfigurationManager;
@@ -31,6 +32,7 @@ import java.util.ArrayList;
 import java.util.HashMap;
 import java.util.LinkedList;
 import java.util.List;
+import java.util.Locale;
 import java.util.Map;
 import java.util.Optional;
 import java.util.Queue;
@@ -106,8 +108,9 @@ public abstract class AbstractResourceConfigurationManager
         return selectors.build();
     }
 
-    private void validateSelectors(List<ResourceGroupSpec> groups, SelectorSpec spec)
+    private void validateSelectors(List<ResourceGroupSpec> inputGroups, SelectorSpec spec)
     {
+        List<ResourceGroupSpec> groups = inputGroups;
         spec.getQueryType().ifPresent(this::validateQueryType);
         StringBuilder fullyQualifiedGroupName = new StringBuilder();
         for (ResourceGroupNameTemplate groupName : spec.getGroup().getSegments()) {
@@ -127,7 +130,7 @@ public abstract class AbstractResourceConfigurationManager
     private void validateQueryType(String queryType)
     {
         try {
-            QueryType.valueOf(queryType.toUpperCase());
+            QueryType.valueOf(queryType.toUpperCase(Locale.ROOT));
         }
         catch (IllegalArgumentException e) {
             throw new IllegalArgumentException(format("Selector specifies an invalid query type: %s", queryType));
@@ -236,6 +239,13 @@ public abstract class AbstractResourceConfigurationManager
             long rate = (long) Math.min(1000.0 * limit.toMillis() / (double) getCpuQuotaPeriod().get().toMillis(), Long.MAX_VALUE);
             rate = Math.max(1, rate);
             group.setCpuQuotaGenerationMillisPerSecond(rate);
+        }
+
+        if (match.getKillPolicy().isPresent()) {
+            group.setKillPolicy(match.getKillPolicy().get());
+        }
+        else {
+            group.setKillPolicy(KillPolicy.NO_KILL);
         }
     }
 }

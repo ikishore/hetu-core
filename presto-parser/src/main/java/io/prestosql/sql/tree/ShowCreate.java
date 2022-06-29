@@ -28,7 +28,8 @@ public class ShowCreate
     public enum Type
     {
         TABLE,
-        VIEW
+        VIEW,
+        CUBE,
     }
 
     private final Type type;

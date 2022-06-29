@@ -1,5 +1,5 @@
 /*
- * Copyright (C) 2018-2020. Huawei Technologies Co., Ltd. All rights reserved.
+ * Copyright (C) 2018-2021. Huawei Technologies Co., Ltd. All rights reserved.
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
  * You may obtain a copy of the License at
@@ -18,11 +18,15 @@ import com.google.common.cache.CacheLoader;
 import com.google.common.collect.ImmutableList;
 import com.google.common.collect.Sets;
 import io.airlift.log.Logger;
+import io.airlift.units.Duration;
 import io.prestosql.execution.SqlStageExecution;
 import io.prestosql.metadata.Split;
+import io.prestosql.spi.HetuConstant;
 import io.prestosql.spi.connector.ColumnHandle;
-import io.prestosql.spi.connector.CreateIndexMetadata;
+import io.prestosql.spi.function.BuiltInFunctionHandle;
+import io.prestosql.spi.function.FunctionHandle;
 import io.prestosql.spi.function.OperatorType;
+import io.prestosql.spi.function.Signature;
 import io.prestosql.spi.heuristicindex.IndexCacheKey;
 import io.prestosql.spi.heuristicindex.IndexClient;
 import io.prestosql.spi.heuristicindex.IndexFilter;
@@ -40,6 +44,7 @@ import io.prestosql.spi.relation.CallExpression;
 import io.prestosql.spi.relation.RowExpression;
 import io.prestosql.spi.relation.SpecialForm;
 import io.prestosql.spi.relation.VariableReferenceExpression;
+import io.prestosql.spi.service.PropertyService;
 import io.prestosql.split.SplitSource;
 import io.prestosql.sql.planner.PlanFragment;
 import io.prestosql.utils.RangeUtil;
@@ -57,7 +62,6 @@ import java.util.HashSet;
 import java.util.Iterator;
 import java.util.LinkedList;
 import java.util.List;
-import java.util.Locale;
 import java.util.Map;
 import java.util.Optional;
 import java.util.Queue;
@@ -87,24 +91,31 @@ public class SplitFiltering
 
     private static synchronized void initCache(IndexClient indexClient)
     {
-        if (indexCache == null) {
-            CacheLoader<IndexCacheKey, List<IndexMetadata>> cacheLoader = new IndexCacheLoader(indexClient);
-            indexCache = new IndexCache(cacheLoader, indexClient);
+        CacheLoader<IndexCacheKey, List<IndexMetadata>> cacheLoader = new IndexCacheLoader(indexClient);
+        indexCache = new IndexCache(cacheLoader, indexClient);
+    }
+
+    public static IndexCache getCache(IndexClient indexClient)
+    {
+        if (PropertyService.getBooleanProperty(HetuConstant.FILTER_ENABLED)) {
+            if (indexCache == null) {
+                initCache(indexClient);
+            }
+            return indexCache;
+        }
+        else {
+            throw new IllegalStateException(HetuConstant.HINDEX_CONFIG_ERROR_MSG);
         }
     }
 
     public static void preloadCache(IndexClient indexClient, List<String> preloadIndexNames)
             throws IOException
     {
-        if (indexCache == null) {
-            initCache(indexClient);
-        }
-
         List<IndexRecord> indexToPreload = new ArrayList<>(preloadIndexNames.size());
 
         if (preloadIndexNames.contains(PRELOAD_ALL_KEY)) {
             indexToPreload = indexClient.getAllIndexRecords();
-            LOG.info("Preloading all indices : " + indexToPreload.stream().map(r -> r.name).collect(Collectors.joining(",")));
+            LOG.info("Preloading all indices: " + indexToPreload.stream().map(r -> r.name).collect(Collectors.joining(",")));
         }
         else {
             for (String indexName : preloadIndexNames) {
@@ -119,9 +130,9 @@ public class SplitFiltering
         }
 
         for (IndexRecord record : indexToPreload) {
-            LOG.info("Preloading index for split filtering: " + record);
-            CreateIndexMetadata.Level indexLevel = CreateIndexMetadata.Level.valueOf(record.getProperty(CreateIndexMetadata.LEVEL_PROP_KEY).toUpperCase(Locale.ROOT));
-            indexCache.preloadIndex(record.qualifiedTable, String.join(",", record.columns), record.indexType, indexLevel);
+            LOG.info("Preloading index %s to cache...", record.name);
+            Duration timeElapsed = indexCache.loadIndexToCache(record);
+            LOG.info("Index %s was loaded to cache. (Time elapsed: %s)", record.name, timeElapsed.toString());
         }
     }
 
@@ -130,10 +141,6 @@ public class SplitFiltering
     {
         if (!expression.isPresent() || !tableName.isPresent()) {
             return nextSplits.getSplits();
-        }
-
-        if (indexCache == null) {
-            initCache(heuristicIndexerManager.getIndexClient());
         }
 
         List<Split> allSplits = nextSplits.getSplits();
@@ -150,18 +157,19 @@ public class SplitFiltering
         }
         Set<String> referencedColumns = new HashSet<>();
         getAllColumns(expression.get(), referencedColumns, assignments);
-        List<IndexRecord> forwardIndexRecords = new ArrayList<>();
-        List<IndexRecord> invertedIndexRecords = new ArrayList<>();
+        Map<String, IndexRecord> forwardIndexRecords = new HashMap<>();
+        Map<String, IndexRecord> invertedIndexRecords = new HashMap<>();
         for (IndexRecord indexRecord : indexRecords) {
             if (indexRecord.qualifiedTable.equalsIgnoreCase(fullQualifiedTableName)) {
                 List<String> columnsInIndex = Arrays.asList(indexRecord.columns);
                 for (String column : referencedColumns) {
                     if (columnsInIndex.contains(column)) {
+                        String indexRecordKey = indexRecord.qualifiedTable + "/" + column + "/" + indexRecord.indexType;
                         if (INVERTED_INDEX.contains(indexRecord.indexType.toUpperCase())) {
-                            forwardIndexRecords.add(indexRecord);
+                            forwardIndexRecords.put(indexRecordKey, indexRecord);
                         }
                         else {
-                            invertedIndexRecords.add(indexRecord);
+                            invertedIndexRecords.put(indexRecordKey, indexRecord);
                         }
                     }
                 }
@@ -172,15 +180,15 @@ public class SplitFiltering
             return allSplits;
         }
         else if (!forwardIndexRecords.isEmpty() && invertedIndexRecords.isEmpty()) {
-            splitsToReturn = filterUsingInvertedIndex(expression.get(), allSplits, fullQualifiedTableName, referencedColumns, heuristicIndexerManager);
+            splitsToReturn = filterUsingInvertedIndex(expression.get(), allSplits, fullQualifiedTableName, referencedColumns, forwardIndexRecords, heuristicIndexerManager);
         }
         else if (!invertedIndexRecords.isEmpty() && forwardIndexRecords.isEmpty()) {
-            splitsToReturn = filterUsingForwardIndex(expression.get(), allSplits, fullQualifiedTableName, referencedColumns, heuristicIndexerManager);
+            splitsToReturn = filterUsingForwardIndex(expression.get(), allSplits, fullQualifiedTableName, referencedColumns, invertedIndexRecords, heuristicIndexerManager);
         }
         else {
             // filter using both indexes and return the smallest set of splits.
-            List<Split> splitsToReturn1 = filterUsingInvertedIndex(expression.get(), allSplits, fullQualifiedTableName, referencedColumns, heuristicIndexerManager);
-            List<Split> splitsToReturn2 = filterUsingForwardIndex(expression.get(), allSplits, fullQualifiedTableName, referencedColumns, heuristicIndexerManager);
+            List<Split> splitsToReturn1 = filterUsingInvertedIndex(expression.get(), allSplits, fullQualifiedTableName, referencedColumns, forwardIndexRecords, heuristicIndexerManager);
+            List<Split> splitsToReturn2 = filterUsingForwardIndex(expression.get(), allSplits, fullQualifiedTableName, referencedColumns, invertedIndexRecords, heuristicIndexerManager);
             splitsToReturn = splitsToReturn1.size() < splitsToReturn2.size() ? splitsToReturn1 : splitsToReturn2;
         }
 
@@ -192,14 +200,14 @@ public class SplitFiltering
         return splitsToReturn;
     }
 
-    private static List<Split> filterUsingForwardIndex(RowExpression expression, List<Split> inputSplits, String fullQualifiedTableName, Set<String> referencedColumns, HeuristicIndexerManager indexerManager)
+    private static List<Split> filterUsingForwardIndex(RowExpression expression, List<Split> inputSplits, String fullQualifiedTableName, Set<String> referencedColumns, Map<String, IndexRecord> indexRecordKeyToRecordMap, HeuristicIndexerManager indexerManager)
     {
         return inputSplits.parallelStream()
                 .filter(split -> {
                     Map<String, List<IndexMetadata>> allIndices = new HashMap<>();
 
                     for (String col : referencedColumns) {
-                        List<IndexMetadata> splitIndices = indexCache.getIndices(fullQualifiedTableName, col, split);
+                        List<IndexMetadata> splitIndices = getCache(indexerManager.getIndexClient()).getIndices(fullQualifiedTableName, col, split, indexRecordKeyToRecordMap);
 
                         if (splitIndices == null || splitIndices.size() == 0) {
                             // no index found, keep split
@@ -237,7 +245,7 @@ public class SplitFiltering
                 .collect(Collectors.toList());
     }
 
-    private static List<Split> filterUsingInvertedIndex(RowExpression expression, List<Split> inputSplits, String fullQualifiedTableName, Set<String> referencedColumns, HeuristicIndexerManager indexerManager)
+    private static List<Split> filterUsingInvertedIndex(RowExpression expression, List<Split> inputSplits, String fullQualifiedTableName, Set<String> referencedColumns, Map<String, IndexRecord> indexRecordKeyToRecordMap, HeuristicIndexerManager indexerManager)
     {
         try {
             Map<String, Long> inputMaxLastUpdated = new HashMap<>();
@@ -270,8 +278,8 @@ public class SplitFiltering
                 List<IndexMetadata> indexMetadataList = new ArrayList<>();
 
                 for (String indexType : INVERTED_INDEX) {
-                    indexMetadataList.addAll(indexCache.getIndices(fullQualifiedTableName, column, indexType,
-                            partitionSplitMap.keySet(), Collections.max(inputMaxLastUpdated.values())));
+                    indexMetadataList.addAll(getCache(indexerManager.getIndexClient()).getIndices(fullQualifiedTableName, column, indexType,
+                            partitionSplitMap.keySet(), Collections.max(inputMaxLastUpdated.values()), indexRecordKeyToRecordMap));
                 }
 
                 // If any of the split contains data which is modified after the index was created, return without filtering
@@ -304,14 +312,22 @@ public class SplitFiltering
             for (Map.Entry<String, List<Split>> entry : partitionSplitMap.entrySet()) {
                 String partitionKey = entry.getKey();
 
-                if (!indexMaxLastUpdated.containsKey(partitionKey) // the partition is not indexed by its own partition's index
-                        && indexMaxLastUpdated.size() != 1 // or a table-level index)
-                        && !indexMaxLastUpdated.containsKey(TABLE_LEVEL_KEY)) {
+                // the partition is indexed by its own partition's index
+                boolean partitionHasOwnIndex = indexMaxLastUpdated.containsKey(partitionKey);
+                // the partition is covered by a table-level index
+                boolean partitionHasTableLevelIndex = indexMaxLastUpdated.size() == 1 && indexMaxLastUpdated.containsKey(TABLE_LEVEL_KEY);
+
+                if (!partitionHasOwnIndex && !partitionHasTableLevelIndex) {
                     filteredSplits.addAll(entry.getValue());
                 }
                 else {
-                    long indexLastModifiedTimeOfThisPartition = indexMaxLastUpdated.size() == 1 && indexMaxLastUpdated.containsKey(TABLE_LEVEL_KEY) ?
-                            indexMaxLastUpdated.get(TABLE_LEVEL_KEY) : indexMaxLastUpdated.get(partitionKey);
+                    long indexLastModifiedTimeOfThisPartition;
+                    if (partitionHasOwnIndex) {
+                        indexLastModifiedTimeOfThisPartition = indexMaxLastUpdated.get(partitionKey);
+                    }
+                    else {
+                        indexLastModifiedTimeOfThisPartition = indexMaxLastUpdated.get(TABLE_LEVEL_KEY);
+                    }
 
                     for (Split split : entry.getValue()) {
                         String filePathStr = new URI(split.getConnectorSplit().getFilePath()).getPath();
@@ -337,7 +353,7 @@ public class SplitFiltering
 
             return filteredSplits;
         }
-        catch (Exception e) {
+        catch (Throwable e) {
             LOG.debug("Exception occurred while filtering. Returning original splits", e);
             return inputSplits;
         }
@@ -426,11 +442,6 @@ public class SplitFiltering
                 return false;
             }
 
-            /* (!(table.getConnectorHandle().isFilterSupported()
-             *   && (isSupportedExpression(filterNode.getPredicate())
-             *       || (((TableScanNode) sourceNode).getPredicate().isPresent()
-             *           && isSupportedExpression(((TableScanNode) sourceNode).getPredicate().get())))))
-             */
             if (!table.getConnectorHandle().isFilterSupported()) {
                 return false;
             }
@@ -481,21 +492,24 @@ public class SplitFiltering
         }
         if (predicate instanceof CallExpression) {
             CallExpression call = (CallExpression) predicate;
-            if (call.getSignature().getName().equals("not")) {
-                return true;
-            }
-            try {
-                OperatorType operatorType = call.getSignature().unmangleOperator(call.getSignature().getName());
-                if (operatorType.isComparisonOperator() && operatorType != IS_DISTINCT_FROM) {
+            FunctionHandle builtInFunctionHandle = call.getFunctionHandle();
+            if (builtInFunctionHandle instanceof BuiltInFunctionHandle) {
+                Signature signature = ((BuiltInFunctionHandle) builtInFunctionHandle).getSignature();
+                if (signature.getName().getObjectName().equals("not")) {
                     return true;
                 }
-                return false;
-            }
-            catch (IllegalArgumentException e) {
-                return false;
+                try {
+                    OperatorType operatorType = Signature.unmangleOperator(signature.getName().getObjectName());
+                    if (operatorType.isComparisonOperator() && operatorType != IS_DISTINCT_FROM) {
+                        return true;
+                    }
+                    return false;
+                }
+                catch (IllegalArgumentException e) {
+                    return false;
+                }
             }
         }
-
         return false;
     }
 
@@ -594,7 +608,15 @@ public class SplitFiltering
         if (expression instanceof CallExpression) {
             CallExpression call = (CallExpression) expression;
             try {
-                OperatorType operatorType = call.getSignature().unmangleOperator(call.getSignature().getName());
+                FunctionHandle builtInFunctionHandle = call.getFunctionHandle();
+                Signature signature;
+                if (builtInFunctionHandle instanceof BuiltInFunctionHandle) {
+                    signature = ((BuiltInFunctionHandle) builtInFunctionHandle).getSignature();
+                }
+                else {
+                    return;
+                }
+                OperatorType operatorType = Signature.unmangleOperator(signature.getName().getObjectName());
                 if (!operatorType.isComparisonOperator()) {
                     return;
                 }
@@ -620,13 +642,18 @@ public class SplitFiltering
 
     private static RowExpression extractExpression(RowExpression expression)
     {
-        if (expression instanceof CallExpression && ((CallExpression) expression).getSignature().getName().contains("CAST")) {
-            // extract the inner expression for CAST expressions
-            return extractExpression(((CallExpression) expression).getArguments().get(0));
+        if (expression instanceof CallExpression) {
+            FunctionHandle builtInFunctionHandle = ((CallExpression) expression).getFunctionHandle();
+            Signature signature;
+            if (builtInFunctionHandle instanceof BuiltInFunctionHandle) {
+                signature = ((BuiltInFunctionHandle) builtInFunctionHandle).getSignature();
+                if (signature.getName().getObjectName().contains("CAST")) {
+                    // extract the inner expression for CAST expressions
+                    return extractExpression(((CallExpression) expression).getArguments().get(0));
+                }
+            }
         }
-        else {
-            return expression;
-        }
+        return expression;
     }
 
     /**

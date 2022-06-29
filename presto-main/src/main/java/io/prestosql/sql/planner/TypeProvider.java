@@ -42,12 +42,7 @@ public class TypeProvider
         return new TypeProvider(ImmutableMap.of());
     }
 
-//    private TypeProvider(Map<Symbol, Type> types)
-//    {
-//        this.types = types;
-//    }
-
-        public TypeProvider(Map<Symbol, Type> types)
+    public TypeProvider(Map<Symbol, Type> types)
     {
         this.types = types;
     }

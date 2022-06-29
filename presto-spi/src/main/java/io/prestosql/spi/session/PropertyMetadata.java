@@ -18,6 +18,7 @@ import io.airlift.units.Duration;
 import io.prestosql.spi.type.Type;
 
 import java.util.EnumSet;
+import java.util.function.Consumer;
 import java.util.function.Function;
 
 import static io.prestosql.spi.type.BigintType.BIGINT;
@@ -60,7 +61,6 @@ public final class PropertyMetadata<T>
         requireNonNull(encoder, "encoder is null");
 
         if (name.isEmpty() || !name.trim().toLowerCase(ENGLISH).equals(name)) {
-            System.out.println(name.trim().toLowerCase(ENGLISH)+" property "+name);
             throw new IllegalArgumentException(format("Invalid property name '%s'", name));
         }
         if (description.isEmpty() || !description.trim().equals(description)) {
@@ -195,6 +195,11 @@ public final class PropertyMetadata<T>
 
     public static PropertyMetadata<String> stringProperty(String name, String description, String defaultValue, boolean hidden)
     {
+        return stringProperty(name, description, defaultValue, value -> {}, hidden);
+    }
+
+    public static PropertyMetadata<String> stringProperty(String name, String description, String defaultValue, Consumer<String> validation, boolean hidden)
+    {
         return new PropertyMetadata<>(
                 name,
                 description,
@@ -202,7 +207,11 @@ public final class PropertyMetadata<T>
                 String.class,
                 defaultValue,
                 hidden,
-                String.class::cast,
+                object -> {
+                    String value = (String) object;
+                    validation.accept(value);
+                    return value;
+                },
                 object -> object);
     }
 

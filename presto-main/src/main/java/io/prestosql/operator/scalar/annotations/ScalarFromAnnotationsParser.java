@@ -57,7 +57,7 @@ public final class ScalarFromAnnotationsParser
         ImmutableList.Builder<SqlScalarFunction> builder = ImmutableList.builder();
         for (ScalarHeaderAndMethods methods : findScalarsInFunctionSetClass(clazz)) {
             // Non-static function only makes sense in classes annotated with @ScalarFunction or @ScalarOperator.
-            builder.add(parseParametricScalar(methods, Optional.empty()));
+            builder.add(parseParametricScalar(methods, FunctionsParserHelper.findConstructor(clazz)));
         }
         return builder.build();
     }
@@ -99,11 +99,10 @@ public final class ScalarFromAnnotationsParser
     private static SqlScalarFunction parseParametricScalar(ScalarHeaderAndMethods scalar, Optional<Constructor<?>> constructor)
     {
         ScalarImplementationHeader header = scalar.getHeader();
-        checkArgument(!header.getName().isEmpty());
 
         Map<SpecializedSignature, ParametricScalarImplementation.Builder> signatures = new HashMap<>();
         for (Method method : scalar.getMethods()) {
-            ParametricScalarImplementation implementation = ParametricScalarImplementation.Parser.parseImplementation(header.getName(), method, constructor);
+            ParametricScalarImplementation implementation = ParametricScalarImplementation.Parser.parseImplementation(header, method, constructor);
             if (!signatures.containsKey(implementation.getSpecializedSignature())) {
                 ParametricScalarImplementation.Builder builder = new ParametricScalarImplementation.Builder(
                         implementation.getSignature(),

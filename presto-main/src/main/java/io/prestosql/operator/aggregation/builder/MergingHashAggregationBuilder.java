@@ -24,6 +24,7 @@ import io.prestosql.operator.WorkProcessor.TransformationState;
 import io.prestosql.operator.aggregation.AccumulatorFactory;
 import io.prestosql.spi.Page;
 import io.prestosql.spi.plan.AggregationNode;
+import io.prestosql.spi.snapshot.RestorableConfig;
 import io.prestosql.spi.type.Type;
 import io.prestosql.sql.gen.JoinCompiler;
 
@@ -63,15 +64,15 @@ public class MergingHashAggregationBuilder
             int overwriteIntermediateChannelOffset,
             JoinCompiler joinCompiler)
     {
-        ImmutableList.Builder<Integer> groupByPartialChannels = ImmutableList.builder();
+        ImmutableList.Builder<Integer> groupByPartialChannelsBuilder = ImmutableList.builder();
         for (int i = 0; i < groupByTypes.size(); i++) {
-            groupByPartialChannels.add(i);
+            groupByPartialChannelsBuilder.add(i);
         }
 
         this.accumulatorFactories = accumulatorFactories;
         this.step = AggregationNode.Step.partialInput(step);
         this.expectedGroups = expectedGroups;
-        this.groupByPartialChannels = groupByPartialChannels.build();
+        this.groupByPartialChannels = groupByPartialChannelsBuilder.build();
         this.hashChannel = hashChannel.isPresent() ? Optional.of(groupByTypes.size()) : hashChannel;
         this.operatorContext = operatorContext;
         this.sortedPages = sortedPages;
@@ -86,8 +87,12 @@ public class MergingHashAggregationBuilder
 
     public WorkProcessor<Page> buildResult()
     {
+        //TODO-cp-I39B76 Only used by SpillableHashAggregationBuilder
         return sortedPages.flatTransform(new Transformation<Page, WorkProcessor<Page>>()
         {
+            @RestorableConfig(unsupported = true)
+            private final RestorableConfig restorableConfig = null;
+
             boolean reset = true;
             long memorySize;
 

@@ -1,5 +1,5 @@
 /*
- * Copyright (C) 2018-2020. Huawei Technologies Co., Ltd. All rights reserved.
+ * Copyright (C) 2018-2021. Huawei Technologies Co., Ltd. All rights reserved.
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
  * You may obtain a copy of the License at
@@ -31,11 +31,11 @@ import static java.util.Objects.requireNonNull;
 public class IndexCacheLoader
         extends CacheLoader<IndexCacheKey, List<IndexMetadata>>
 {
-    private static IndexClient indexClient;
+    private final IndexClient indexClient;
 
     public IndexCacheLoader(IndexClient client)
     {
-        IndexCacheLoader.indexClient = client;
+        this.indexClient = client;
     }
 
     @Override
@@ -64,7 +64,7 @@ public class IndexCacheLoader
             long lastModified;
 
             try {
-                lastModified = indexClient.getLastModified(key.getPath());
+                lastModified = indexClient.getLastModifiedTime(key.getPath());
             }
             catch (Exception e) {
                 // no lastModified file found, i.e. index doesn't exist

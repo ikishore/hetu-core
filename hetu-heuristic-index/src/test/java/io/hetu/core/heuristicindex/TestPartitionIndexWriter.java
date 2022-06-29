@@ -1,5 +1,5 @@
 /*
- * Copyright (C) 2018-2020. Huawei Technologies Co., Ltd. All rights reserved.
+ * Copyright (C) 2018-2021. Huawei Technologies Co., Ltd. All rights reserved.
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
  * You may obtain a copy of the License at
@@ -14,6 +14,7 @@
  */
 package io.hetu.core.heuristicindex;
 
+import io.airlift.log.Logger;
 import io.prestosql.spi.HetuConstant;
 import io.prestosql.spi.connector.CreateIndexMetadata;
 import io.prestosql.spi.filesystem.HetuFileSystemClient;
@@ -39,8 +40,7 @@ import static org.testng.Assert.assertEquals;
 
 public class TestPartitionIndexWriter
 {
-    private String tableName = "testTable";
-    private String columnName = "testColumn";
+    private static final Logger LOGGER = Logger.get(TestPartitionIndexWriter.class);
 
     @Test
     public void testAddValue()
@@ -52,6 +52,7 @@ public class TestPartitionIndexWriter
         CreateIndexMetadata createIndexMetadata = new CreateIndexMetadata("hetu_partition_idx",
                 "testTable",
                 "BTREE",
+                0L,
                 columns,
                 partitions,
                 properties,
@@ -86,6 +87,7 @@ public class TestPartitionIndexWriter
         CreateIndexMetadata createIndexMetadata = new CreateIndexMetadata("hetu_partition_idx",
                 "testTable",
                 "BTREE",
+                0L,
                 columns,
                 partitions,
                 properties,
@@ -140,7 +142,7 @@ public class TestPartitionIndexWriter
                 indexWriter.addData(valuesMap, connectorMetadata);
             }
             catch (IOException e) {
-                e.printStackTrace();
+                LOGGER.error("add data error : %s", e.getMessage());
             }
             latch.countDown();
         }

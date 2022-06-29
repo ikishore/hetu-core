@@ -51,7 +51,6 @@ import java.util.List;
 import java.util.Random;
 import java.util.concurrent.TimeUnit;
 
-import static com.google.common.io.Files.createTempDir;
 import static com.google.common.io.MoreFiles.deleteRecursively;
 import static com.google.common.io.RecursiveDeleteOption.ALLOW_INSECURE;
 import static io.airlift.units.DataSize.Unit.MEGABYTE;
@@ -67,11 +66,11 @@ import static io.prestosql.spi.type.DoubleType.DOUBLE;
 import static io.prestosql.spi.type.IntegerType.INTEGER;
 import static io.prestosql.spi.type.RealType.REAL;
 import static io.prestosql.spi.type.SmallintType.SMALLINT;
-import static io.prestosql.spi.type.TimeZoneKey.UTC_KEY;
 import static io.prestosql.spi.type.TimestampType.TIMESTAMP;
 import static io.prestosql.spi.type.TinyintType.TINYINT;
 import static io.prestosql.spi.type.VarcharType.VARCHAR;
 import static java.lang.Math.toIntExact;
+import static java.nio.file.Files.createTempDirectory;
 import static java.util.UUID.randomUUID;
 import static java.util.concurrent.TimeUnit.MILLISECONDS;
 import static org.joda.time.DateTimeZone.UTC;
@@ -340,15 +339,15 @@ public class BenchmarkColumnReaders
                 throws Exception
         {
             this.type = type;
-            temporaryDirectory = createTempDir();
+            temporaryDirectory = createTempDirectory(getClass().getName()).toFile();
             orcFile = new File(temporaryDirectory, randomUUID().toString());
             writeOrcColumnPresto(orcFile, NONE, type, createValues(), new OrcWriterStats());
 
-            OrcDataSource dataSource = new FileOrcDataSource(orcFile, new DataSize(1, MEGABYTE),
-                    new DataSize(8, MEGABYTE), new DataSize(8, MEGABYTE), true);
-            DiskRange diskRange = new DiskRange(0, toIntExact(dataSource.getSize()));
-            dataSource = new CachingOrcDataSource(dataSource, desiredOffset -> diskRange);
-            this.dataSource = dataSource;
+            OrcDataSource localDataSource = new FileOrcDataSource(orcFile, new DataSize(1, MEGABYTE),
+                    new DataSize(8, MEGABYTE), new DataSize(8, MEGABYTE), true, orcFile.lastModified());
+            DiskRange diskRange = new DiskRange(0, toIntExact(localDataSource.getSize()));
+            localDataSource = new CachingOrcDataSource(localDataSource, desiredOffset -> diskRange);
+            this.dataSource = localDataSource;
         }
 
         @TearDown
@@ -1040,7 +1039,7 @@ public class BenchmarkColumnReaders
         {
             List<SqlTimestamp> values = new ArrayList<>();
             for (int i = 0; i < ROWS; ++i) {
-                values.add(new SqlTimestamp((random.nextLong()), UTC_KEY));
+                values.add(new SqlTimestamp((random.nextLong())));
             }
             return values.iterator();
         }
@@ -1063,7 +1062,7 @@ public class BenchmarkColumnReaders
             List<SqlTimestamp> values = new ArrayList<>();
             for (int i = 0; i < ROWS; ++i) {
                 if (random.nextBoolean()) {
-                    values.add(new SqlTimestamp(random.nextLong(), UTC_KEY));
+                    values.add(new SqlTimestamp(random.nextLong()));
                 }
                 else {
                     values.add(null);

@@ -30,6 +30,7 @@ import static io.airlift.slice.SliceUtf8.offsetOfCodePoint;
 import static java.lang.Math.min;
 import static java.lang.Math.toIntExact;
 import static java.util.Objects.requireNonNull;
+import static org.apache.commons.text.StringEscapeUtils.unescapeJava;
 
 // faster versions of org.apache.hadoop.io.WritableUtils methods adapted for Slice
 public final class RcFileDecoderUtils
@@ -172,8 +173,9 @@ public final class RcFileDecoderUtils
         out.writeBytes(slice);
     }
 
-    public static void writeVInt(SliceOutput out, int value)
+    public static void writeVInt(SliceOutput out, int inputValue)
     {
+        int value = inputValue;
         if (value >= -112 && value <= 127) {
             out.writeByte(value);
             return;
@@ -201,8 +203,9 @@ public final class RcFileDecoderUtils
         }
     }
 
-    public static void writeVLong(SliceOutput out, long value)
+    public static void writeVLong(SliceOutput out, long inputValue)
     {
+        long value = inputValue;
         if (value >= -112 && value <= 127) {
             out.writeByte((byte) value);
             return;
@@ -266,5 +269,10 @@ public final class RcFileDecoderUtils
             return length;
         }
         return indexEnd - offset;
+    }
+
+    public static String unescapeText(String text)
+    {
+        return unescapeJava(text);
     }
 }

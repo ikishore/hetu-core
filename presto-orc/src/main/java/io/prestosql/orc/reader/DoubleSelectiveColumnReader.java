@@ -95,7 +95,7 @@ public class DoubleSelectiveColumnReader
     }
 
     @Override
-    public void startStripe(ZoneId fileTimeZone, ZoneId storageTimeZone, InputStreamSources dictionaryStreamSources, ColumnMetadata<ColumnEncoding> encoding)
+    public void startStripe(ZoneId fileTimeZone, InputStreamSources dictionaryStreamSources, ColumnMetadata<ColumnEncoding> encoding)
     {
         presentStreamSource = missingStreamSource(BooleanInputStream.class);
         dataStreamSource = missingStreamSource(DoubleInputStream.class);
@@ -209,6 +209,9 @@ public class DoubleSelectiveColumnReader
 
         if (nullsAllowed) {
             outputPositionCount = positionCount;
+            if (outputPositions != positions) {
+                System.arraycopy(positions, 0, outputPositions, 0, outputPositionCount);
+            }
         }
         else {
             outputPositionCount = 0;

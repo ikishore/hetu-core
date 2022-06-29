@@ -1,5 +1,5 @@
 /*
- * Copyright (C) 2018-2020. Huawei Technologies Co., Ltd. All rights reserved.
+ * Copyright (C) 2018-2021. Huawei Technologies Co., Ltd. All rights reserved.
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
  * You may obtain a copy of the License at
@@ -36,8 +36,10 @@ import java.util.ArrayList;
 import java.util.Collection;
 import java.util.Collections;
 import java.util.Comparator;
+import java.util.HashSet;
 import java.util.LinkedList;
 import java.util.List;
+import java.util.Locale;
 import java.util.Map;
 import java.util.Properties;
 import java.util.concurrent.ConcurrentHashMap;
@@ -73,7 +75,7 @@ public class FileIndexWriter
     private Path tmpPath;
 
     /**
-     * Constructor
+     * Constructor. The file index writer is per ORC file, marked by `dataSourceFileName`.
      *
      * @param createIndexMetadata metadata of create index, includes indexName, tableName, indexType, indexColumns and partitions
      * @param fs                  filesystem client to access filesystem where the indexes are persisted/stored
@@ -153,7 +155,6 @@ public class FileIndexWriter
      *
      * <pre>
      * /--- {this.root}
-     *   |--- INDEX_RECORDS
      *   |--- table1
      *     |--- column
      *       |--- indexType1
@@ -168,7 +169,7 @@ public class FileIndexWriter
      * @throws IOException when exceptions occur during persisting
      */
     @Override
-    public void persist()
+    public long persist()
             throws IOException
     {
         for (Long offset : indexPages.keySet()) {
@@ -176,7 +177,7 @@ public class FileIndexWriter
         }
         // Package index files for one File and write to remote filesystem
         String table = createIndexMetadata.getTableName();
-        String column = createIndexMetadata.getIndexColumns().iterator().next().getFirst(); // Support indexing on only one column for now
+        String column = createIndexMetadata.getIndexColumns().iterator().next().getFirst().toLowerCase(Locale.ENGLISH); // Support indexing on only one column for now
         String type = createIndexMetadata.getIndexType();
         String lastModifiedFileName = IndexConstants.LAST_MODIFIED_FILE_PREFIX + dataSourceFileLastModifiedTime + ".tar";
 
@@ -184,11 +185,14 @@ public class FileIndexWriter
 
         try {
             IndexServiceUtils.writeToHdfs(LOCAL_FS_CLIENT, fs, tmpPath, tarPath);
+            // return the size of this file in bytes
+            return (Long) fs.getAttribute(tarPath, "size");
         }
         catch (IOException e) {
             LOG.debug("Error copying index files to remote filesystem: ", e);
             // roll back creation
             fs.delete(tarPath);
+            throw e;
         }
         finally {
             LOCAL_FS_CLIENT.deleteRecursively(tmpPath);
@@ -207,7 +211,7 @@ public class FileIndexWriter
         // Get sum of expected entries
         int expectedNumEntries = 0;
         for (Pair<String, List<Object>> l : stripeData) {
-            expectedNumEntries += l.getSecond().size();
+            expectedNumEntries += new HashSet<>(l.getSecond()).size();
         }
 
         // Create index and put values

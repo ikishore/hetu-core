@@ -1,5 +1,5 @@
 /*
- * Copyright (C) 2018-2020. Huawei Technologies Co., Ltd. All rights reserved.
+ * Copyright (C) 2018-2021. Huawei Technologies Co., Ltd. All rights reserved.
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
  * You may obtain a copy of the License at
@@ -19,6 +19,7 @@ import com.google.common.util.concurrent.UncheckedExecutionException;
 import io.airlift.log.Logger;
 import io.prestosql.orc.OrcColumn;
 import io.prestosql.orc.OrcDataSourceId;
+import io.prestosql.orc.OrcDataSourceIdWithTimeStamp;
 import io.prestosql.orc.OrcRowDataCacheKey;
 import io.prestosql.orc.metadata.ColumnEncoding;
 import io.prestosql.orc.metadata.ColumnMetadata;
@@ -44,6 +45,7 @@ public class CachingColumnReader<T>
     private final OrcColumnId columnId;
 
     private OrcDataSourceId orcDataSourceId;
+    private long lastModifiedTime;
     private long stripeOffset;
     private long rowGroupOffset;
     private int offset;
@@ -75,12 +77,12 @@ public class CachingColumnReader<T>
     }
 
     @Override
-    public void startStripe(ZoneId fileTimeZone, ZoneId storageTimeZone, InputStreamSources dictionaryStreamSources,
-                            ColumnMetadata<ColumnEncoding> encoding) throws IOException
+    public void startStripe(ZoneId fileTimeZone, InputStreamSources dictionaryStreamSources,
+            ColumnMetadata<ColumnEncoding> encoding) throws IOException
     {
         this.offset = 0;
         this.nextBatchSize = 0;
-        delegate.startStripe(fileTimeZone, storageTimeZone, dictionaryStreamSources, encoding);
+        delegate.startStripe(fileTimeZone, dictionaryStreamSources, encoding);
     }
 
     @Override
@@ -91,6 +93,7 @@ public class CachingColumnReader<T>
 
         StreamSourceMeta streamSourceMeta = dataStreamSources.getStreamSourceMeta();
         orcDataSourceId = streamSourceMeta.getDataSourceId();
+        lastModifiedTime = streamSourceMeta.getLastModifiedTime();
         stripeOffset = streamSourceMeta.getStripeOffset();
         rowGroupOffset = streamSourceMeta.getRowGroupOffset();
         cachedBlock = getCachedBlock(streamSourceMeta.getRowCount(), dataStreamSources);
@@ -101,7 +104,7 @@ public class CachingColumnReader<T>
     private Block getCachedBlock(long rowCount, InputStreamSources dataStreamSources) throws IOException
     {
         OrcRowDataCacheKey cacheKey = new OrcRowDataCacheKey();
-        cacheKey.setOrcDataSourceId(orcDataSourceId);
+        cacheKey.setOrcDataSourceId(new OrcDataSourceIdWithTimeStamp(orcDataSourceId, lastModifiedTime));
         cacheKey.setStripeOffset(stripeOffset);
         cacheKey.setRowGroupOffset(rowGroupOffset);
         cacheKey.setColumnId(columnId);

@@ -16,7 +16,10 @@ package io.prestosql.operator;
 import com.google.common.collect.AbstractIterator;
 import com.google.common.collect.ImmutableList;
 import io.airlift.log.Logger;
+import io.airlift.slice.DynamicSliceOutput;
 import io.airlift.slice.Slice;
+import io.airlift.slice.SliceOutput;
+import io.airlift.slice.Slices;
 import io.airlift.units.DataSize;
 import io.prestosql.Session;
 import io.prestosql.geospatial.Rectangle;
@@ -26,7 +29,11 @@ import io.prestosql.spi.Page;
 import io.prestosql.spi.PageBuilder;
 import io.prestosql.spi.block.Block;
 import io.prestosql.spi.block.BlockBuilder;
+import io.prestosql.spi.block.BlockEncodingSerde;
 import io.prestosql.spi.block.SortOrder;
+import io.prestosql.spi.snapshot.BlockEncodingSerdeProvider;
+import io.prestosql.spi.snapshot.Restorable;
+import io.prestosql.spi.snapshot.RestorableConfig;
 import io.prestosql.spi.type.Type;
 import io.prestosql.sql.analyzer.FeaturesConfig;
 import io.prestosql.sql.gen.JoinCompiler;
@@ -40,6 +47,7 @@ import org.openjdk.jol.info.ClassLayout;
 
 import javax.inject.Inject;
 
+import java.io.Serializable;
 import java.util.Arrays;
 import java.util.Iterator;
 import java.util.List;
@@ -70,8 +78,9 @@ import static java.util.Objects.requireNonNull;
  * <li>Positional output via the {@link #appendTo} method</li>
  * </ul>
  */
+@RestorableConfig(uncapturedFields = {"orderingCompiler", "joinCompiler", "metadata", "types"})
 public class PagesIndex
-        implements Swapper
+        implements Swapper, Restorable
 {
     private static final int INSTANCE_SIZE = ClassLayout.parseClass(PagesIndex.class).instanceSize();
     private static final Logger log = Logger.get(PagesIndex.class);
@@ -274,8 +283,9 @@ public class PagesIndex
 
     public int buildPage(int position, int[] outputChannels, PageBuilder pageBuilder)
     {
-        while (!pageBuilder.isFull() && position < positionCount) {
-            long pageAddress = valueAddresses.getLong(position);
+        int positionValue = position;
+        while (!pageBuilder.isFull() && positionValue < positionCount) {
+            long pageAddress = valueAddresses.getLong(positionValue);
             int blockIndex = decodeSliceIndex(pageAddress);
             int blockPosition = decodePosition(pageAddress);
 
@@ -288,10 +298,10 @@ public class PagesIndex
                 type.appendTo(block, blockPosition, pageBuilder.getBlockBuilder(i));
             }
 
-            position++;
+            positionValue++;
         }
 
-        return position;
+        return positionValue;
     }
 
     public void appendTo(int channel, int position, BlockBuilder output)
@@ -435,7 +445,6 @@ public class PagesIndex
                 joinChannels,
                 hashChannel,
                 Optional.empty(),
-                -1,
                 metadata);
     }
 
@@ -461,8 +470,8 @@ public class PagesIndex
             Map<Integer, Rectangle> partitions)
     {
         // TODO probably shouldn't copy to reduce memory and for memory accounting's sake
-        List<List<Block>> channels = ImmutableList.copyOf(this.channels);
-        return new PagesSpatialIndexSupplier(session, valueAddresses, types, outputChannels, channels, geometryChannel, radiusChannel, partitionChannel, spatialRelationshipTest, filterFunctionFactory, partitions);
+        List<List<Block>> channelLists = ImmutableList.copyOf(this.channels);
+        return new PagesSpatialIndexSupplier(session, valueAddresses, types, outputChannels, channelLists, geometryChannel, radiusChannel, partitionChannel, spatialRelationshipTest, filterFunctionFactory, partitions);
     }
 
     public LookupSourceSupplier createLookupSourceSupplier(
@@ -474,9 +483,9 @@ public class PagesIndex
             List<JoinFilterFunctionFactory> searchFunctionFactories,
             Optional<List<Integer>> outputChannels)
     {
-        List<List<Block>> channels = ImmutableList.copyOf(this.channels);
+        List<List<Block>> channelLists = ImmutableList.copyOf(this.channels);
         if (!joinChannels.isEmpty()) {
-            // todo compiled implementation of lookup join does not support when we are joining with empty join channels.
+            // todo compiled implementation of lookup join does not support when we are joining with empty join channelLists.
             // This code path will trigger only for OUTER joins. To fix that we need to add support for
             //        OUTER joins into NestedLoopsJoin and remove "type == INNER" condition in LocalExecutionPlanner.visitJoin()
 
@@ -485,7 +494,7 @@ public class PagesIndex
                 return lookupSourceFactory.createLookupSourceSupplier(
                         session,
                         valueAddresses,
-                        channels,
+                        channelLists,
                         hashChannel,
                         filterFunctionFactory,
                         sortChannel,
@@ -500,7 +509,7 @@ public class PagesIndex
         PagesHashStrategy hashStrategy = new SimplePagesHashStrategy(
                 types,
                 outputChannels.orElse(rangeList(types.size())),
-                channels,
+                channelLists,
                 joinChannels,
                 hashChannel,
                 sortChannel,
@@ -511,7 +520,7 @@ public class PagesIndex
                 session,
                 hashStrategy,
                 valueAddresses,
-                channels,
+                channelLists,
                 filterFunctionFactory,
                 sortChannel,
                 searchFunctionFactories);
@@ -580,5 +589,64 @@ public class PagesIndex
                 return page;
             }
         };
+    }
+
+    @Override
+    public Object capture(BlockEncodingSerdeProvider serdeProvider)
+    {
+        BlockEncodingSerde blockSerde = serdeProvider.getBlockEncodingSerde();
+        PagesIndexState myState = new PagesIndexState();
+        myState.valueAddresses = new long[valueAddresses.size()];
+        valueAddresses.getElements(0, myState.valueAddresses, 0, valueAddresses.size());
+        myState.channels = new byte[channels.length][][];
+        for (int i = 0; i < channels.length; i++) {
+            int arraySize = channels[i].size();
+            myState.channels[i] = new byte[arraySize][];
+            Block[] blockArray = new Block[arraySize];
+            channels[i].getElements(0, blockArray, 0, arraySize);
+            for (int j = 0; j < arraySize; j++) {
+                SliceOutput sliceOutput = new DynamicSliceOutput(0);
+                blockSerde.writeBlock(sliceOutput, blockArray[j]);
+                myState.channels[i][j] = sliceOutput.getUnderlyingSlice().getBytes();
+            }
+        }
+        myState.nextBlockToCompact = nextBlockToCompact;
+        myState.positionCount = positionCount;
+        myState.pagesMemorySize = pagesMemorySize;
+        myState.estimatedSize = estimatedSize;
+        return myState;
+    }
+
+    @Override
+    public void restore(Object state, BlockEncodingSerdeProvider serdeProvider)
+    {
+        BlockEncodingSerde blockSerde = serdeProvider.getBlockEncodingSerde();
+        PagesIndexState myState = (PagesIndexState) state;
+        this.valueAddresses.clear();
+        this.valueAddresses.trim();
+        this.valueAddresses.addAll(0, new LongArrayList(myState.valueAddresses));
+        for (int i = 0; i < myState.channels.length; i++) {
+            this.channels[i].clear();
+            this.channels[i].trim();
+            for (byte[] blockState : myState.channels[i]) {
+                Slice input = Slices.wrappedBuffer(blockState);
+                this.channels[i].add(blockSerde.readBlock(input.getInput()));
+            }
+        }
+        this.nextBlockToCompact = myState.nextBlockToCompact;
+        this.positionCount = myState.positionCount;
+        this.pagesMemorySize = myState.pagesMemorySize;
+        this.estimatedSize = myState.estimatedSize;
+    }
+
+    private static class PagesIndexState
+            implements Serializable
+    {
+        private long[] valueAddresses;
+        private byte[][][] channels;
+        private int nextBlockToCompact;
+        private int positionCount;
+        private long pagesMemorySize;
+        private long estimatedSize;
     }
 }

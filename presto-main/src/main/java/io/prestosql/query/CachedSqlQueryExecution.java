@@ -1,5 +1,5 @@
 /*
- * Copyright (C) 2018-2020. Huawei Technologies Co., Ltd. All rights reserved.
+ * Copyright (C) 2018-2021. Huawei Technologies Co., Ltd. All rights reserved.
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
  * You may obtain a copy of the License at
@@ -38,10 +38,12 @@ import io.prestosql.failuredetector.FailureDetector;
 import io.prestosql.heuristicindex.HeuristicIndexerManager;
 import io.prestosql.metadata.Metadata;
 import io.prestosql.security.AccessControl;
+import io.prestosql.snapshot.SnapshotUtils;
 import io.prestosql.spi.PrestoException;
 import io.prestosql.spi.connector.CatalogName;
 import io.prestosql.spi.connector.ColumnHandle;
 import io.prestosql.spi.connector.ColumnMetadata;
+import io.prestosql.spi.connector.ConnectorTableHandle;
 import io.prestosql.spi.connector.ConnectorTransactionHandle;
 import io.prestosql.spi.connector.Constraint;
 import io.prestosql.spi.metadata.TableHandle;
@@ -80,16 +82,20 @@ import io.prestosql.sql.tree.CurrentUser;
 import io.prestosql.sql.tree.DefaultTraversalVisitor;
 import io.prestosql.sql.tree.Query;
 import io.prestosql.sql.tree.Statement;
+import io.prestosql.sql.tree.UpdateIndex;
 import io.prestosql.statestore.StateStoreProvider;
 import io.prestosql.transaction.TransactionId;
 import io.prestosql.utils.OptimizerUtils;
 
 import java.util.ArrayList;
+import java.util.Collection;
 import java.util.HashMap;
+import java.util.LinkedList;
 import java.util.List;
 import java.util.Map;
 import java.util.NoSuchElementException;
 import java.util.Optional;
+import java.util.Queue;
 import java.util.Set;
 import java.util.UUID;
 import java.util.concurrent.ExecutorService;
@@ -105,28 +111,28 @@ public class CachedSqlQueryExecution
     private final BeginTableWrite beginTableWrite;
 
     public CachedSqlQueryExecution(QueryPreparer.PreparedQuery preparedQuery, QueryStateMachine stateMachine,
-                                   String slug, Metadata metadata, CubeManager cubeManager, AccessControl accessControl, SqlParser sqlParser, SplitManager splitManager,
-                                   NodePartitioningManager nodePartitioningManager, NodeScheduler nodeScheduler,
-                                   List<PlanOptimizer> planOptimizers, PlanFragmenter planFragmenter, RemoteTaskFactory remoteTaskFactory,
-                                   LocationFactory locationFactory, int scheduleSplitBatchSize, ExecutorService queryExecutor,
-                                   ScheduledExecutorService schedulerExecutor, FailureDetector failureDetector, NodeTaskMap nodeTaskMap,
-                                   QueryExplainer queryExplainer, ExecutionPolicy executionPolicy, SplitSchedulerStats schedulerStats,
-                                   StatsCalculator statsCalculator, CostCalculator costCalculator, WarningCollector warningCollector,
-                                   DynamicFilterService dynamicFilterService, Optional<Cache<Integer, CachedSqlQueryExecutionPlan>> cache,
-                                   HeuristicIndexerManager heuristicIndexerManager, StateStoreProvider stateStoreProvider)
+            String slug, Metadata metadata, CubeManager cubeManager, AccessControl accessControl, SqlParser sqlParser, SplitManager splitManager,
+            NodePartitioningManager nodePartitioningManager, NodeScheduler nodeScheduler,
+            List<PlanOptimizer> planOptimizers, PlanFragmenter planFragmenter, RemoteTaskFactory remoteTaskFactory,
+            LocationFactory locationFactory, int scheduleSplitBatchSize, ExecutorService queryExecutor,
+            ScheduledExecutorService schedulerExecutor, FailureDetector failureDetector, NodeTaskMap nodeTaskMap,
+            QueryExplainer queryExplainer, ExecutionPolicy executionPolicy, SplitSchedulerStats schedulerStats,
+            StatsCalculator statsCalculator, CostCalculator costCalculator, WarningCollector warningCollector,
+            DynamicFilterService dynamicFilterService, Optional<Cache<Integer, CachedSqlQueryExecutionPlan>> cache,
+            HeuristicIndexerManager heuristicIndexerManager, StateStoreProvider stateStoreProvider, SnapshotUtils snapshotUtils)
     {
         super(preparedQuery, stateMachine, slug, metadata, cubeManager, accessControl, sqlParser, splitManager,
                 nodePartitioningManager, nodeScheduler, planOptimizers, planFragmenter, remoteTaskFactory, locationFactory,
                 scheduleSplitBatchSize, queryExecutor, schedulerExecutor, failureDetector, nodeTaskMap, queryExplainer,
-                executionPolicy, schedulerStats, statsCalculator, costCalculator, warningCollector, dynamicFilterService, heuristicIndexerManager, stateStoreProvider);
+                executionPolicy, schedulerStats, statsCalculator, costCalculator, warningCollector, dynamicFilterService, heuristicIndexerManager, stateStoreProvider, snapshotUtils);
         this.cache = cache;
         this.beginTableWrite = new BeginTableWrite(metadata);
     }
 
     @Override
     protected Plan createPlan(Analysis analysis, Session session, List<PlanOptimizer> planOptimizers,
-                              PlanNodeIdAllocator idAllocator, Metadata metadata, TypeAnalyzer typeAnalyzer, StatsCalculator statsCalculator,
-                              CostCalculator costCalculator, WarningCollector warningCollector)
+            PlanNodeIdAllocator idAllocator, Metadata metadata, TypeAnalyzer typeAnalyzer, StatsCalculator statsCalculator,
+            CostCalculator costCalculator, WarningCollector warningCollector)
     {
         Statement statement = analysis.getStatement();
 
@@ -138,7 +144,7 @@ public class CachedSqlQueryExecution
         }
 
         // if the original statement before rewriting is CreateIndex, set session to let connector know that pageMetadata should be enabled
-        if (analysis.getOriginalStatement() instanceof CreateIndex) {
+        if (analysis.getOriginalStatement() instanceof CreateIndex || analysis.getOriginalStatement() instanceof UpdateIndex) {
             session.setPageMetadataEnabled(true);
         }
 
@@ -160,7 +166,7 @@ public class CachedSqlQueryExecution
                 analysis.getParameters().isEmpty() &&
                 validateAndExtractTableAndColumns(analysis, metadata, session, tableNames, tableStatistics, columnTypes) &&
                 isCacheable(statement) &&
-                (!(analysis.getOriginalStatement() instanceof CreateIndex)); // create index should not be cached
+                (!(analysis.getOriginalStatement() instanceof CreateIndex || analysis.getOriginalStatement() instanceof UpdateIndex)); // create index and update index should not be cached
 
         cacheable = cacheable && !tableNames.isEmpty();
         if (!cacheable) {
@@ -211,10 +217,17 @@ public class CachedSqlQueryExecution
         if (plan != null && cachedPlan.getTimeZoneKey().equals(session.getTimeZoneKey()) &&
                 cachedPlan.getStatement().equals(statement) && session.getTransactionId().isPresent() && cachedPlan.getIdentity().getUser().equals(session.getIdentity().getUser())) { // TODO: traverse the statement and accept partial match
             root = plan.getRoot();
+            boolean isValidCachePlan = tablesMatch(root, analysis.getTables());
             try {
-                if (!cachedPlan.getTableStatistics().equals(tableStatistics)) {
-                    // TableStatistics have changed, therefore the cached plan may no longer be applicable
-                    throw new NoSuchElementException();
+                if (!isEqualBasicStatistics(cachedPlan.getTableStatistics(), tableStatistics, tableNames) || !isValidCachePlan) {
+                    for (TableHandle tableHandle : analysis.getTables()) {
+                        tableStatistics.replace(tableHandle.getFullyQualifiedName(), metadata.getTableStatistics(session, tableHandle, Constraint.alwaysTrue(), true));
+                    }
+                    if (!cachedPlan.getTableStatistics().equals(tableStatistics) || !isValidCachePlan) {
+                        // TableStatistics have changed, therefore the cached plan may no longer be applicable
+                        // Table have changed, therfore the cached plan may no longer be applicable
+                        throw new NoSuchElementException();
+                    }
                 }
                 // TableScanNode may contain the old transaction id.
                 // The following logic rewrites the logical plan by replacing the TableScanNode with a new TableScanNode which
@@ -232,6 +245,9 @@ public class CachedSqlQueryExecution
         }
         else {
             // Build a new plan
+            for (TableHandle tableHandle : analysis.getTables()) {
+                tableStatistics.replace(tableHandle.getFullyQualifiedName(), metadata.getTableStatistics(session, tableHandle, Constraint.alwaysTrue(), true));
+            }
             plan = createAndCachePlan(key, logicalPlanner, statement, tableNames, tableStatistics, optimizers, analysis, columnTypes, systemSessionProperties);
             root = plan.getRoot();
         }
@@ -256,7 +272,7 @@ public class CachedSqlQueryExecution
             Map<String, Object> systemSessionProperties)
     {
         // build a new plan
-        Plan plan = logicalPlanner.plan(analysis);
+        Plan plan = logicalPlanner.plan(analysis, true);
         // Cache the plan
         CachedSqlQueryExecutionPlan newCachedPlan = new CachedSqlQueryExecutionPlan(statement, tableNames, tableStatistics, planOptimizers, plan,
                 analysis.getParameters(), columnTypes, getSession().getTimeZoneKey(), getSession().getIdentity(), systemSessionProperties);
@@ -277,7 +293,8 @@ public class CachedSqlQueryExecution
             try {
                 if (metadata.isExecutionPlanCacheSupported(session, tableHandle)) {
                     tables.add(tableHandle.getFullyQualifiedName());
-                    tableStatistics.put(tableHandle.getFullyQualifiedName(), metadata.getTableStatistics(session, tableHandle, Constraint.alwaysTrue())); // TODO: Find a way to get constraints instead of reading all table statistics
+                    // includeColumnStatistics is passed as false, so that calculation of columnStatistics are skipped
+                    tableStatistics.put(tableHandle.getFullyQualifiedName(), metadata.getTableStatistics(session, tableHandle, Constraint.alwaysTrue(), false)); // TODO: Find a way to get constraints instead of reading all table statistics
 
                     Map<String, ColumnHandle> columnHandles = metadata.getColumnHandles(session, tableHandle);
                     for (ColumnHandle columnHandle : columnHandles.values()) {
@@ -291,6 +308,22 @@ public class CachedSqlQueryExecution
             }
             catch (PrestoException e) {
                 // TableStatistics constraint -- cannot query more than 1000 hive partitions
+                return false;
+            }
+        }
+        return true;
+    }
+
+    private boolean isEqualBasicStatistics(Map<String, TableStatistics> cacheTableStatistics, Map<String, TableStatistics> tableStatistics, List<String> tableNames)
+    {
+        for (String tableName : tableNames) {
+            TableStatistics cacheTableStatisticsTemp = cacheTableStatistics.get(tableName);
+            TableStatistics tableStatisticsTemp = tableStatistics.get(tableName);
+            if (cacheTableStatisticsTemp == null ||
+                    tableStatisticsTemp == null ||
+                    cacheTableStatisticsTemp.getFileCount() != tableStatisticsTemp.getFileCount() ||
+                    !cacheTableStatisticsTemp.getRowCount().equals(tableStatisticsTemp.getRowCount()) ||
+                    cacheTableStatisticsTemp.getOnDiskDataSizeInBytes() != tableStatisticsTemp.getOnDiskDataSizeInBytes()) {
                 return false;
             }
         }
@@ -363,7 +396,8 @@ public class CachedSqlQueryExecution
         private final Analysis analysis;
         private final Metadata metadata;
         private final Map<String, TableHandle> tables;
-        private Map<ConnectorTransactionHandle, ConnectorTransactionHandle> connectorTransactionHandleMap; // Old ConnectorTransactionHandle from cached plan to new ConnectorTransactionHandle from metadata
+        private final Map<ConnectorTransactionHandle, ConnectorTransactionHandle> connectorTransactionHandleMap; // Old ConnectorTransactionHandle from cached plan to new ConnectorTransactionHandle from metadata
+        private HashMap<UUID, UUID> reuseTableScanNewMappingIdMap;
 
         TableHandleRewriter(Session session, Analysis analysis, Metadata metadata)
         {
@@ -374,14 +408,15 @@ public class CachedSqlQueryExecution
             connectorTransactionHandleMap = new HashMap<>();
 
             // A map of String fully qualified names to TableHandles for ease of access
-            Map<String, TableHandle> tables = new HashMap<>();
+            Map<String, TableHandle> tableHandleHashMap = new HashMap<>();
             for (TableHandle handle : analysis.getTables()) {
-                tables.put(handle.getFullyQualifiedName(), handle);
+                tableHandleHashMap.put(handle.getFullyQualifiedName(), handle);
                 analysis.getCubes(handle).forEach(cubeHandle -> {
-                    tables.putIfAbsent(cubeHandle.getFullyQualifiedName(), cubeHandle);
+                    tableHandleHashMap.putIfAbsent(cubeHandle.getFullyQualifiedName(), cubeHandle);
                 });
             }
-            this.tables = tables;
+            this.tables = tableHandleHashMap;
+            this.reuseTableScanNewMappingIdMap = new HashMap();
         }
 
         @Override
@@ -393,8 +428,14 @@ public class CachedSqlQueryExecution
             // in other nodes if necessary
             connectorTransactionHandleMap.put(tableHandle.getTransaction(), newTableHandle.getTransaction());
 
+            UUID newMappingID = node.getReuseTableScanMappingId();
+            if (node.getStrategy() != ReuseExchangeOperator.STRATEGY.REUSE_STRATEGY_DEFAULT) {
+                newMappingID = reuseTableScanNewMappingIdMap.computeIfAbsent(newMappingID, k -> UUID.randomUUID());
+            }
+
             // Return a new table handle with the ID, output symbols, assignments, and enforced constraints of the cached table handle
-            return new TableScanNode(node.getId(), newTableHandle, node.getOutputSymbols(), node.getAssignments(), node.getEnforcedConstraint(), node.getPredicate(), ReuseExchangeOperator.STRATEGY.REUSE_STRATEGY_DEFAULT, new UUID(0, 0), 0, false);
+            return new TableScanNode(node.getId(), newTableHandle, node.getOutputSymbols(), node.getAssignments(), node.getEnforcedConstraint(),
+                    node.getPredicate(), node.getStrategy(), newMappingID, node.getConsumerTableScanNodeCount(), false);
         }
 
         @Override
@@ -423,7 +464,8 @@ public class CachedSqlQueryExecution
                         partitioningScheme,
                         children,
                         node.getInputs(),
-                        node.getOrderingScheme());
+                        node.getOrderingScheme(),
+                        node.getAggregationType());
             }
             else {
                 return super.visitExchange(node, context);
@@ -460,5 +502,40 @@ public class CachedSqlQueryExecution
                 return tableHandle.getTransaction();
             }
         }
+    }
+
+    private static List<PlanNode> getTableScanNodes(PlanNode planNode)
+    {
+        List<PlanNode> result = new LinkedList<>();
+
+        Queue<PlanNode> queue = new LinkedList<>();
+        queue.add(planNode);
+
+        while (!queue.isEmpty()) {
+            PlanNode node = queue.poll();
+            if (node instanceof TableScanNode) {
+                result.add(node);
+            }
+
+            queue.addAll(node.getSources());
+        }
+
+        return result;
+    }
+
+    private static boolean tablesMatch(PlanNode planNode, Collection<TableHandle> tableHandles)
+    {
+        List<PlanNode> planNodes = getTableScanNodes(planNode);
+        Map<String, ConnectorTableHandle> cachedTableHandleMap = new HashMap<>();
+        for (PlanNode root : planNodes) {
+            TableScanNode tableScanNode = (TableScanNode) root;
+            cachedTableHandleMap.put(tableScanNode.getTable().getConnectorHandle().getSchemaPrefixedTableName(), tableScanNode.getTable().getConnectorHandle());
+        }
+        for (TableHandle tableHandle : tableHandles) {
+            if (!tableHandle.getConnectorHandle().basicEquals(cachedTableHandleMap.get(tableHandle.getConnectorHandle().getSchemaPrefixedTableName()))) {
+                return false;
+            }
+        }
+        return true;
     }
 }

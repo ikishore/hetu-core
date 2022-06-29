@@ -1,5 +1,5 @@
 /*
- * Copyright (C) 2018-2020. Huawei Technologies Co., Ltd. All rights reserved.
+ * Copyright (C) 2018-2021. Huawei Technologies Co., Ltd. All rights reserved.
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
  * You may obtain a copy of the License at
@@ -170,9 +170,39 @@ public interface HetuMetastore
     /**
      * get all table
      *
-     * @param catalogName  catalog name
+     * @param catalogName catalog name
      * @param databaseName database name
      * @return tables
      */
     List<TableEntity> getAllTables(String catalogName, String databaseName);
+
+    /**
+     * alter catalog parameters in hetu metastore
+     *
+     * @param catalogName catalog name
+     * @param key parameter key to change
+     * @param value parameter value to put. If value is {@code null}, the given key will be removed from parameter list
+     */
+    void alterCatalogParameter(String catalogName, String key, String value);
+
+    /**
+     * alter database parameters in hetu metastore
+     *
+     * @param catalogName catalog name
+     * @param databaseName database name
+     * @param key parameter key to change
+     * @param value parameter value to put. If value is {@code null}, the given key will be removed from parameter list
+     */
+    void alterDatabaseParameter(String catalogName, String databaseName, String key, String value);
+
+    /**
+     * alter table parameters in hetu metastore
+     *
+     * @param catalogName catalog name
+     * @param databaseName database name
+     * @param tableName table name
+     * @param key parameter key to change
+     * @param value parameter value to put. If value is {@code null}, the given key will be removed from parameter list
+     */
+    void alterTableParameter(String catalogName, String databaseName, String tableName, String key, String value);
 }

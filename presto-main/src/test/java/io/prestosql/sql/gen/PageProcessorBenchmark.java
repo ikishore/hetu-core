@@ -104,25 +104,25 @@ public class PageProcessorBenchmark
     @Setup
     public void setup()
     {
-        Type type = TYPE_MAP.get(this.type);
+        Type tmpType = TYPE_MAP.get(this.type);
 
         for (int i = 0; i < columnCount; i++) {
-            Symbol symbol = new Symbol(type.getDisplayName().toLowerCase(ENGLISH) + i);
-            symbolTypes.put(symbol, type);
+            Symbol symbol = new Symbol(tmpType.getDisplayName().toLowerCase(ENGLISH) + i);
+            symbolTypes.put(symbol, tmpType);
             sourceLayout.put(symbol, i);
         }
 
-        List<RowExpression> projections = getProjections(type);
+        List<RowExpression> projections = getProjections(tmpType);
         types = projections.stream().map(RowExpression::getType).collect(toList());
 
         Metadata metadata = createTestMetadataManager();
         PageFunctionCompiler pageFunctionCompiler = new PageFunctionCompiler(metadata, 0);
 
         inputPage = createPage(types, dictionaryBlocks);
-        pageProcessor = new ExpressionCompiler(metadata, pageFunctionCompiler).compilePageProcessor(Optional.of(getFilter(type)), projections).get();
+        pageProcessor = new ExpressionCompiler(metadata, pageFunctionCompiler).compilePageProcessor(Optional.of(getFilter(tmpType)), projections).get();
 
         recordSet = new PageRecordSet(types, inputPage);
-        cursorProcessor = new ExpressionCompiler(metadata, pageFunctionCompiler).compileCursorProcessor(Optional.of(getFilter(type)), projections, "key").get();
+        cursorProcessor = new ExpressionCompiler(metadata, pageFunctionCompiler).compileCursorProcessor(Optional.of(getFilter(tmpType)), projections, "key").get();
     }
 
     @Benchmark
@@ -165,8 +165,6 @@ public class PageProcessorBenchmark
         }
         else if (type == VARCHAR) {
             for (int i = 0; i < columnCount; i++) {
-                // alternatively use identity expression rowExpression("varchar" + i, type) or
-                // rowExpression("substr(varchar" + i + ", 1, 1)", type)
                 builder.add(rowExpression("concat(varchar" + i + ", 'foo')"));
             }
         }
@@ -178,7 +176,7 @@ public class PageProcessorBenchmark
         Expression expression = createExpression(value, METADATA, TypeProvider.copyOf(symbolTypes));
 
         Map<NodeRef<Expression>, Type> expressionTypes = TYPE_ANALYZER.getTypes(TEST_SESSION, TypeProvider.copyOf(symbolTypes), expression);
-        return SqlToRowExpressionTranslator.translate(expression, SCALAR, expressionTypes, sourceLayout, METADATA, TEST_SESSION, true);
+        return SqlToRowExpressionTranslator.translate(expression, SCALAR, expressionTypes, sourceLayout, METADATA.getFunctionAndTypeManager(), TEST_SESSION, true);
     }
 
     private static Page createPage(List<? extends Type> types, boolean dictionary)

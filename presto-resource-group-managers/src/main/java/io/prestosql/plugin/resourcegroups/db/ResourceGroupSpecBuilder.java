@@ -41,6 +41,7 @@ public class ResourceGroupSpecBuilder
     private final Optional<Boolean> jmxExport;
     private final Optional<Duration> softCpuLimit;
     private final Optional<Duration> hardCpuLimit;
+    private final Optional<String> killPolicy;
     private final Optional<Long> parentId;
     private final ImmutableList.Builder<ResourceGroupSpec> subGroups = ImmutableList.builder();
 
@@ -58,6 +59,7 @@ public class ResourceGroupSpecBuilder
             Optional<Boolean> jmxExport,
             Optional<String> softCpuLimit,
             Optional<String> hardCpuLimit,
+            Optional<String> killPolicy,
             Optional<Long> parentId)
     {
         this.id = id;
@@ -74,6 +76,7 @@ public class ResourceGroupSpecBuilder
         this.jmxExport = requireNonNull(jmxExport, "jmxExport is null");
         this.softCpuLimit = requireNonNull(softCpuLimit, "softCpuLimit is null").map(Duration::valueOf);
         this.hardCpuLimit = requireNonNull(hardCpuLimit, "hardCpuLimit is null").map(Duration::valueOf);
+        this.killPolicy = killPolicy;
         this.parentId = parentId;
     }
 
@@ -95,6 +98,11 @@ public class ResourceGroupSpecBuilder
     public Optional<Duration> getHardCpuLimit()
     {
         return hardCpuLimit;
+    }
+
+    public Optional<String> getKillPolicy()
+    {
+        return killPolicy;
     }
 
     public Optional<Long> getParentId()
@@ -123,7 +131,8 @@ public class ResourceGroupSpecBuilder
                 Optional.of(subGroups.build()),
                 jmxExport,
                 softCpuLimit,
-                hardCpuLimit);
+                hardCpuLimit,
+                killPolicy);
     }
 
     public static class Mapper
@@ -133,50 +142,57 @@ public class ResourceGroupSpecBuilder
         public ResourceGroupSpecBuilder map(ResultSet resultSet, StatementContext context)
                 throws SQLException
         {
-            long id = resultSet.getLong("resource_group_id");
-            ResourceGroupNameTemplate nameTemplate = new ResourceGroupNameTemplate(resultSet.getString("name"));
-            String softMemoryLimit = resultSet.getString("soft_memory_limit");
-            String softReservedMemory = resultSet.getString("soft_reserved_memory");
-            int maxQueued = resultSet.getInt("max_queued");
-            Optional<Integer> softConcurrencyLimit = Optional.of(resultSet.getInt("soft_concurrency_limit"));
+            long resourceGroupId = resultSet.getLong("resource_group_id");
+            ResourceGroupNameTemplate resourceGroupNameTemplate = new ResourceGroupNameTemplate(resultSet.getString("name"));
+            String memoryLimitSoft = resultSet.getString("soft_memory_limit");
+            String reservedMemorySoft = resultSet.getString("soft_reserved_memory");
+            int queuedMax = resultSet.getInt("max_queued");
+            Optional<Integer> concurrencyLimitSoft = Optional.of(resultSet.getInt("soft_concurrency_limit"));
             if (resultSet.wasNull()) {
-                softConcurrencyLimit = Optional.empty();
+                concurrencyLimitSoft = Optional.empty();
             }
-            int hardConcurrencyLimit = resultSet.getInt("hard_concurrency_limit");
-            Optional<String> schedulingPolicy = Optional.ofNullable(resultSet.getString("scheduling_policy"));
-            Optional<Integer> schedulingWeight = Optional.of(resultSet.getInt("scheduling_weight"));
+            int hConcurrencyLimit = resultSet.getInt("hard_concurrency_limit");
+            Optional<String> policy = Optional.ofNullable(resultSet.getString("scheduling_policy"));
+            Optional<Integer> weight = Optional.of(resultSet.getInt("scheduling_weight"));
             if (resultSet.wasNull()) {
-                schedulingWeight = Optional.empty();
+                weight = Optional.empty();
             }
-            Optional<Boolean> jmxExport = Optional.of(resultSet.getBoolean("jmx_export"));
+            Optional<Boolean> export = Optional.of(resultSet.getBoolean("jmx_export"));
             if (resultSet.wasNull()) {
-                jmxExport = Optional.empty();
+                export = Optional.empty();
             }
-            Optional<String> softCpuLimit = Optional.ofNullable(resultSet.getString("soft_cpu_limit"));
-            Optional<String> hardCpuLimit = Optional.ofNullable(resultSet.getString("hard_cpu_limit"));
-            Optional<Long> parentId = Optional.of(resultSet.getLong("parent"));
+            Optional<String> softLimit = Optional.ofNullable(resultSet.getString("soft_cpu_limit"));
+            Optional<String> hardLimit = Optional.ofNullable(resultSet.getString("hard_cpu_limit"));
+            Optional<Long> parent = Optional.of(resultSet.getLong("parent"));
             if (resultSet.wasNull()) {
-                parentId = Optional.empty();
+                parent = Optional.empty();
             }
-            Optional<Integer> hardReservedConcurrency = Optional.of(resultSet.getInt("hard_reserved_concurrency"));
+            Optional<Integer> reservedConcurrency = Optional.of(resultSet.getInt("hard_reserved_concurrency"));
             if (resultSet.wasNull()) {
-                hardReservedConcurrency = Optional.empty();
+                reservedConcurrency = Optional.empty();
             }
+
+            Optional<String> kPolicy = Optional.ofNullable(resultSet.getString("kill_policy"));
+            if (resultSet.wasNull()) {
+                kPolicy = Optional.empty();
+            }
+
             return new ResourceGroupSpecBuilder(
-                    id,
-                    nameTemplate,
-                    softMemoryLimit,
-                    softReservedMemory,
-                    maxQueued,
-                    softConcurrencyLimit,
-                    hardConcurrencyLimit,
-                    hardReservedConcurrency,
-                    schedulingPolicy,
-                    schedulingWeight,
-                    jmxExport,
-                    softCpuLimit,
-                    hardCpuLimit,
-                    parentId);
+                    resourceGroupId,
+                    resourceGroupNameTemplate,
+                    memoryLimitSoft,
+                    reservedMemorySoft,
+                    queuedMax,
+                    concurrencyLimitSoft,
+                    hConcurrencyLimit,
+                    reservedConcurrency,
+                    policy,
+                    weight,
+                    export,
+                    softLimit,
+                    hardLimit,
+                    kPolicy,
+                    parent);
         }
     }
 }

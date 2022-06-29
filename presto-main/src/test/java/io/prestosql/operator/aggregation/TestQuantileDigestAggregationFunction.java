@@ -20,6 +20,7 @@ import io.prestosql.metadata.Metadata;
 import io.prestosql.operator.scalar.AbstractTestFunctions;
 import io.prestosql.spi.Page;
 import io.prestosql.spi.block.Block;
+import io.prestosql.spi.connector.QualifiedObjectName;
 import io.prestosql.spi.function.Signature;
 import io.prestosql.spi.type.SqlVarbinary;
 import io.prestosql.spi.type.StandardTypes;
@@ -164,8 +165,8 @@ public class TestQuantileDigestAggregationFunction
     private InternalAggregationFunction getAggregationFunction(String... type)
     {
         TypeSignature[] typeSignatures = Arrays.stream(type).map(TypeSignature::parseTypeSignature).toArray(TypeSignature[]::new);
-        return METADATA.getAggregateFunctionImplementation(
-                new Signature("qdigest_agg",
+        return METADATA.getFunctionAndTypeManager().getAggregateFunctionImplementation(
+                new Signature(QualifiedObjectName.valueOfDefaultFunction("qdigest_agg"),
                         AGGREGATE,
                         parseTypeSignature(format("qdigest(%s)", type[0])),
                         typeSignatures));
@@ -323,14 +324,14 @@ public class TestQuantileDigestAggregationFunction
 
         // Test each quantile individually (value_at_quantile)
         for (double percentile : percentiles) {
-            assertPercentileWithinError(type, binary, error, rows, percentile);
+            assertOnePercentileWithinError(type, binary, error, rows, percentile);
         }
 
         // Test all the quantiles (values_at_quantiles)
-        assertPercentilesWithinError(type, binary, error, rows, percentiles);
+        assertPercentilesWithinErrorWithArray(type, binary, error, rows, percentiles);
     }
 
-    private void assertPercentileWithinError(String type, SqlVarbinary binary, double error, List<? extends Number> rows, double percentile)
+    private void assertOnePercentileWithinError(String type, SqlVarbinary binary, double error, List<? extends Number> rows, double percentile)
     {
         Number lowerBound = getLowerBound(error, rows, percentile);
         Number upperBound = getUpperBound(error, rows, percentile);
@@ -346,7 +347,7 @@ public class TestQuantileDigestAggregationFunction
                 true);
     }
 
-    private void assertPercentilesWithinError(String type, SqlVarbinary binary, double error, List<? extends Number> rows, double[] percentiles)
+    private void assertPercentilesWithinErrorWithArray(String type, SqlVarbinary binary, double error, List<? extends Number> rows, double[] percentiles)
     {
         List<Double> boxedPercentiles = Arrays.stream(percentiles).sorted().boxed().collect(toImmutableList());
         List<Number> lowerBounds = boxedPercentiles.stream().map(percentile -> getLowerBound(error, rows, percentile)).collect(toImmutableList());

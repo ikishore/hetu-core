@@ -37,7 +37,6 @@ import io.prestosql.plugin.hive.metastore.SemiTransactionalHiveMetastore;
 import io.prestosql.plugin.hive.security.AccessControlMetadataFactory;
 import io.prestosql.plugin.hive.statistics.MetastoreHiveStatisticsProvider;
 import io.prestosql.spi.type.TypeManager;
-import org.joda.time.DateTimeZone;
 
 import java.util.Optional;
 import java.util.concurrent.ExecutorService;
@@ -50,7 +49,6 @@ public class CarbondataMetadataFactory
         extends HiveMetadataFactory
 {
     private static final Logger log = Logger.get(HiveMetadataFactory.class);
-    private final boolean allowCorruptWritesForTesting;
     private final boolean skipDeletionForAlter;
     private final boolean skipTargetCleanupOnRollback;
     private final boolean writesToNonManagedTablesEnabled;
@@ -60,7 +58,6 @@ public class CarbondataMetadataFactory
     private final HiveMetastore metastore;
     private final HdfsEnvironment hdfsEnvironment;
     private final HivePartitionManager partitionManager;
-    private final DateTimeZone timeZone;
     private final TypeManager typeManager;
     private final LocationService locationService;
     private final BoundedExecutor renameExecution;
@@ -93,9 +90,8 @@ public class CarbondataMetadataFactory
                                      AccessControlMetadataFactory accessControlMetadataFactory,
                                      CarbondataTableReader carbondataTableReader)
     {
-        this(metastore, hdfsEnvironment, partitionManager, carbondataConfig.getDateTimeZone(),
+        this(metastore, hdfsEnvironment, partitionManager,
                 carbondataConfig.getMaxConcurrentFileRenames(),
-                carbondataConfig.getAllowCorruptWritesForTesting(),
                 carbondataConfig.isSkipDeletionForAlter(),
                 carbondataConfig.isSkipTargetCleanupOnRollback(),
                 true,
@@ -108,13 +104,13 @@ public class CarbondataMetadataFactory
                 vacuumExecutorService, heartbeatService, hiveMetastoreClientService, typeTranslator, nodeVersion.toString(),
                 accessControlMetadataFactory, carbondataTableReader, carbondataConfig.getStoreLocation(),
                 carbondataConfig.getMajorVacuumSegSize(), carbondataConfig.getMinorVacuumSegCount(),
-                carbondataConfig.getAutoVacuumEnable());
+                carbondataConfig.getAutoVacuumEnable(), carbondataConfig.getMetastoreWriteBatchSize());
     }
 
     public CarbondataMetadataFactory(HiveMetastore metastore, HdfsEnvironment hdfsEnvironment,
-                                     HivePartitionManager partitionManager, DateTimeZone timeZone,
+                                     HivePartitionManager partitionManager,
                                      int maxConcurrentFileRenames,
-                                     boolean allowCorruptWritesForTesting, boolean skipDeletionForAlter,
+                                     boolean skipDeletionForAlter,
                                      boolean skipTargetCleanupOnRollback, boolean writesToNonManagedTablesEnabled,
                                      boolean createsOfNonManagedTablesEnabled, boolean tableCreatesWithLocationAllowed,
                                      long perTransactionCacheMaximumSize,
@@ -128,14 +124,12 @@ public class CarbondataMetadataFactory
                                      TypeTranslator typeTranslator, String hetuVersion,
                                      AccessControlMetadataFactory accessControlMetadataFactory,
                                      CarbondataTableReader carbondataTableReader, String storeLocation, long majorVacuumSegSize, long minorVacuumSegCount,
-                                     boolean autoVacuumEnable)
+                                     boolean autoVacuumEnable, int hmsWriteBatchSize)
     {
         super(metastore,
                 hdfsEnvironment,
                 partitionManager,
-                timeZone,
                 maxConcurrentFileRenames,
-                allowCorruptWritesForTesting,
                 skipDeletionForAlter,
                 skipTargetCleanupOnRollback,
                 writesToNonManagedTablesEnabled,
@@ -154,8 +148,9 @@ public class CarbondataMetadataFactory
                 typeTranslator,
                 hetuVersion,
                 accessControlMetadataFactory,
-                2, 0.0, false, Optional.of(new Duration(5, TimeUnit.MINUTES)));
-        this.allowCorruptWritesForTesting = allowCorruptWritesForTesting;
+                2, 0.0, false,
+                Optional.of(new Duration(5, TimeUnit.MINUTES)),
+                hmsWriteBatchSize);
         this.skipDeletionForAlter = skipDeletionForAlter;
         this.skipTargetCleanupOnRollback = skipTargetCleanupOnRollback;
         this.writesToNonManagedTablesEnabled = writesToNonManagedTablesEnabled;
@@ -165,7 +160,6 @@ public class CarbondataMetadataFactory
         this.metastore = requireNonNull(metastore, "metastore is null");
         this.hdfsEnvironment = requireNonNull(hdfsEnvironment, "hdfsEnvironment is null");
         this.partitionManager = requireNonNull(partitionManager, "partitionManager is null");
-        this.timeZone = requireNonNull(timeZone, "timeZone is null");
         this.typeManager = requireNonNull(typeManager, "typeManager is null");
         this.locationService = requireNonNull(locationService, "locationService is null");
         this.partitionUpdateCodec = requireNonNull(partitionUpdateCodec, "partitionUpdateCodec is null");
@@ -174,13 +168,6 @@ public class CarbondataMetadataFactory
         this.hetuVersion = requireNonNull(hetuVersion, "hetuVersion is null");
         this.accessControlMetadataFactory = requireNonNull(accessControlMetadataFactory,
                 "accessControlMetadataFactory is null");
-        if (!allowCorruptWritesForTesting && !timeZone.equals(DateTimeZone.getDefault())) {
-            log.warn(
-                    "Hive writes are disabled. To write data to Hive, your JVM timezone must match the " +
-                            "Hive storage timezone. Add -Duser.timezone=%s to your JVM arguments",
-                    timeZone.getID());
-        }
-
         this.renameExecution = new BoundedExecutor(executorService, maxConcurrentFileRenames);
         this.vacuumExecutorService = requireNonNull(vacuumExecutorService, "vacuumExecutorService is null");
         this.hiveMetastoreClientService = requireNonNull(hiveMetastoreClientService, "hiveMetastoreClientService is null");
@@ -204,20 +191,18 @@ public class CarbondataMetadataFactory
     @Override
     public HiveMetadata get()
     {
-        SemiTransactionalHiveMetastore metastore =
+        SemiTransactionalHiveMetastore semiTransactionalHiveMetastore =
                 new SemiTransactionalHiveMetastore(this.hdfsEnvironment,
                         CachingHiveMetastore.memoizeMetastore(this.metastore, this.perTransactionCacheMaximumSize),
                         this.renameExecution,
                         vacuumExecutorService, this.vacuumCleanupInterval, this.skipDeletionForAlter,
                         this.skipTargetCleanupOnRollback,
                         this.hiveTransactionHeartbeatInterval,
-                        this.heartbeatService, hiveMetastoreClientService);
+                        this.heartbeatService, hiveMetastoreClientService, hmsWriteBatchSize);
 
-        return new CarbondataMetadata(metastore,
+        return new CarbondataMetadata(semiTransactionalHiveMetastore,
                 this.hdfsEnvironment,
                 this.partitionManager,
-                this.timeZone,
-                this.allowCorruptWritesForTesting,
                 this.writesToNonManagedTablesEnabled,
                 this.createsOfNonManagedTablesEnabled,
                 this.tableCreatesWithLocationAllowed,
@@ -227,8 +212,8 @@ public class CarbondataMetadataFactory
                 this.segmentInfoCodec,
                 this.typeTranslator,
                 this.hetuVersion,
-                new MetastoreHiveStatisticsProvider(metastore),
-                this.accessControlMetadataFactory.create(metastore),
+                new MetastoreHiveStatisticsProvider(semiTransactionalHiveMetastore, statsCache, samplePartitionCache),
+                this.accessControlMetadataFactory.create(semiTransactionalHiveMetastore),
                 carbondataTableReader,
                 this.carbondataTableStore,
                 this.carbondataMajorVacuumSegmentSize,

@@ -13,6 +13,7 @@
  */
 package io.prestosql.operator;
 
+import com.google.common.annotations.VisibleForTesting;
 import com.google.common.base.Ticker;
 import com.google.common.collect.ImmutableList;
 import com.google.common.net.MediaType;
@@ -32,7 +33,9 @@ import io.airlift.slice.SliceInput;
 import io.airlift.units.DataSize;
 import io.airlift.units.Duration;
 import io.hetu.core.transport.execution.buffer.SerializedPage;
+import io.prestosql.failuredetector.FailureDetector;
 import io.prestosql.server.remotetask.Backoff;
+import io.prestosql.snapshot.QuerySnapshotManager;
 import io.prestosql.spi.PrestoException;
 import org.joda.time.DateTime;
 
@@ -56,7 +59,6 @@ import java.util.concurrent.atomic.AtomicLong;
 
 import static com.google.common.base.MoreObjects.toStringHelper;
 import static com.google.common.base.Preconditions.checkState;
-import static com.google.common.base.Strings.isNullOrEmpty;
 import static com.google.common.net.HttpHeaders.CONTENT_TYPE;
 import static io.airlift.http.client.HttpStatus.familyForStatusCode;
 import static io.airlift.http.client.Request.Builder.prepareDelete;
@@ -75,8 +77,6 @@ import static io.prestosql.operator.HttpPageBufferClient.PagesResponse.createEmp
 import static io.prestosql.operator.HttpPageBufferClient.PagesResponse.createPagesResponse;
 import static io.prestosql.spi.HostAddress.fromUri;
 import static io.prestosql.spi.StandardErrorCode.REMOTE_BUFFER_CLOSE_FAILED;
-import static io.prestosql.spi.StandardErrorCode.REMOTE_TASK_MISMATCH;
-import static io.prestosql.util.Failures.REMOTE_TASK_MISMATCH_ERROR;
 import static io.prestosql.util.Failures.WORKER_NODE_ERROR;
 import static java.lang.String.format;
 import static java.nio.charset.StandardCharsets.UTF_8;
@@ -89,6 +89,7 @@ public final class HttpPageBufferClient
         implements Closeable
 {
     private static final Logger log = Logger.get(HttpPageBufferClient.class);
+    public static final String PAGE_TRANSPORT_ERROR_PREFIX = "Page transport error with response status code";
 
     /**
      * For each request, the addPage method will be called zero or more times,
@@ -116,6 +117,7 @@ public final class HttpPageBufferClient
     private final ClientCallback clientCallback;
     private final ScheduledExecutorService scheduler;
     private final Backoff backoff;
+    private final FailureDetector failureDetector;
 
     @GuardedBy("this")
     private boolean closed;
@@ -130,7 +132,7 @@ public final class HttpPageBufferClient
     @GuardedBy("this")
     private boolean completed;
     @GuardedBy("this")
-    private String taskInstanceId;
+    private final String taskInstanceId;
 
     private final AtomicLong rowsReceived = new AtomicLong();
     private final AtomicInteger pagesReceived = new AtomicInteger();
@@ -144,40 +146,61 @@ public final class HttpPageBufferClient
 
     private final Executor pageBufferClientCallbackExecutor;
 
-    public HttpPageBufferClient(
-            HttpClient httpClient,
-            DataSize maxResponseSize,
-            Duration maxErrorDuration,
-            boolean acknowledgePages,
-            URI location,
-            ClientCallback clientCallback,
-            ScheduledExecutorService scheduler,
-            Executor pageBufferClientCallbackExecutor)
-    {
-        this(httpClient, maxResponseSize, maxErrorDuration, acknowledgePages, location, clientCallback, scheduler, Ticker.systemTicker(), pageBufferClientCallbackExecutor);
-    }
+    private final boolean isSnapshotEnabled;
+    private final QuerySnapshotManager querySnapshotManager;
+    private boolean detectTimeoutFailures;
 
     public HttpPageBufferClient(
             HttpClient httpClient,
             DataSize maxResponseSize,
             Duration maxErrorDuration,
             boolean acknowledgePages,
-            URI location,
+            TaskLocation location,
+            ClientCallback clientCallback,
+            ScheduledExecutorService scheduler,
+            Executor pageBufferClientCallbackExecutor,
+            boolean isSnapshotEnabled,
+            QuerySnapshotManager querySnapshotManager,
+            FailureDetector failureDetector,
+            boolean detectTimeoutFailures,
+            int maxRetryCount)
+    {
+        this(httpClient, maxResponseSize, maxErrorDuration, acknowledgePages, location, clientCallback, scheduler, Ticker.systemTicker(), pageBufferClientCallbackExecutor, isSnapshotEnabled, querySnapshotManager, failureDetector, detectTimeoutFailures, maxRetryCount);
+    }
+
+    @VisibleForTesting
+    HttpPageBufferClient(
+            HttpClient httpClient,
+            DataSize maxResponseSize,
+            Duration maxErrorDuration,
+            boolean acknowledgePages,
+            TaskLocation location,
             ClientCallback clientCallback,
             ScheduledExecutorService scheduler,
             Ticker ticker,
-            Executor pageBufferClientCallbackExecutor)
+            Executor pageBufferClientCallbackExecutor,
+            boolean isSnapshotEnabled,
+            QuerySnapshotManager querySnapshotManager,
+            FailureDetector failureDetector,
+            boolean detectTimeoutFailures,
+            int maxRetryCount)
     {
         this.httpClient = requireNonNull(httpClient, "httpClient is null");
         this.maxResponseSize = requireNonNull(maxResponseSize, "maxResponseSize is null");
         this.acknowledgePages = acknowledgePages;
-        this.location = requireNonNull(location, "location is null");
+        requireNonNull(location, "TaskLocation is null");
+        this.location = requireNonNull(location.getUri(), "location is null");
         this.clientCallback = requireNonNull(clientCallback, "clientCallback is null");
         this.scheduler = requireNonNull(scheduler, "scheduler is null");
+        this.taskInstanceId = requireNonNull(location.getInstanceId(), "taskInstanceId is null");
         this.pageBufferClientCallbackExecutor = requireNonNull(pageBufferClientCallbackExecutor, "pageBufferClientCallbackExecutor is null");
         requireNonNull(maxErrorDuration, "maxErrorDuration is null");
         requireNonNull(ticker, "ticker is null");
-        this.backoff = new Backoff(maxErrorDuration, ticker);
+        this.backoff = new Backoff(maxErrorDuration, ticker, maxRetryCount);
+        this.isSnapshotEnabled = isSnapshotEnabled;
+        this.querySnapshotManager = querySnapshotManager;
+        this.failureDetector = failureDetector;
+        this.detectTimeoutFailures = detectTimeoutFailures;
     }
 
     public synchronized PageBufferClientStatus getStatus()
@@ -229,21 +252,21 @@ public final class HttpPageBufferClient
     public void close()
     {
         boolean shouldSendDelete;
-        Future<?> future;
+        Future<?> futureStatus;
         synchronized (this) {
             shouldSendDelete = !closed;
 
             closed = true;
 
-            future = this.future;
+            futureStatus = this.future;
 
             this.future = null;
 
             lastUpdate = DateTime.now();
         }
 
-        if (future != null && !future.isDone()) {
-            future.cancel(true);
+        if (futureStatus != null && !futureStatus.isDone()) {
+            futureStatus.cancel(true);
         }
 
         // abort the output buffer on the remote node; response of delete is ignored
@@ -294,14 +317,24 @@ public final class HttpPageBufferClient
         lastUpdate = DateTime.now();
     }
 
+    private Request.Builder addInstanceIdHeader(Request.Builder builder)
+    {
+        // Snapshot: Add task instance id to all "results" related requests,
+        // so receiver can verify if the instance id matches
+        if (taskInstanceId != null) {
+            builder.setHeader(PRESTO_TASK_INSTANCE_ID, taskInstanceId);
+        }
+        return builder;
+    }
+
     private synchronized void sendGetResults()
     {
         URI uri = HttpUriBuilder.uriBuilderFrom(location).appendPath(String.valueOf(token)).build();
         HttpResponseFuture<PagesResponse> resultFuture = httpClient.executeAsync(
-                prepareGet()
+                addInstanceIdHeader(prepareGet())
                         .setHeader(PRESTO_MAX_SIZE, maxResponseSize.toString())
                         .setUri(uri).build(),
-                new PageResponseHandler());
+                new PageResponseHandler(querySnapshotManager));
 
         future = resultFuture;
         Futures.addCallback(resultFuture, new FutureCallback<PagesResponse>()
@@ -317,15 +350,6 @@ public final class HttpPageBufferClient
                 try {
                     boolean shouldAcknowledge = false;
                     synchronized (HttpPageBufferClient.this) {
-                        if (taskInstanceId == null) {
-                            taskInstanceId = result.getTaskInstanceId();
-                        }
-
-                        if (!isNullOrEmpty(taskInstanceId) && !result.getTaskInstanceId().equals(taskInstanceId)) {
-                            // TODO: update error message
-                            throw new PrestoException(REMOTE_TASK_MISMATCH, format("%s (%s)", REMOTE_TASK_MISMATCH_ERROR, fromUri(uri)));
-                        }
-
                         if (result.getToken() == token) {
                             pages = result.getPages();
                             token = result.getNextToken();
@@ -341,7 +365,7 @@ public final class HttpPageBufferClient
                         // The next request will also make sure the token is acknowledged.
                         // This is to fast release the pages on the buffer side.
                         URI uri = HttpUriBuilder.uriBuilderFrom(location).appendPath(String.valueOf(result.getNextToken())).appendPath("acknowledge").build();
-                        httpClient.executeAsync(prepareGet().setUri(uri).build(), new ResponseHandler<Void, RuntimeException>()
+                        httpClient.executeAsync(addInstanceIdHeader(prepareGet()).setUri(uri).build(), new ResponseHandler<Void, RuntimeException>()
                         {
                             @Override
                             public Void handleException(Request request, Exception exception)
@@ -400,24 +424,57 @@ public final class HttpPageBufferClient
                 log.debug("Request to %s failed %s", uri, t);
                 checkNotHoldsLock(this);
 
-                t = rewriteException(t);
-                if (!(t instanceof PrestoException) && backoff.failure()) {
-                    String message = format("%s (%s - %s failures, failure duration %s, total failed request time %s)",
-                            WORKER_NODE_ERROR,
-                            uri,
-                            backoff.getFailureCount(),
-                            backoff.getFailureDuration().convertTo(SECONDS),
-                            backoff.getFailureRequestTimeTotal().convertTo(SECONDS));
-                    t = new PageTransportTimeoutException(fromUri(uri), message, t);
+                Throwable throwable = rewriteException(t);
+                if (!(throwable instanceof PrestoException)) {
+                    boolean hasFailed;
+                    if (detectTimeoutFailures) {
+                        // timeout based failure detection
+                        hasFailed = backoff.failure();
+                    }
+                    else { // max-retry-count based failure detection
+
+                        /**
+                         * if max retry requests failed, check failure detector info on remote host.
+                         * If node state is gone or unresponsive (e.g. GC pause), immediately fail.
+                         * if node is otherwise (e.g.active), keep retrying till timeout of maxErrorDuration
+                         */
+                        FailureDetector.State state = failureDetector.getState(fromUri(uri));
+                        log.debug("failure detector state is " + state.toString());
+                        hasFailed = (backoff.maxTried() &&
+                                !FailureDetector.State.ALIVE.equals(state)
+                                || backoff.timeout());
+                    }
+                    if (hasFailed) {
+                        String message = format("%s (%s - %s failures, failure duration %s, total failed request time %s)",
+                                WORKER_NODE_ERROR,
+                                uri,
+                                backoff.getFailureCount(),
+                                backoff.getFailureDuration().convertTo(SECONDS),
+                                backoff.getFailureRequestTimeTotal().convertTo(SECONDS));
+                        if (querySnapshotManager != null) {
+                            // Snapshot: recover from remote server errors
+                            log.debug(throwable, "Snapshot: remote task failed with resumable error: %s", message);
+                            querySnapshotManager.cancelToResume();
+                            handleFailure(throwable, resultFuture);
+                            return;
+                        }
+                        throwable = new PageTransportTimeoutException(fromUri(uri), message, throwable);
+                    }
                 }
-                handleFailure(t, resultFuture);
+                handleFailure(throwable, resultFuture);
             }
         }, pageBufferClientCallbackExecutor);
     }
 
     private synchronized void sendDelete()
     {
-        HttpResponseFuture<StatusResponse> resultFuture = httpClient.executeAsync(prepareDelete().setUri(location).build(), createStatusResponseHandler());
+        if (isSnapshotEnabled && taskInstanceId == null) {
+            // Snapshot: Never called remote task successfully. Trying to cancel the task result without a taskInstanceId is dangerous.
+            // If the task had already been cancelled, this would create a new task with "aborted" state.
+            // That prevents scheduling the task on the worker again.
+            return;
+        }
+        HttpResponseFuture<StatusResponse> resultFuture = httpClient.executeAsync(addInstanceIdHeader(prepareDelete()).setUri(location).build(), createStatusResponseHandler());
         future = resultFuture;
         Futures.addCallback(resultFuture, new FutureCallback<StatusResponse>()
         {
@@ -443,15 +500,16 @@ public final class HttpPageBufferClient
                 checkNotHoldsLock(this);
 
                 log.error("Request to delete %s failed %s", location, t);
-                if (!(t instanceof PrestoException) && backoff.failure()) {
+                Throwable throwable = t;
+                if (!(throwable instanceof PrestoException) && backoff.failure()) {
                     String message = format("Error closing remote buffer (%s - %s failures, failure duration %s, total failed request time %s)",
                             location,
                             backoff.getFailureCount(),
                             backoff.getFailureDuration().convertTo(SECONDS),
                             backoff.getFailureRequestTimeTotal().convertTo(SECONDS));
-                    t = new PrestoException(REMOTE_BUFFER_CLOSE_FAILED, message, t);
+                    throwable = new PrestoException(REMOTE_BUFFER_CLOSE_FAILED, message, throwable);
                 }
-                handleFailure(t, resultFuture);
+                handleFailure(throwable, resultFuture);
             }
         }, pageBufferClientCallbackExecutor);
     }
@@ -539,6 +597,13 @@ public final class HttpPageBufferClient
     public static class PageResponseHandler
             implements ResponseHandler<PagesResponse, RuntimeException>
     {
+        private final QuerySnapshotManager querySnapshotManager;
+
+        private PageResponseHandler(QuerySnapshotManager querySnapshotManager)
+        {
+            this.querySnapshotManager = querySnapshotManager;
+        }
+
         @Override
         public PagesResponse handleException(Request request, Exception exception)
         {
@@ -552,7 +617,7 @@ public final class HttpPageBufferClient
                 // no content means no content was created within the wait period, but query is still ok
                 // if job is finished, complete is set in the response
                 if (response.getStatusCode() == HttpStatus.NO_CONTENT.code()) {
-                    return createEmptyPagesResponse(getTaskInstanceId(response), getToken(response), getNextToken(response), getComplete(response));
+                    return createEmptyPagesResponse(getToken(response), getNextToken(response), getComplete(response));
                 }
 
                 // otherwise we must have gotten an OK response, everything else is considered fatal
@@ -582,34 +647,33 @@ public final class HttpPageBufferClient
                 }
                 if (!mediaTypeMatches(contentType, PRESTO_PAGES_TYPE)) {
                     throw new PageTransportErrorException(format("Expected %s response from server but got %s",
-                        PRESTO_PAGES_TYPE, contentType));
+                            PRESTO_PAGES_TYPE, contentType));
                 }
 
-                String taskInstanceId = getTaskInstanceId(response);
-                long token = getToken(response);
+                long tokenInfo = getToken(response);
                 long nextToken = getNextToken(response);
                 boolean complete = getComplete(response);
 
                 try (SliceInput input = new InputStreamSliceInput(response.getInputStream())) {
                     List<SerializedPage> pages = ImmutableList.copyOf(readSerializedPages(input));
-                    return createPagesResponse(taskInstanceId, token, nextToken, pages, complete);
+                    return createPagesResponse(tokenInfo, nextToken, pages, complete);
                 }
                 catch (IOException e) {
                     throw new RuntimeException(e);
                 }
             }
             catch (PageTransportErrorException e) {
-                throw new PageTransportErrorException(format("Error fetching %s: %s", request.getUri().toASCIIString(), e.getMessage()), e);
+                if (querySnapshotManager != null && querySnapshotManager.isCoordinator()) {
+                    // Snapshot: for internal server errors on the worker, or unexpected OK results, treat as resumable error.
+                    if (response.getStatusCode() >= 500 || response.getStatusCode() == HttpStatus.OK.code()) {
+                        log.debug(e.getMessage());
+                        querySnapshotManager.cancelToResume();
+                        return createEmptyPagesResponse(0, 0, false);
+                    }
+                }
+                // SqlStageExecution#updateTaskStatus() depends on the following message format.
+                throw new PageTransportErrorException(format("%s %d! Error fetching %s: %s", PAGE_TRANSPORT_ERROR_PREFIX, response.getStatusCode(), request.getUri().toASCIIString(), e.getMessage()), e);
             }
-        }
-
-        private static String getTaskInstanceId(Response response)
-        {
-            String taskInstanceId = response.getHeader(PRESTO_TASK_INSTANCE_ID);
-            if (taskInstanceId == null) {
-                throw new PageTransportErrorException(format("Expected %s header", PRESTO_TASK_INSTANCE_ID));
-            }
-            return taskInstanceId;
         }
 
         private static long getToken(Response response)
@@ -652,25 +716,23 @@ public final class HttpPageBufferClient
 
     public static class PagesResponse
     {
-        public static PagesResponse createPagesResponse(String taskInstanceId, long token, long nextToken, Iterable<SerializedPage> pages, boolean complete)
+        public static PagesResponse createPagesResponse(long token, long nextToken, Iterable<SerializedPage> pages, boolean complete)
         {
-            return new PagesResponse(taskInstanceId, token, nextToken, pages, complete);
+            return new PagesResponse(token, nextToken, pages, complete);
         }
 
-        public static PagesResponse createEmptyPagesResponse(String taskInstanceId, long token, long nextToken, boolean complete)
+        public static PagesResponse createEmptyPagesResponse(long token, long nextToken, boolean complete)
         {
-            return new PagesResponse(taskInstanceId, token, nextToken, ImmutableList.of(), complete);
+            return new PagesResponse(token, nextToken, ImmutableList.of(), complete);
         }
 
-        private final String taskInstanceId;
         private final long token;
         private final long nextToken;
         private final List<SerializedPage> pages;
         private final boolean clientComplete;
 
-        private PagesResponse(String taskInstanceId, long token, long nextToken, Iterable<SerializedPage> pages, boolean clientComplete)
+        private PagesResponse(long token, long nextToken, Iterable<SerializedPage> pages, boolean clientComplete)
         {
-            this.taskInstanceId = taskInstanceId;
             this.token = token;
             this.nextToken = nextToken;
             this.pages = ImmutableList.copyOf(pages);
@@ -695,11 +757,6 @@ public final class HttpPageBufferClient
         public boolean isClientComplete()
         {
             return clientComplete;
-        }
-
-        public String getTaskInstanceId()
-        {
-            return taskInstanceId;
         }
 
         @Override

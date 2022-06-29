@@ -17,8 +17,9 @@ import com.google.common.collect.ImmutableList;
 import io.prestosql.Session;
 import io.prestosql.execution.warnings.WarningCollector;
 import io.prestosql.metadata.Metadata;
+import io.prestosql.spi.connector.ConnectorSession;
+import io.prestosql.spi.function.FunctionMetadata;
 import io.prestosql.spi.function.OperatorType;
-import io.prestosql.spi.function.Signature;
 import io.prestosql.spi.plan.Symbol;
 import io.prestosql.spi.relation.CallExpression;
 import io.prestosql.spi.relation.ConstantExpression;
@@ -37,6 +38,7 @@ import io.prestosql.sql.analyzer.Scope;
 import io.prestosql.sql.planner.ExpressionInterpreter;
 import io.prestosql.sql.planner.NoOpSymbolResolver;
 import io.prestosql.sql.planner.TypeProvider;
+import io.prestosql.sql.relational.FunctionResolution;
 import io.prestosql.sql.relational.RowExpressionOptimizer;
 import io.prestosql.sql.tree.ArithmeticBinaryExpression;
 import io.prestosql.sql.tree.ArithmeticUnaryExpression;
@@ -56,6 +58,7 @@ import javax.inject.Inject;
 import java.util.Map;
 import java.util.OptionalDouble;
 
+import static com.google.common.base.Preconditions.checkState;
 import static io.prestosql.cost.StatsUtil.toStatsRepresentation;
 import static io.prestosql.spi.function.OperatorType.DIVIDE;
 import static io.prestosql.spi.function.OperatorType.MODULUS;
@@ -90,6 +93,11 @@ public class ScalarStatsCalculator
 
     public SymbolStatsEstimate calculate(RowExpression scalarExpression, PlanNodeStatsEstimate inputStatistics, Session session, Map<Integer, Symbol> layout)
     {
+        return scalarExpression.accept(new RowExpressionStatsVisitor(inputStatistics, session.toConnectorSession(), layout), null);
+    }
+
+    public SymbolStatsEstimate calculate(RowExpression scalarExpression, PlanNodeStatsEstimate inputStatistics, ConnectorSession session, Map<Integer, Symbol> layout)
+    {
         return scalarExpression.accept(new RowExpressionStatsVisitor(inputStatistics, session, layout), null);
     }
 
@@ -97,10 +105,11 @@ public class ScalarStatsCalculator
             implements RowExpressionVisitor<SymbolStatsEstimate, Void>
     {
         private final PlanNodeStatsEstimate input;
-        private final Session session;
+        private final ConnectorSession session;
         private final Map<Integer, Symbol> layout;
+        private final FunctionResolution functionResolution = new FunctionResolution(metadata.getFunctionAndTypeManager());
 
-        public RowExpressionStatsVisitor(PlanNodeStatsEstimate input, Session session, Map<Integer, Symbol> layout)
+        public RowExpressionStatsVisitor(PlanNodeStatsEstimate input, ConnectorSession session, Map<Integer, Symbol> layout)
         {
             this.input = requireNonNull(input, "input is null");
             this.session = requireNonNull(session, "session is null");
@@ -110,20 +119,16 @@ public class ScalarStatsCalculator
         @Override
         public SymbolStatsEstimate visitCall(CallExpression call, Void context)
         {
-            Signature signature = call.getSignature();
-            if (signature.getName().contains("NEGATION")) {
+            if (functionResolution.isNegateFunction(call.getFunctionHandle())) {
                 return computeNegationStatistics(call, context);
             }
 
-            if (!signature.getName().startsWith("$operator$")) {
-                return SymbolStatsEstimate.unknown();
-            }
-
-            if (signature.unmangleOperator(signature.getName()).isArithmeticOperator()) {
+            FunctionMetadata functionMetadata = metadata.getFunctionAndTypeManager().getFunctionMetadata(call.getFunctionHandle());
+            if (functionMetadata.getOperatorType().map(OperatorType::isArithmeticOperator).orElse(false)) {
                 return computeArithmeticBinaryStatistics(call, context);
             }
 
-            RowExpression value = new RowExpressionOptimizer(metadata).optimize(call, OPTIMIZED, session.toConnectorSession());
+            RowExpression value = new RowExpressionOptimizer(metadata).optimize(call, OPTIMIZED, session);
 
             if (value instanceof ConstantExpression && ((ConstantExpression) value).getValue() == null) {
                 return nullStatsEstimate();
@@ -134,7 +139,7 @@ public class ScalarStatsCalculator
             }
 
             // value is not a constant but we can still propagate estimation through cast
-            if (signature.unmangleOperator(signature.getName()).equals(OperatorType.CAST)) {
+            if (functionResolution.isCastFunction(call.getFunctionHandle())) {
                 return computeCastStatistics(call, context);
             }
             return SymbolStatsEstimate.unknown();
@@ -237,13 +242,13 @@ public class ScalarStatsCalculator
         {
             requireNonNull(call, "call is null");
             SymbolStatsEstimate stats = call.getArguments().get(0).accept(this, context);
-            if (call.getSignature().getName().contains("NEGATION")) {
+            if (functionResolution.isNegateFunction(call.getFunctionHandle())) {
                 return SymbolStatsEstimate.buildFrom(stats)
                         .setLowValue(-stats.getHighValue())
                         .setHighValue(-stats.getLowValue())
                         .build();
             }
-            throw new IllegalStateException(format("Unexpected sign: %s(%s)" + call.getSignature().getName(), call.getSignature()));
+            throw new IllegalStateException(format("Unexpected sign: %s(%s)" + call.getDisplayName(), call.getFunctionHandle()));
         }
 
         private SymbolStatsEstimate computeArithmeticBinaryStatistics(CallExpression call, Void context)
@@ -257,7 +262,10 @@ public class ScalarStatsCalculator
                     .setNullsFraction(left.getNullsFraction() + right.getNullsFraction() - left.getNullsFraction() * right.getNullsFraction())
                     .setDistinctValuesCount(min(left.getDistinctValuesCount() * right.getDistinctValuesCount(), input.getOutputRowCount()));
 
-            OperatorType operatorType = call.getSignature().unmangleOperator(call.getSignature().getName());
+            FunctionMetadata functionMetadata = metadata.getFunctionAndTypeManager().getFunctionMetadata(call.getFunctionHandle());
+            checkState(functionMetadata.getOperatorType().isPresent());
+
+            OperatorType operatorType = functionMetadata.getOperatorType().get();
             double leftLow = left.getLowValue();
             double leftHigh = left.getHighValue();
             double rightLow = right.getLowValue();
@@ -355,7 +363,7 @@ public class ScalarStatsCalculator
         {
             Object value = evaluate(metadata, session.toConnectorSession(), node);
             Type type = ExpressionAnalyzer.createConstantAnalyzer(metadata, session, ImmutableList.of(), WarningCollector.NOOP).analyze(node, Scope.create());
-            OptionalDouble doubleValue = toStatsRepresentation(metadata, session, type, value);
+            OptionalDouble doubleValue = toStatsRepresentation(metadata, session.toConnectorSession(), type, value);
             SymbolStatsEstimate.Builder estimate = SymbolStatsEstimate.builder()
                     .setNullsFraction(0)
                     .setDistinctValuesCount(1);

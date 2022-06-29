@@ -28,42 +28,51 @@ import static java.util.Objects.requireNonNull;
 public final class MemoryTableHandle
         implements ConnectorTableHandle
 {
-    private final long id;
+    private final String schemaName;
     private final String tableName;
+    private final long id;
     private final OptionalLong limit;
     private final OptionalDouble sampleRatio;
     private final TupleDomain<ColumnHandle> predicate;
 
-    public MemoryTableHandle(long id, String name)
+    public MemoryTableHandle(long id, String schemaName, String tableName)
     {
-        this(id, name, OptionalLong.empty(), OptionalDouble.empty(), TupleDomain.all());
+        this(id, schemaName, tableName, OptionalLong.empty(), OptionalDouble.empty(), TupleDomain.all());
     }
 
     @JsonCreator
     public MemoryTableHandle(
             @JsonProperty("id") long id,
+            @JsonProperty("schemaName") String schemaName,
             @JsonProperty("tableName") String tableName,
             @JsonProperty("limit") OptionalLong limit,
             @JsonProperty("sampleRatio") OptionalDouble sampleRatio,
             @JsonProperty("predicate") TupleDomain<ColumnHandle> predicate)
     {
         this.id = id;
-        this.tableName = tableName;
+        this.schemaName = requireNonNull(schemaName, "schemaName is null");
+        this.tableName = requireNonNull(tableName, "tableName is null");
         this.limit = requireNonNull(limit, "limit is null");
         this.sampleRatio = requireNonNull(sampleRatio, "sampleRatio is null");
         this.predicate = requireNonNull(predicate, "predicate is null");
     }
 
     @JsonProperty
-    public String getTableName()
-    {
-        return tableName;
-    }
-
-    @JsonProperty
     public long getId()
     {
         return id;
+    }
+
+    @JsonProperty
+    public String getSchemaName()
+    {
+        return schemaName;
+    }
+
+    @JsonProperty
+    public String getTableName()
+    {
+        return tableName;
     }
 
     @JsonProperty
@@ -82,6 +91,12 @@ public final class MemoryTableHandle
     public TupleDomain<ColumnHandle> getPredicate()
     {
         return predicate;
+    }
+
+    @Override
+    public String getSchemaPrefixedTableName()
+    {
+        return String.format("%s.%s", schemaName, tableName);
     }
 
     @Override
@@ -109,7 +124,7 @@ public final class MemoryTableHandle
     public String toString()
     {
         StringBuilder builder = new StringBuilder();
-        builder.append(id);
+        builder.append(schemaName).append(":").append(tableName);
         limit.ifPresent(value -> builder.append("(limit:" + value + ")"));
         sampleRatio.ifPresent(value -> builder.append("(sampleRatio:" + value + ")"));
         return builder.toString();

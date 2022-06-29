@@ -27,6 +27,7 @@ import io.prestosql.spi.plan.PlanNodeId;
 import io.prestosql.spi.plan.PlanNodeIdAllocator;
 import io.prestosql.spi.plan.Symbol;
 import io.prestosql.spi.plan.TopNNode;
+import io.prestosql.spi.relation.CallExpression;
 import io.prestosql.spi.relation.RowExpression;
 import io.prestosql.spi.relation.VariableReferenceExpression;
 import io.prestosql.sql.planner.PartitioningScheme;
@@ -157,13 +158,21 @@ public class SymbolMapper
                 ImmutableList.of(),
                 node.getStep(),
                 node.getHashSymbol().map(this::map),
-                node.getGroupIdSymbol().map(this::map));
+                node.getGroupIdSymbol().map(this::map),
+                node.getAggregationType(),
+                node.getFinalizeSymbol());
     }
 
     private Aggregation map(Aggregation aggregation)
     {
         return new Aggregation(
-                aggregation.getSignature(),
+                new CallExpression(
+                        aggregation.getFunctionCall().getDisplayName(),
+                        aggregation.getFunctionCall().getFunctionHandle(),
+                        aggregation.getFunctionCall().getType(),
+                        aggregation.getArguments().stream()
+                                .map(this::map)
+                                .collect(toImmutableList())),
                 aggregation.getArguments().stream()
                         .map(this::map)
                         .collect(toImmutableList()),
@@ -246,9 +255,8 @@ public class SymbolMapper
                 node.getId(),
                 source,
                 map(node.getRowCountSymbol()),
-                node.getCubeName(),
-                node.getDataPredicate(),
-                node.isOverwrite());
+                node.getMetadata(),
+                node.getPredicateColumnsType());
     }
 
     private PartitioningScheme canonicalize(PartitioningScheme scheme, PlanNode source)

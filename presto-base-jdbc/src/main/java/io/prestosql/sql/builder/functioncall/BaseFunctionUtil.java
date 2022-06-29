@@ -1,5 +1,5 @@
 /*
- * Copyright (C) 2018-2020. Huawei Technologies Co., Ltd. All rights reserved.
+ * Copyright (C) 2018-2021. Huawei Technologies Co., Ltd. All rights reserved.
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
  * You may obtain a copy of the License at
@@ -14,12 +14,22 @@
  */
 package io.prestosql.sql.builder.functioncall;
 
+import com.google.common.collect.ImmutableList;
+import io.prestosql.spi.connector.CatalogSchemaName;
+import io.prestosql.spi.relation.CallExpression;
 import io.prestosql.spi.sql.expression.QualifiedName;
 import io.prestosql.spi.sql.expression.Selection;
 
+import java.util.Arrays;
+import java.util.List;
 import java.util.Map;
 import java.util.Optional;
+import java.util.stream.Collectors;
 
+import static io.prestosql.spi.connector.CatalogSchemaName.DEFAULT_NAMESPACE;
+import static io.prestosql.sql.builder.functioncall.FunctionCallConstants.CATALOG_SCHEMA_LENGTH_COUNT;
+import static io.prestosql.sql.builder.functioncall.FunctionCallConstants.DOT_SPLITTER;
+import static io.prestosql.sql.builder.functioncall.FunctionCallConstants.REMOTE_CATALOGSCHEMAS_CONFIG_SPLITTER;
 import static java.util.stream.Collectors.joining;
 
 /**
@@ -37,7 +47,7 @@ public class BaseFunctionUtil
      * formate identifier
      *
      * @param qualifiedNames qualified names
-     * @param identifier     identifier
+     * @param identifier identifier
      * @return sql statement
      */
     public static String formatIdentifier(Optional<Map<String, Selection>> qualifiedNames, String identifier)
@@ -60,5 +70,49 @@ public class BaseFunctionUtil
                 .stream()
                 .map(identifier -> formatIdentifier(Optional.empty(), identifier))
                 .collect(joining("."));
+    }
+
+    /**
+     * to verify if a function call is default builtin function or not
+     *
+     * @param callExpression call
+     * @return true indicate that call is default builtin, false for not
+     */
+    public static boolean isDefaultFunction(CallExpression callExpression)
+    {
+        CatalogSchemaName catalogSchemaName = callExpression.getFunctionHandle().getFunctionNamespace();
+        return DEFAULT_NAMESPACE.equals(catalogSchemaName);
+    }
+
+    /**
+     * parser the supported function namespace of this connector
+     */
+    public static List<CatalogSchemaName> parserPushDownSupportedRemoteCatalogSchema(String pushDownExternalFunctionNamespaceStr)
+    {
+        if (pushDownExternalFunctionNamespaceStr == null) {
+            return ImmutableList.of();
+        }
+        return Arrays.stream(pushDownExternalFunctionNamespaceStr.split(REMOTE_CATALOGSCHEMAS_CONFIG_SPLITTER)).map(str -> {
+            String[] catalogSchema = str.trim().split(DOT_SPLITTER);
+            if (catalogSchema.length != CATALOG_SCHEMA_LENGTH_COUNT) {
+                throw new IllegalArgumentException("Wrong config value, must contain catalog.schema");
+            }
+            return new CatalogSchemaName(catalogSchema[0], catalogSchema[1]);
+        }).collect(Collectors.toList());
+    }
+
+    /**
+     * parser jdbc connector's registry external function namespace
+     */
+    public static Optional<CatalogSchemaName> parserExternalFunctionCatalogSchema(String connectorRegistryFunctionNamespace)
+    {
+        if (connectorRegistryFunctionNamespace == null) {
+            return Optional.empty();
+        }
+        String[] catalogSchema = connectorRegistryFunctionNamespace.trim().split(DOT_SPLITTER);
+        if (catalogSchema.length != CATALOG_SCHEMA_LENGTH_COUNT) {
+            throw new IllegalArgumentException("Wrong config value, must contain catalog.schema");
+        }
+        return Optional.of(new CatalogSchemaName(catalogSchema[0], catalogSchema[1]));
     }
 }

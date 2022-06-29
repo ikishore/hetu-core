@@ -65,7 +65,7 @@ public class FilterStatsRule
             }
             estimate = filterStatsCalculator.filterStats(sourceStats, node.getPredicate(), session, types, layout);
         }
-        if (isDefaultFilterFactorEnabled(session) && estimate.isOutputRowCountUnknown()) {
+        if ((isDefaultFilterFactorEnabled(session) || statsProvider.isEnforceDefaultFilterFactor()) && estimate.isOutputRowCountUnknown()) {
             estimate = sourceStats.mapOutputRowCount(sourceRowCount -> sourceStats.getOutputRowCount() * UNKNOWN_FILTER_COEFFICIENT);
         }
         return Optional.of(estimate);

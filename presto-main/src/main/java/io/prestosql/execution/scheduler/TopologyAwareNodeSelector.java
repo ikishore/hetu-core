@@ -29,15 +29,18 @@ import io.prestosql.metadata.InternalNodeManager;
 import io.prestosql.metadata.Split;
 import io.prestosql.spi.HostAddress;
 import io.prestosql.spi.PrestoException;
+import io.prestosql.spi.plan.PlanNodeId;
 
 import javax.annotation.Nullable;
 
 import java.util.HashSet;
 import java.util.Iterator;
 import java.util.List;
+import java.util.Map;
 import java.util.Optional;
 import java.util.Set;
 import java.util.concurrent.atomic.AtomicReference;
+import java.util.stream.Collectors;
 
 import static io.prestosql.execution.scheduler.NetworkLocation.ROOT_LOCATION;
 import static io.prestosql.execution.scheduler.NodeScheduler.calculateLowWatermark;
@@ -64,6 +67,7 @@ public class TopologyAwareNodeSelector
     private final List<CounterStat> topologicalSplitCounters;
     private final List<String> networkLocationSegmentNames;
     private final NetworkLocationCache networkLocationCache;
+    private final Map<PlanNodeId, FixedNodeScheduleData> feederScheduledNodes;
 
     public TopologyAwareNodeSelector(
             InternalNodeManager nodeManager,
@@ -75,7 +79,8 @@ public class TopologyAwareNodeSelector
             int maxPendingSplitsPerTask,
             List<CounterStat> topologicalSplitCounters,
             List<String> networkLocationSegmentNames,
-            NetworkLocationCache networkLocationCache)
+            NetworkLocationCache networkLocationCache,
+            Map<PlanNodeId, FixedNodeScheduleData> feederScheduledNodes)
     {
         this.nodeManager = requireNonNull(nodeManager, "nodeManager is null");
         this.nodeTaskMap = requireNonNull(nodeTaskMap, "nodeTaskMap is null");
@@ -87,6 +92,7 @@ public class TopologyAwareNodeSelector
         this.topologicalSplitCounters = requireNonNull(topologicalSplitCounters, "topologicalSplitCounters is null");
         this.networkLocationSegmentNames = requireNonNull(networkLocationSegmentNames, "networkLocationSegmentNames is null");
         this.networkLocationCache = requireNonNull(networkLocationCache, "networkLocationCache is null");
+        this.feederScheduledNodes = feederScheduledNodes;
     }
 
     @Override
@@ -102,6 +108,18 @@ public class TopologyAwareNodeSelector
     }
 
     @Override
+    public int selectableNodeCount()
+    {
+        NodeMap map = nodeMap.get().get();
+        if (includeCoordinator) {
+            return map.getNodesByHostAndPort().size();
+        }
+        return (int) map.getNodesByHostAndPort().values().stream()
+                .filter(node -> !map.getCoordinatorNodeIds().contains(node.getNodeIdentifier()))
+                .count();
+    }
+
+    @Override
     public InternalNode selectCurrentNode()
     {
         // TODO: this is a hack to force scheduling on the coordinator
@@ -111,15 +129,15 @@ public class TopologyAwareNodeSelector
     @Override
     public List<InternalNode> selectRandomNodes(int limit, Set<InternalNode> excludedNodes)
     {
-        return selectNodes(limit, randomizedNodes(nodeMap.get().get(), includeCoordinator, excludedNodes));
+        return selectNodes(limit, randomizedNodes(nodeMap.get().get(), excludedNodes));
     }
 
     @Override
     public SplitPlacementResult computeAssignments(Set<Split> splits, List<RemoteTask> existingTasks, Optional<SqlStageExecution> stage)
     {
-        NodeMap nodeMap = this.nodeMap.get().get();
+        NodeMap nodeMapSlice = this.nodeMap.get().get();
         Multimap<InternalNode, Split> assignment = HashMultimap.create();
-        NodeAssignmentStats assignmentStats = new NodeAssignmentStats(nodeTaskMap, nodeMap, existingTasks);
+        NodeAssignmentStats assignmentStats = new NodeAssignmentStats(nodeTaskMap, nodeMapSlice, existingTasks);
 
         int[] topologicCounters = new int[topologicalSplitCounters.size()];
         Set<NetworkLocation> filledLocations = new HashSet<>();
@@ -127,9 +145,9 @@ public class TopologyAwareNodeSelector
         boolean splitWaitingForAnyNode = false;
         for (Split split : splits) {
             if (!split.isRemotelyAccessible()) {
-                List<InternalNode> candidateNodes = selectExactNodes(nodeMap, split.getAddresses(), includeCoordinator);
+                List<InternalNode> candidateNodes = selectExactNodes(nodeMapSlice, split.getAddresses(), includeCoordinator);
                 if (candidateNodes.isEmpty()) {
-                    log.debug("No nodes available to schedule %s. Available nodes %s", split, nodeMap.getNodesByHost().keys());
+                    log.debug("No nodes available to schedule %s. Available nodes %s", split, nodeMapSlice.getNodesByHost().keys());
                     throw new PrestoException(NO_NODES_AVAILABLE, "No nodes available to run query");
                 }
                 InternalNode chosenNode = bestNodeSplitCount(candidateNodes.iterator(), minCandidates, maxPendingSplitsPerTask, assignmentStats);
@@ -168,7 +186,7 @@ public class TopologyAwareNodeSelector
                     if (filledLocations.contains(location)) {
                         continue;
                     }
-                    Set<InternalNode> nodes = nodeMap.getWorkersByNetworkPath().get(location);
+                    Set<InternalNode> nodes = nodeMapSlice.getWorkersByNetworkPath().get(location);
                     chosenNode = bestNodeSplitCount(new ResettableRandomizedIterator<>(nodes), minCandidates, calculateMaxPendingSplits(i, depth), assignmentStats);
                     if (chosenNode != null) {
                         chosenDepth = i;
@@ -200,7 +218,28 @@ public class TopologyAwareNodeSelector
         else {
             blocked = toWhenHasSplitQueueSpaceFuture(blockedExactNodes, existingTasks, calculateLowWatermark(maxPendingForWildcardNetworkAffinity));
         }
+
+        // Check if its CTE node and its feeder
+        if (stage.isPresent() && stage.get().getFragment().getFeederCTEId().isPresent()) {
+            updateFeederNodeAndSplitCount(stage.get(), assignment);
+        }
+
         return new SplitPlacementResult(blocked, assignment);
+    }
+
+    private void updateFeederNodeAndSplitCount(SqlStageExecution stage, Multimap<InternalNode, Split> assignment)
+    {
+        FixedNodeScheduleData data;
+        if (feederScheduledNodes.containsKey(stage.getFragment().getFeederCTEParentId().get())) {
+            data = feederScheduledNodes.get(stage.getFragment().getFeederCTEParentId().get());
+            data.updateSplitCount(assignment.size());
+            data.updateAssignedNodes(assignment.keys().stream().collect(Collectors.toSet()));
+        }
+        else {
+            data = new FixedNodeScheduleData(assignment.size(), assignment.keys().stream().collect(Collectors.toSet()));
+        }
+
+        feederScheduledNodes.put(stage.getFragment().getFeederCTEParentId().get(), data);
     }
 
     /**

@@ -1,5 +1,5 @@
 /*
- * Copyright (C) 2018-2020. Huawei Technologies Co., Ltd. All rights reserved.
+ * Copyright (C) 2018-2021. Huawei Technologies Co., Ltd. All rights reserved.
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
  * You may obtain a copy of the License at
@@ -16,6 +16,7 @@ package io.hetu.core.plugin.heuristicindex.index.btree;
 
 import io.prestosql.spi.function.OperatorType;
 import io.prestosql.spi.heuristicindex.Index;
+import io.prestosql.spi.heuristicindex.IndexLookUpException;
 import io.prestosql.spi.heuristicindex.Pair;
 import io.prestosql.spi.relation.ConstantExpression;
 import io.prestosql.spi.relation.RowExpression;
@@ -35,7 +36,7 @@ import java.util.List;
 import java.util.UUID;
 import java.util.stream.IntStream;
 
-import static io.prestosql.spi.sql.RowExpressionUtils.simplePredicate;
+import static io.hetu.core.HeuristicIndexTestUtils.simplePredicate;
 import static io.prestosql.spi.type.BigintType.BIGINT;
 import static io.prestosql.spi.type.BooleanType.BOOLEAN;
 import static io.prestosql.spi.type.VarcharType.VARCHAR;
@@ -86,7 +87,7 @@ public class TestBTreeIndex
 
     @Test
     public void testLookup()
-            throws IOException
+            throws IOException, IndexLookUpException
     {
         BTreeIndex index = new BTreeIndex();
         for (int i = 0; i < 100; i++) {
@@ -111,7 +112,7 @@ public class TestBTreeIndex
 
     @Test
     public void testBetween()
-            throws IOException
+            throws IOException, IndexLookUpException
     {
         BTreeIndex index = new BTreeIndex();
         for (int i = 0; i < 20; i++) {
@@ -142,7 +143,7 @@ public class TestBTreeIndex
 
     @Test
     public void testIn()
-            throws IOException
+            throws IOException, IndexLookUpException
     {
         BTreeIndex index = new BTreeIndex();
         for (int i = 0; i < 20; i++) {
@@ -175,7 +176,7 @@ public class TestBTreeIndex
 
     @Test
     public void testGreaterThan()
-            throws IOException
+            throws IOException, IndexLookUpException
     {
         BTreeIndex index = new BTreeIndex();
         for (int i = 0; i < 25; i++) {
@@ -204,7 +205,7 @@ public class TestBTreeIndex
 
     @Test
     public void testGreaterThanEqualTo()
-            throws IOException
+            throws IOException, IndexLookUpException
     {
         BTreeIndex index = new BTreeIndex();
         for (int i = 0; i < 100; i++) {
@@ -232,7 +233,7 @@ public class TestBTreeIndex
 
     @Test
     public void testLessThan()
-            throws IOException
+            throws IOException, IndexLookUpException
     {
         BTreeIndex index = new BTreeIndex();
         for (int i = 0; i < 100; i++) {
@@ -262,7 +263,7 @@ public class TestBTreeIndex
 
     @Test
     public void testLessThanEqualTo()
-            throws IOException
+            throws IOException, IndexLookUpException
     {
         BTreeIndex index = new BTreeIndex();
         for (int i = 0; i < 100; i++) {
@@ -305,13 +306,14 @@ public class TestBTreeIndex
         }
         File file = File.createTempFile("test-serialize-", UUID.randomUUID().toString());
         index.serialize(new FileOutputStream(file));
-        file.delete();
+
+        assertTrue(file.delete());
         index.close();
     }
 
     @Test
     public void testDeserialize()
-            throws IOException
+            throws IOException, IndexLookUpException
     {
         BTreeIndex index = new BTreeIndex();
         String value = "foo bar";

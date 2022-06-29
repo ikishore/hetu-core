@@ -27,11 +27,11 @@ import io.prestosql.spi.plan.PlanNodeId;
 import io.prestosql.spi.plan.PlanNodeIdAllocator;
 import io.prestosql.spi.plan.ProjectNode;
 import io.prestosql.spi.plan.Symbol;
+import io.prestosql.spi.relation.RowExpression;
 import io.prestosql.sql.analyzer.FeaturesConfig.JoinReorderingStrategy;
+import io.prestosql.sql.planner.TypeProvider;
 import io.prestosql.sql.planner.iterative.Rule;
 import io.prestosql.sql.planner.optimizations.joins.JoinGraph;
-import io.prestosql.sql.relational.OriginalExpressionUtils;
-import io.prestosql.sql.tree.Expression;
 
 import java.util.HashMap;
 import java.util.HashSet;
@@ -44,13 +44,11 @@ import java.util.Set;
 import static com.google.common.base.Preconditions.checkArgument;
 import static com.google.common.base.Preconditions.checkState;
 import static com.google.common.collect.ImmutableList.toImmutableList;
-import static com.google.common.collect.Maps.transformValues;
 import static io.prestosql.SystemSessionProperties.getJoinReorderingStrategy;
 import static io.prestosql.sql.analyzer.FeaturesConfig.JoinReorderingStrategy.AUTOMATIC;
 import static io.prestosql.sql.analyzer.FeaturesConfig.JoinReorderingStrategy.ELIMINATE_CROSS_JOINS;
 import static io.prestosql.sql.planner.iterative.rule.Util.restrictOutputs;
 import static io.prestosql.sql.planner.plan.Patterns.join;
-import static io.prestosql.sql.relational.OriginalExpressionUtils.castToRowExpression;
 import static java.util.Comparator.comparing;
 import static java.util.Objects.requireNonNull;
 
@@ -86,7 +84,7 @@ public class EliminateCrossJoins
             return Result.empty();
         }
 
-        PlanNode replacement = buildJoinTree(node.getOutputSymbols(), joinGraph, joinOrder, context.getIdAllocator());
+        PlanNode replacement = buildJoinTree(node.getOutputSymbols(), joinGraph, joinOrder, context.getIdAllocator(), context.getSymbolAllocator().getTypes());
         return Result.ofPlanNode(replacement);
     }
 
@@ -150,20 +148,20 @@ public class EliminateCrossJoins
                 .collect(toImmutableList());
     }
 
-    public static PlanNode buildJoinTree(List<Symbol> expectedOutputSymbols, JoinGraph graph, List<Integer> joinOrder, PlanNodeIdAllocator idAllocator)
+    public static PlanNode buildJoinTree(List<Symbol> expectedOutputSymbols, JoinGraph graph, List<Integer> joinOrder, PlanNodeIdAllocator idAllocator, TypeProvider typeProvider)
     {
         requireNonNull(expectedOutputSymbols, "expectedOutputSymbols is null");
         requireNonNull(idAllocator, "idAllocator is null");
         requireNonNull(graph, "graph is null");
-        joinOrder = ImmutableList.copyOf(requireNonNull(joinOrder, "joinOrder is null"));
-        checkArgument(joinOrder.size() >= 2);
+        ImmutableList<Integer> finalJoinOrder = ImmutableList.copyOf(requireNonNull(joinOrder, "joinOrder is null"));
+        checkArgument(finalJoinOrder.size() >= 2);
 
-        PlanNode result = graph.getNode(joinOrder.get(0));
+        PlanNode result = graph.getNode(finalJoinOrder.get(0));
         Set<PlanNodeId> alreadyJoinedNodes = new HashSet<>();
         alreadyJoinedNodes.add(result.getId());
 
-        for (int i = 1; i < joinOrder.size(); i++) {
-            PlanNode rightNode = graph.getNode(joinOrder.get(i));
+        for (int i = 1; i < finalJoinOrder.size(); i++) {
+            PlanNode rightNode = graph.getNode(finalJoinOrder.get(i));
             alreadyJoinedNodes.add(rightNode.getId());
 
             ImmutableList.Builder<JoinNode.EquiJoinClause> criteria = ImmutableList.builder();
@@ -195,24 +193,24 @@ public class EliminateCrossJoins
                     ImmutableMap.of());
         }
 
-        List<Expression> filters = graph.getFilters();
+        List<RowExpression> filters = graph.getFilters();
 
-        for (Expression filter : filters) {
+        for (RowExpression filter : filters) {
             result = new FilterNode(
                     idAllocator.getNextId(),
                     result,
-                    castToRowExpression(filter));
+                    filter);
         }
 
         if (graph.getAssignments().isPresent()) {
             result = new ProjectNode(
                     idAllocator.getNextId(),
                     result,
-                    Assignments.copyOf(transformValues(graph.getAssignments().get(), OriginalExpressionUtils::castToRowExpression)));
+                    Assignments.copyOf(graph.getAssignments().get()));
         }
 
         // If needed, introduce a projection to constrain the outputs to what was originally expected
         // Some nodes are sensitive to what's produced (e.g., DistinctLimit node)
-        return restrictOutputs(idAllocator, result, ImmutableSet.copyOf(expectedOutputSymbols)).orElse(result);
+        return restrictOutputs(idAllocator, result, ImmutableSet.copyOf(expectedOutputSymbols), true, typeProvider).orElse(result);
     }
 }

@@ -23,18 +23,24 @@ import io.prestosql.operator.PartitionFunction;
 import io.prestosql.operator.SpillContext;
 import io.prestosql.spi.Page;
 import io.prestosql.spi.PageBuilder;
+import io.prestosql.spi.snapshot.BlockEncodingSerdeProvider;
+import io.prestosql.spi.snapshot.RestorableConfig;
 import io.prestosql.spi.type.Type;
 import it.unimi.dsi.fastutil.ints.IntArrayList;
 
 import javax.annotation.concurrent.ThreadSafe;
 
 import java.io.IOException;
+import java.io.Serializable;
 import java.util.ArrayList;
+import java.util.Collections;
 import java.util.HashSet;
 import java.util.Iterator;
 import java.util.List;
 import java.util.Optional;
 import java.util.Set;
+import java.util.function.BiFunction;
+import java.util.function.BiPredicate;
 import java.util.function.IntPredicate;
 import java.util.function.Predicate;
 
@@ -45,6 +51,8 @@ import static io.airlift.concurrent.MoreFutures.getFutureValue;
 import static java.util.Objects.requireNonNull;
 
 @ThreadSafe
+@RestorableConfig(uncapturedFields = {"types", "partitionFunction", "closer",
+        "spillerFactory", "spillContext", "memoryContext", "pageBuilders", "getRawHash"})
 public class GenericPartitioningSpiller
         implements PartitioningSpiller
 {
@@ -57,6 +65,7 @@ public class GenericPartitioningSpiller
 
     private final List<PageBuilder> pageBuilders;
     private final List<Optional<SingleStreamSpiller>> spillers;
+    private final BiFunction<Integer, Page, Long> getRawHash;
 
     private boolean readingStarted;
     private final Set<Integer> spilledPartitions = new HashSet<>();
@@ -66,7 +75,8 @@ public class GenericPartitioningSpiller
             PartitionFunction partitionFunction,
             SpillContext spillContext,
             AggregatedMemoryContext memoryContext,
-            SingleStreamSpillerFactory spillerFactory)
+            SingleStreamSpillerFactory spillerFactory,
+            BiFunction<Integer, Page, Long> getRawHash)
     {
         requireNonNull(spillContext, "spillContext is null");
 
@@ -80,13 +90,14 @@ public class GenericPartitioningSpiller
         this.memoryContext = memoryContext;
         int partitionCount = partitionFunction.getPartitionCount();
 
-        ImmutableList.Builder<PageBuilder> pageBuilders = ImmutableList.builder();
+        ImmutableList.Builder<PageBuilder> tmpPageBuilders = ImmutableList.builder();
         spillers = new ArrayList<>(partitionCount);
         for (int partition = 0; partition < partitionCount; partition++) {
-            pageBuilders.add(new PageBuilder(types));
+            tmpPageBuilders.add(new PageBuilder(types));
             spillers.add(Optional.empty());
         }
-        this.pageBuilders = pageBuilders.build();
+        this.pageBuilders = tmpPageBuilders.build();
+        this.getRawHash = getRawHash;
     }
 
     @Override
@@ -107,18 +118,24 @@ public class GenericPartitioningSpiller
     @Override
     public synchronized PartitioningSpillResult partitionAndSpill(Page page, IntPredicate spillPartitionMask)
     {
+        return partitionAndSpill(page, spillPartitionMask, (ign1, ign2) -> true);
+    }
+
+    @Override
+    public PartitioningSpillResult partitionAndSpill(Page page, IntPredicate spillPartitionMask, BiPredicate<Integer, Long> spillPartitionMatcher)
+    {
         requireNonNull(page, "page is null");
         requireNonNull(spillPartitionMask, "spillPartitionMask is null");
         checkArgument(page.getChannelCount() == types.size(), "Wrong page channel count, expected %s but got %s", types.size(), page.getChannelCount());
 
         checkState(!readingStarted, "reading already started");
-        IntArrayList unspilledPositions = partitionPage(page, spillPartitionMask);
+        IntArrayList unspilledPositions = partitionPage(page, spillPartitionMask, spillPartitionMatcher);
         ListenableFuture<?> future = flushFullBuilders();
 
         return new PartitioningSpillResult(future, page.getPositions(unspilledPositions.elements(), 0, unspilledPositions.size()));
     }
 
-    private synchronized IntArrayList partitionPage(Page page, IntPredicate spillPartitionMask)
+    private synchronized IntArrayList partitionPage(Page page, IntPredicate spillPartitionMask, BiPredicate<Integer, Long> spillPartitionMatcher)
     {
         IntArrayList unspilledPositions = new IntArrayList();
 
@@ -127,6 +144,10 @@ public class GenericPartitioningSpiller
 
             if (!spillPartitionMask.test(partition)) {
                 unspilledPositions.add(position);
+                continue;
+            }
+
+            if (getRawHash != null && !spillPartitionMatcher.test(partition, getRawHash.apply(position, page))) {
                 continue;
             }
 
@@ -194,5 +215,45 @@ public class GenericPartitioningSpiller
             throws IOException
     {
         closer.close();
+    }
+
+    @Override
+    public Object capture(BlockEncodingSerdeProvider serdeProvider)
+    {
+        GenericPartitioningSpillerState myState = new GenericPartitioningSpillerState();
+        myState.spilledPartitions = spilledPartitions;
+        myState.readingStarted = readingStarted;
+        myState.spillers = new ArrayList<>(Collections.nCopies(spillers.size(), null));
+        for (int i = 0; i < spillers.size(); i++) {
+            if (spillers.get(i).isPresent()) {
+                myState.spillers.set(i, spillers.get(i).get().capture(serdeProvider));
+            }
+        }
+        return myState;
+    }
+
+    @Override
+    public void restore(Object state, BlockEncodingSerdeProvider serdeProvider)
+    {
+        GenericPartitioningSpillerState myState = (GenericPartitioningSpillerState) state;
+        this.readingStarted = myState.readingStarted;
+        for (int partition : myState.spilledPartitions) {
+            this.spilledPartitions.add(partition);
+        }
+        for (int i = 0; i < spillers.size(); i++) {
+            if (myState.spillers.get(i) != null) {
+                SingleStreamSpiller spiller = spillerFactory.create(types, spillContext, memoryContext.newLocalMemoryContext(GenericPartitioningSpiller.class.getSimpleName()));
+                spiller.restore(myState.spillers.get(i), serdeProvider);
+                this.spillers.set(i, Optional.of(closer.register(spiller)));
+            }
+        }
+    }
+
+    private static class GenericPartitioningSpillerState
+            implements Serializable
+    {
+        Set<Integer> spilledPartitions;
+        boolean readingStarted;
+        List<Object> spillers;
     }
 }

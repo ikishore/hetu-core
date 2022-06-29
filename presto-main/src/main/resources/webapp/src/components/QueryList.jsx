@@ -29,6 +29,9 @@ import Footer from "../queryeditor/components/Footer";
 import StatusFooter from "../queryeditor/components/StatusFooter";
 import NavigationMenu from "../NavigationMenu";
 import Pagination from 'rc-pagination';
+import Select from "rc-select";
+import localeInfo from "../node_modules/rc-pagination/es/locale/en_US";
+import _ from "lodash";
 
 export class QueryListItem extends React.Component {
     static stripQueryTextWhitespace(queryText) {
@@ -73,15 +76,15 @@ export class QueryListItem extends React.Component {
 
         const splitDetails = (
             <div className="col-xs-12 tinystat-row">
-                <span className="tinystat" data-toggle="tooltip" data-placement="top" title="Completed splits">
+                <span className="tinystat" data-toggle="tooltip" data-placement="top" title="Completed splits" data-container="body">
                     <span className="glyphicon glyphicon-ok" style={GLYPHICON_HIGHLIGHT} />&nbsp;&nbsp;
                     {query.queryStats.completedDrivers}
                 </span>
-                <span className="tinystat" data-toggle="tooltip" data-placement="top" title="Running splits">
+                <span className="tinystat" data-toggle="tooltip" data-placement="top" title="Running splits" data-container="body">
                     <span className="glyphicon glyphicon-play" style={GLYPHICON_HIGHLIGHT} />&nbsp;&nbsp;
                     {(query.state === "FINISHED" || query.state === "FAILED") ? 0 : query.queryStats.runningDrivers}
                 </span>
-                <span className="tinystat" data-toggle="tooltip" data-placement="top" title="Queued splits">
+                <span className="tinystat" data-toggle="tooltip" data-placement="top" title="Queued splits" data-container="body">
                     <span className="glyphicon glyphicon-pause" style={GLYPHICON_HIGHLIGHT} />&nbsp;&nbsp;
                     {(query.state === "FINISHED" || query.state === "FAILED") ? 0 : query.queryStats.queuedDrivers}
                 </span>
@@ -89,15 +92,15 @@ export class QueryListItem extends React.Component {
 
         const timingDetails = (
             <div className="col-xs-12 tinystat-row">
-                <span className="tinystat" data-toggle="tooltip" data-placement="top" title="Wall time spent executing the query (not including queued time)">
+                <span className="tinystat" data-toggle="tooltip" data-placement="top" title="Wall time spent executing the query (not including queued time)" data-container="body">
                     <span className="glyphicon glyphicon-hourglass" style={GLYPHICON_HIGHLIGHT} />&nbsp;&nbsp;
                     {query.queryStats.executionTime}
                 </span>
-                <span className="tinystat" data-toggle="tooltip" data-placement="top" title="Total query wall time">
+                <span className="tinystat" data-toggle="tooltip" data-placement="top" title="Total query wall time" data-container="body">
                     <span className="glyphicon glyphicon-time" style={GLYPHICON_HIGHLIGHT} />&nbsp;&nbsp;
                     {query.queryStats.elapsedTime}
                 </span>
-                <span className="tinystat" data-toggle="tooltip" data-placement="top" title="CPU time spent by this query">
+                <span className="tinystat" data-toggle="tooltip" data-placement="top" title="CPU time spent by this query" data-container="body">
                     <span className="glyphicon glyphicon-dashboard" style={GLYPHICON_HIGHLIGHT} />&nbsp;&nbsp;
                     {query.queryStats.totalCpuTime}
                 </span>
@@ -105,15 +108,15 @@ export class QueryListItem extends React.Component {
 
         const memoryDetails = (
             <div className="col-xs-12 tinystat-row">
-                <span className="tinystat" data-toggle="tooltip" data-placement="top" title="Current total reserved memory">
+                <span className="tinystat" data-toggle="tooltip" data-placement="top" title="Current total reserved memory" data-container="body">
                     <span className="glyphicon glyphicon-scale" style={GLYPHICON_HIGHLIGHT} />&nbsp;&nbsp;
                     {query.queryStats.totalMemoryReservation}
                 </span>
-                <span className="tinystat" data-toggle="tooltip" data-placement="top" title="Peak total memory">
+                <span className="tinystat" data-toggle="tooltip" data-placement="top" title="Peak total memory" data-container="body">
                     <span className="glyphicon glyphicon-fire" style={GLYPHICON_HIGHLIGHT} />&nbsp;&nbsp;
                     {query.queryStats.peakTotalMemoryReservation}
                 </span>
-                <span className="tinystat" data-toggle="tooltip" data-placement="top" title="Cumulative user memory">
+                <span className="tinystat" data-toggle="tooltip" data-placement="top" title="Cumulative user memory" data-container="body">
                     <span className="glyphicon glyphicon-equalizer" style={GLYPHICON_HIGHLIGHT} />&nbsp;&nbsp;
                     {formatDataSizeBytes(query.queryStats.cumulativeUserMemory / 1000.0)}
                 </span>
@@ -281,6 +284,7 @@ export class QueryList extends React.Component {
         this.handleSortClick = this.handleSortClick.bind(this);
         this.refreshData = this.refreshData.bind(this);
         this.onPageChange = this.onPageChange.bind(this);
+        this.onPageSizeChange = this.onPageSizeChange.bind(this);
         this.debounceSearch = _.debounce(() => { _.defer(this.refreshData) }, 200)
     }
 
@@ -322,7 +326,7 @@ export class QueryList extends React.Component {
             });
             this.resetTimer();
         }.bind(this))
-            .error(function () {
+            .fail(function () {
                 this.resetTimer();
             }.bind(this));
 
@@ -412,6 +416,7 @@ export class QueryList extends React.Component {
             else {
                 newFilters.push(filter);
             }
+            stateSelectAll = newFilters.length == Object.keys(FILTER_TYPE).length ? true : false;
         }
 
         this.setState({
@@ -454,6 +459,7 @@ export class QueryList extends React.Component {
             else {
                 newFilters.push(errorType);
             }
+            errorSelectAll = newFilters.length == Object.keys(ERROR_TYPE).length ? true : false;
         }
 
         this.setState({
@@ -469,8 +475,13 @@ export class QueryList extends React.Component {
         _.defer(this.refreshData);
     }
 
+    onPageSizeChange(current, pageSize) {
+        this.setState({ pageSize: pageSize });
+        _.defer(this.refreshData);
+    }
+
     render() {
-        const { allQueries, currentPage, total, stateFilters } = this.state;
+        const { allQueries, currentPage, total, stateFilters, pageSize } = this.state;
         let queryList = <DisplayedQueriesList queries={allQueries} />;
         if (allQueries.queries === null || total === 0) {
             let label = (<div className="loader">Loading...</div>);
@@ -497,7 +508,6 @@ export class QueryList extends React.Component {
                                 <div className="input-group input-group-sm">
                                     <input type="text" className="form-control form-control-small search-bar" placeholder="User, source, query ID, resource group, or query text"
                                         onChange={this.handleSearchStringChange} value={this.state.searchString} />
-                                    <span className="input-group-addon filter-addon">State:</span>
                                     <div className="input-group-btn">
                                         <button type="button" className="btn btn-default dropdown-toggle" data-toggle="dropdown" aria-haspopup="true" aria-expanded="false">
                                             State <span className="caret" />
@@ -555,9 +565,15 @@ export class QueryList extends React.Component {
                                 defaultCurrent={1}
                                 current={currentPage}
                                 total={total}
+                                defaultPageSize={10}
+                                pageSize={pageSize}
                                 onChange={this.onPageChange}
-                                showTotal={total => `Total ${total} items`}
+                                showTotal={total => `Total ${total} queries`}
                                 style={{ marginTop: 10 }}
+                                locale={localeInfo}
+                                showSizeChanger
+                                onShowSizeChange={this.onPageSizeChange}
+                                selectComponentClass={Select}
                             />
                         }
                     </div>

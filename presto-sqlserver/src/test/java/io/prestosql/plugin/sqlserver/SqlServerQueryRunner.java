@@ -18,8 +18,8 @@ import com.google.common.collect.ImmutableMap;
 import com.google.common.collect.Streams;
 import io.airlift.tpch.TpchTable;
 import io.prestosql.Session;
-import io.prestosql.metadata.QualifiedObjectName;
 import io.prestosql.plugin.tpch.TpchPlugin;
+import io.prestosql.spi.connector.QualifiedObjectName;
 import io.prestosql.spi.security.Identity;
 import io.prestosql.testing.QueryRunner;
 import io.prestosql.tests.DistributedQueryRunner;
@@ -50,9 +50,10 @@ public final class SqlServerQueryRunner
         return createSqlServerQueryRunner(testingSqlServer, ImmutableMap.of(), ImmutableList.copyOf(tables));
     }
 
-    public static QueryRunner createSqlServerQueryRunner(TestingSqlServer testingSqlServer, Map<String, String> connectorProperties, Iterable<TpchTable<?>> tables)
+    public static QueryRunner createSqlServerQueryRunner(TestingSqlServer testingSqlServer, Map<String, String> inputConnectorProperties, Iterable<TpchTable<?>> tables)
             throws Exception
     {
+        Map<String, String> connectorProperties = inputConnectorProperties;
         DistributedQueryRunner queryRunner = DistributedQueryRunner.builder(createSession())
                 .build();
         try {

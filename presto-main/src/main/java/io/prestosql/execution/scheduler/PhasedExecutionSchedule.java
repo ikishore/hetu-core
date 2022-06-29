@@ -166,8 +166,7 @@ public class PhasedExecutionSchedule
             }
         }
 
-        List<Set<PlanFragmentId>> schedulePhases = ImmutableList.copyOf(new TopologicalOrderIterator<>(componentGraph));
-        return schedulePhases;
+        return ImmutableList.copyOf(new TopologicalOrderIterator<>(componentGraph));
     }
 
     private static class Visitor
@@ -309,7 +308,7 @@ public class PhasedExecutionSchedule
         @Override
         public Set<PlanFragmentId> visitRouter(RouterNode node, PlanFragmentId currentFragmentId)
         {
-            if (fragments.get(currentFragmentId).getProducerCTEId().isPresent()) {
+            if (fragments.get(currentFragmentId).getFeederCTEId().isPresent()) {
                 return visitPlan(node, currentFragmentId);
             }
 

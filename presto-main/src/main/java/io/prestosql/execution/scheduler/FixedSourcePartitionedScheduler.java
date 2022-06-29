@@ -93,7 +93,7 @@ public class FixedSourcePartitionedScheduler
 
         BucketedSplitPlacementPolicy splitPlacementPolicy = new BucketedSplitPlacementPolicy(nodeSelector, nodes, bucketNodeMap, stage::getAllTasks);
 
-        ArrayList<SourceScheduler> sourceSchedulers = new ArrayList<>();
+        ArrayList<SourceScheduler> sourceSchedulerArrayList = new ArrayList<>();
         checkArgument(
                 partitionHandles.equals(ImmutableList.of(NOT_PARTITIONED)) != stageExecutionDescriptor.isStageGroupedExecution(),
                 "PartitionHandles should be [NOT_PARTITIONED] if and only if all scan nodes use ungrouped execution strategy");
@@ -107,7 +107,7 @@ public class FixedSourcePartitionedScheduler
         }
 
         boolean firstPlanNode = true;
-        Optional<LifespanScheduler> groupedLifespanScheduler = Optional.empty();
+        Optional<LifespanScheduler> groupedLifespanSchedulerOptional = Optional.empty();
         for (PlanNodeId planNodeId : schedulingOrder) {
             SplitSource splitSource = splitSources.get(planNodeId);
             boolean groupedExecutionForScanNode = stageExecutionDescriptor.isScanGroupedExecution(planNodeId);
@@ -123,18 +123,15 @@ public class FixedSourcePartitionedScheduler
                     heuristicIndexerManager);
 
             if (stageExecutionDescriptor.isStageGroupedExecution() && !groupedExecutionForScanNode) {
-                System.out.println("partitioned");
                 sourceScheduler = new AsGroupedSourceScheduler(sourceScheduler);
             }
-            sourceSchedulers.add(sourceScheduler);
+            sourceSchedulerArrayList.add(sourceScheduler);
 
             if (firstPlanNode) {
                 firstPlanNode = false;
                 if (!stageExecutionDescriptor.isStageGroupedExecution()) {
                     sourceScheduler.startLifespan(Lifespan.taskWide(), NOT_PARTITIONED);
                     sourceScheduler.noMoreLifespans();
-
-                    System.out.println("Not partitioned");
                 }
                 else {
                     LifespanScheduler lifespanScheduler;
@@ -150,32 +147,34 @@ public class FixedSourcePartitionedScheduler
                         lifespanScheduler = new FixedLifespanScheduler(bucketNodeMap, partitionHandles, concurrentLifespansPerTask);
                     }
 
-                    System.out.println(lifespanScheduler.getClass().toString());
-
                     // Schedule the first few lifespans
                     lifespanScheduler.scheduleInitial(sourceScheduler);
                     // Schedule new lifespans for finished ones
                     stage.addCompletedDriverGroupsChangedListener(lifespanScheduler::onLifespanFinished);
-                    groupedLifespanScheduler = Optional.of(lifespanScheduler);
+                    groupedLifespanSchedulerOptional = Optional.of(lifespanScheduler);
                 }
             }
         }
-        this.groupedLifespanScheduler = groupedLifespanScheduler;
-        this.sourceSchedulers = sourceSchedulers;
+        this.groupedLifespanScheduler = groupedLifespanSchedulerOptional;
+        this.sourceSchedulers = sourceSchedulerArrayList;
     }
 
     private ConnectorPartitionHandle partitionHandleFor(Lifespan lifespan)
     {
         if (lifespan.isTaskWide()) {
-            System.out.println("Partitioned");
             return NOT_PARTITIONED;
         }
-        System.out.println("Partitioned");
         return partitionHandles.get(lifespan.getId());
     }
 
     @Override
     public ScheduleResult schedule()
+    {
+        return schedule(1);
+    }
+
+    @Override
+    public ScheduleResult schedule(int maxSplitGroup)
     {
         // schedule a task on every node in the distribution
         List<RemoteTask> newTasks = ImmutableList.of();
@@ -217,7 +216,7 @@ public class FixedSourcePartitionedScheduler
                 sourceScheduler.noMoreLifespans();
             }
 
-            ScheduleResult schedule = sourceScheduler.schedule();
+            ScheduleResult schedule = sourceScheduler.schedule(maxSplitGroup);
             splitsScheduled += schedule.getSplitsScheduled();
             if (schedule.getBlockedReason().isPresent()) {
                 blocked.add(schedule.getBlocked());
@@ -324,6 +323,12 @@ public class FixedSourcePartitionedScheduler
         public ScheduleResult schedule()
         {
             return sourceScheduler.schedule();
+        }
+
+        @Override
+        public ScheduleResult schedule(int maxSplitGroupSize)
+        {
+            return sourceScheduler.schedule(maxSplitGroupSize);
         }
 
         @Override

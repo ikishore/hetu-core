@@ -66,12 +66,12 @@ public class InMemoryNodeManager
     {
         remoteNodes.putAll(catalogName, nodes);
 
-        List<Consumer<AllNodes>> listeners;
+        List<Consumer<AllNodes>> nodeListeners;
         synchronized (this) {
-            listeners = ImmutableList.copyOf(this.listeners);
+            nodeListeners = ImmutableList.copyOf(this.listeners);
         }
         AllNodes allNodes = getAllNodes();
-        listeners.forEach(listener -> listener.accept(allNodes));
+        nodeListeners.forEach(listener -> listener.accept(allNodes));
     }
 
     @Override
@@ -142,5 +142,11 @@ public class InMemoryNodeManager
     public synchronized void removeNodeChangeListener(Consumer<AllNodes> listener)
     {
         listeners.remove(requireNonNull(listener, "listener is null"));
+    }
+
+    @Override
+    public void refreshWorkerStates()
+    {
+        // no-op
     }
 }

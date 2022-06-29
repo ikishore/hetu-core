@@ -1,5 +1,5 @@
 /*
- * Copyright (C) 2018-2020. Huawei Technologies Co., Ltd. All rights reserved.
+ * Copyright (C) 2018-2021. Huawei Technologies Co., Ltd. All rights reserved.
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
  * You may obtain a copy of the License at
@@ -24,7 +24,6 @@ import static io.airlift.configuration.testing.ConfigAssertions.assertFullMappin
 import static io.airlift.configuration.testing.ConfigAssertions.assertRecordedDefaults;
 import static io.airlift.configuration.testing.ConfigAssertions.recordDefaults;
 import static java.util.concurrent.TimeUnit.HOURS;
-import static java.util.concurrent.TimeUnit.SECONDS;
 
 public class TestHetuMetastoreCacheConfig
 {
@@ -33,7 +32,7 @@ public class TestHetuMetastoreCacheConfig
     {
         assertRecordedDefaults(recordDefaults(HetuMetastoreCacheConfig.class)
                 .setMetaStoreCacheMaxSize(10000)
-                .setMetaStoreCacheTtl(new Duration(0, SECONDS)));
+                .setMetaStoreCacheTtl(new Duration(4, HOURS)));
     }
 
     @Test

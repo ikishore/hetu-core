@@ -70,7 +70,6 @@ public class TestClusterMemoryLeakDetector
     {
         return new BasicQueryInfo(
                 new QueryId(queryId),
-                ImmutableList.of(new QueryId(queryId)),
                 TEST_SESSION.toSessionRepresentation(),
                 Optional.of(new ResourceGroupId("global")),
                 state,

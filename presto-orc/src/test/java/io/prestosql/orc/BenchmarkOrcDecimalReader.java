@@ -45,7 +45,6 @@ import java.util.List;
 import java.util.Random;
 import java.util.concurrent.TimeUnit;
 
-import static com.google.common.io.Files.createTempDir;
 import static com.google.common.io.MoreFiles.deleteRecursively;
 import static com.google.common.io.RecursiveDeleteOption.ALLOW_INSECURE;
 import static io.airlift.units.DataSize.Unit.MEGABYTE;
@@ -55,6 +54,7 @@ import static io.prestosql.orc.OrcTester.Format.ORC_12;
 import static io.prestosql.orc.OrcTester.writeOrcColumnHive;
 import static io.prestosql.orc.metadata.CompressionKind.NONE;
 import static io.prestosql.spi.type.DecimalType.createDecimalType;
+import static java.nio.file.Files.createTempDirectory;
 import static java.util.UUID.randomUUID;
 
 @SuppressWarnings("MethodMayBeStatic")
@@ -99,7 +99,7 @@ public class BenchmarkOrcDecimalReader
         public void setup()
                 throws Exception
         {
-            temporary = createTempDir();
+            temporary = createTempDirectory(getClass().getName()).toFile();
             dataPath = new File(temporary, randomUUID().toString());
 
             writeOrcColumnHive(dataPath, ORC_12, NONE, DECIMAL_TYPE, createDecimalValues().iterator());
@@ -115,7 +115,7 @@ public class BenchmarkOrcDecimalReader
         private OrcRecordReader createRecordReader()
                 throws IOException
         {
-            OrcDataSource dataSource = new FileOrcDataSource(dataPath, new DataSize(1, MEGABYTE), new DataSize(1, MEGABYTE), new DataSize(1, MEGABYTE), true);
+            OrcDataSource dataSource = new FileOrcDataSource(dataPath, new DataSize(1, MEGABYTE), new DataSize(1, MEGABYTE), new DataSize(1, MEGABYTE), true, dataPath.lastModified());
             OrcReader orcReader = new OrcReader(dataSource, new DataSize(1, MEGABYTE), new DataSize(1, MEGABYTE), new DataSize(1, MEGABYTE));
             return orcReader.createRecordReader(
                     orcReader.getRootColumn().getNestedColumns(),

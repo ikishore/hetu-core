@@ -1,5 +1,5 @@
 /*
- * Copyright (C) 2018-2020. Huawei Technologies Co., Ltd. All rights reserved.
+ * Copyright (C) 2018-2021. Huawei Technologies Co., Ltd. All rights reserved.
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
  * You may obtain a copy of the License at
@@ -135,6 +135,12 @@ public class DynamicCatalogStore
         return getCatalogStore(type).getCatalogInformation(catalogName).getVersion();
     }
 
+    /**
+     * This method will try to load catalog for all types of catalog.
+     * @param localCatalogStore the local storage instance of catalog.
+     * @param catalogInfo catalog information.
+     * @param configFiles catalog configuration files.
+     */
     private void loadLocalCatalog(CatalogStore localCatalogStore, CatalogInfo catalogInfo, CatalogFileInputStream configFiles)
     {
         String catalogName = catalogInfo.getCatalogName();
@@ -149,7 +155,7 @@ public class DynamicCatalogStore
             Map<String, String> properties = new HashMap<>(loadPropertiesFrom(propertiesFile.getPath()));
             catalogStoreUtil.decryptEncryptedProperties(catalogName, properties);
             properties.remove(CATALOG_NAME);
-            connectorManager.createConnection(catalogName, catalogInfo.getConnectorName(), ImmutableMap.copyOf(properties));
+            connectorManager.createAndCheckConnection(catalogName, catalogInfo.getConnectorName(), ImmutableMap.copyOf(properties));
 
             // add catalog to announcer, then each node knows current node has this catalog.
             connectorManager.updateConnectorIds();

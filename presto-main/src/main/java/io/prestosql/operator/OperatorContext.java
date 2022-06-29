@@ -20,6 +20,8 @@ import com.google.common.util.concurrent.SettableFuture;
 import io.airlift.stats.CounterStat;
 import io.airlift.units.Duration;
 import io.prestosql.Session;
+import io.prestosql.SystemSessionProperties;
+import io.prestosql.execution.TaskId;
 import io.prestosql.memory.QueryContextVisitor;
 import io.prestosql.memory.context.AggregatedMemoryContext;
 import io.prestosql.memory.context.LocalMemoryContext;
@@ -28,12 +30,16 @@ import io.prestosql.operator.OperationTimer.OperationTiming;
 import io.prestosql.spi.Page;
 import io.prestosql.spi.PrestoException;
 import io.prestosql.spi.plan.PlanNodeId;
+import io.prestosql.spi.snapshot.BlockEncodingSerdeProvider;
+import io.prestosql.spi.snapshot.Restorable;
+import io.prestosql.spi.snapshot.RestorableConfig;
 
 import javax.annotation.Nullable;
 import javax.annotation.concurrent.GuardedBy;
 import javax.annotation.concurrent.ThreadSafe;
 
 import java.util.List;
+import java.util.Locale;
 import java.util.Optional;
 import java.util.concurrent.Executor;
 import java.util.concurrent.atomic.AtomicLong;
@@ -51,6 +57,7 @@ import static io.prestosql.spi.StandardErrorCode.GENERIC_INTERNAL_ERROR;
 import static java.lang.Math.max;
 import static java.lang.String.format;
 import static java.util.Objects.requireNonNull;
+import static java.util.concurrent.TimeUnit.MILLISECONDS;
 import static java.util.concurrent.TimeUnit.NANOSECONDS;
 
 /**
@@ -59,7 +66,14 @@ import static java.util.concurrent.TimeUnit.NANOSECONDS;
  * Not thread-safe. Only {@link #getOperatorStats()}, {@link #getNestedOperatorStats()}
  * and revocable-memory-related operations are thread-safe.
  */
+//TODO-cp-I2DSGQ: update when operatorContext is actually supported.
+@RestorableConfig(uncapturedFields = {"planNodeId", "driverContext", "executor", "physicalInputDataSize", "physicalInputPositions",
+        "internalNetworkInputDataSize", "internalNetworkPositions", "addInputTiming", "inputDataSize", "inputPositions", "getOutputTiming", "outputDataSize", "outputPositions",
+        "physicalWrittenDataSize", "memoryFuture", "revocableMemoryFuture", "blockedMonitor", "blockedWallNanos", "finishTiming", "spillContext", "infoSupplier",
+        "nestedOperatorStatsSupplier", "peakUserMemoryReservation", "peakSystemMemoryReservation", "peakRevocableMemoryReservation", "peakTotalMemoryReservation",
+        "memoryRevokingRequested", "memoryRevocationRequestListener", "operatorMemoryContext"})
 public class OperatorContext
+        implements Restorable
 {
     private final int operatorId;
     private final PlanNodeId planNodeId;
@@ -107,6 +121,7 @@ public class OperatorContext
     private Runnable memoryRevocationRequestListener;
 
     private final MemoryTrackingContext operatorMemoryContext;
+    private final boolean snapshotEnabled;
 
     public OperatorContext(
             int operatorId,
@@ -129,6 +144,8 @@ public class OperatorContext
         this.revocableMemoryFuture.get().set(null);
         this.operatorMemoryContext = requireNonNull(operatorMemoryContext, "operatorMemoryContext is null");
         operatorMemoryContext.initializeLocalMemoryContexts(operatorType);
+
+        this.snapshotEnabled = SystemSessionProperties.isSnapshotEnabled(driverContext.getSession());
     }
 
     public int getOperatorId()
@@ -252,6 +269,12 @@ public class OperatorContext
         return new InternalLocalMemoryContext(operatorMemoryContext.newSystemMemoryContext(allocationTag), memoryFuture, this::updatePeakMemoryReservations, true);
     }
 
+    // caller should close this context as it's a new context
+    public LocalMemoryContext newLocalUserMemoryContext(String allocationTag)
+    {
+        return new InternalLocalMemoryContext(operatorMemoryContext.newUserMemoryContext(allocationTag), memoryFuture, this::updatePeakMemoryReservations, true);
+    }
+
     // caller shouldn't close this context as it's managed by the OperatorContext
     public LocalMemoryContext localUserMemoryContext()
     {
@@ -324,6 +347,11 @@ public class OperatorContext
         return operatorMemoryContext.getRevocableMemory();
     }
 
+    public long getTotalMemoryBytes()
+    {
+        return operatorMemoryContext.getUserMemory() + operatorMemoryContext.getSystemMemory();
+    }
+
     private static void updateMemoryFuture(ListenableFuture<?> memoryPoolFuture, AtomicReference<SettableFuture<?>> targetFutureReference)
     {
         if (!memoryPoolFuture.isDone()) {
@@ -380,6 +408,17 @@ public class OperatorContext
     public synchronized boolean isMemoryRevokingRequested()
     {
         return memoryRevokingRequested;
+    }
+
+    public long getRevocableMemory()
+    {
+        long revocableMemory = 0L;
+        synchronized (this) {
+            if (operatorMemoryContext.getRevocableMemory() > 0) {
+                revocableMemory = operatorMemoryContext.getRevocableMemory();
+            }
+        }
+        return revocableMemory;
     }
 
     /**
@@ -479,8 +518,8 @@ public class OperatorContext
 
     public OperatorStats getOperatorStats()
     {
-        Supplier<OperatorInfo> infoSupplier = this.infoSupplier.get();
-        OperatorInfo info = Optional.ofNullable(infoSupplier).map(Supplier::get).orElse(null);
+        Supplier<OperatorInfo> operatorInfoSupplier = this.infoSupplier.get();
+        OperatorInfo info = Optional.ofNullable(operatorInfoSupplier).map(Supplier::get).orElse(null);
 
         long inputPositionsCount = inputPositions.getTotalCount();
 
@@ -530,14 +569,16 @@ public class OperatorContext
 
                 succinctBytes(spillContext.getSpilledBytes()),
 
+                new Duration(spillContext.getSpillReadTime(), MILLISECONDS).convertToMostSuccinctTimeUnit(),
+                new Duration(spillContext.getSpillWriteTime(), MILLISECONDS).convertToMostSuccinctTimeUnit(),
                 memoryFuture.get().isDone() ? Optional.empty() : Optional.of(WAITING_FOR_MEMORY),
                 info);
     }
 
     public List<OperatorStats> getNestedOperatorStats()
     {
-        Supplier<List<OperatorStats>> nestedOperatorStatsSupplier = this.nestedOperatorStatsSupplier.get();
-        return Optional.ofNullable(nestedOperatorStatsSupplier)
+        Supplier<List<OperatorStats>> operatorStatsSupplier = this.nestedOperatorStatsSupplier.get();
+        return Optional.ofNullable(operatorStatsSupplier)
                 .map(Supplier::get)
                 .orElseGet(() -> ImmutableList.of(getOperatorStats()));
     }
@@ -582,6 +623,8 @@ public class OperatorContext
         private final DriverContext driverContext;
         private final AtomicLong reservedBytes = new AtomicLong();
         private final AtomicLong spilledBytes = new AtomicLong();
+        private final AtomicLong spillWriteTime = new AtomicLong();
+        private final AtomicLong spillReadTime = new AtomicLong();
 
         public OperatorSpillContext(DriverContext driverContext)
         {
@@ -602,9 +645,35 @@ public class OperatorContext
             }
         }
 
+        @Override
+        public void updateWriteTime(long millis)
+        {
+            if (millis > 0) {
+                spillWriteTime.addAndGet(millis);
+            }
+        }
+
+        @Override
+        public void updateReadTime(long millis)
+        {
+            if (millis > 0) {
+                spillReadTime.addAndGet(millis);
+            }
+        }
+
         public long getSpilledBytes()
         {
             return spilledBytes.longValue();
+        }
+
+        public long getSpillWriteTime()
+        {
+            return spillWriteTime.longValue();
+        }
+
+        public long getSpillReadTime()
+        {
+            return spillReadTime.longValue();
         }
 
         private long decrementSpilledReservation(long reservedBytes, long bytesBeingFreed)
@@ -735,5 +804,40 @@ public class OperatorContext
     public MemoryTrackingContext getOperatorMemoryContext()
     {
         return operatorMemoryContext;
+    }
+
+    /**
+     * Whether the query is resumable, i.e. it supports checkpointing.
+     *
+     * @return true if query is resumable; false otherwise
+     */
+    public boolean isSnapshotEnabled()
+    {
+        return snapshotEnabled;
+    }
+
+    public String getUniqueId()
+    {
+        TaskId taskId = driverContext.getTaskId();
+        return String.format(Locale.ENGLISH,
+                "%s_%02d_%d_%d_%02d_%02d",
+                taskId.getQueryId().getId(),
+                taskId.getStageId().getId(),
+                taskId.getId(),
+                driverContext.getPipelineContext().getPipelineId(),
+                driverContext.getDriverId(),
+                getOperatorId());
+    }
+
+    @Override
+    public Object capture(BlockEncodingSerdeProvider serdeProvider)
+    {
+        return 0; // TODO-cp-I2DSGQ: implement
+    }
+
+    @Override
+    public void restore(Object state, BlockEncodingSerdeProvider serdeProvider)
+    {
+        // TODO-cp-I2DSGQ: implement
     }
 }

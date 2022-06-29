@@ -91,11 +91,12 @@ public class IterativeOptimizer
     @Override
     public PlanNode optimize(PlanNode plan, Session session, TypeProvider types, PlanSymbolAllocator planSymbolAllocator, PlanNodeIdAllocator idAllocator, WarningCollector warningCollector)
     {
+        PlanNode tmpPlan = plan;
         // only disable new rules if we have legacy rules to fall back to
         if (!SystemSessionProperties.isNewOptimizerEnabled(session) && !legacyRules.isEmpty()) {
             for (PlanOptimizer optimizer : legacyRules) {
-                if (OptimizerUtils.isEnabledLegacy(optimizer, session, plan)) {
-                    plan = optimizer.optimize(plan, session, planSymbolAllocator.getTypes(), planSymbolAllocator, idAllocator,
+                if (OptimizerUtils.isEnabledLegacy(optimizer, session, tmpPlan)) {
+                    tmpPlan = optimizer.optimize(tmpPlan, session, planSymbolAllocator.getTypes(), planSymbolAllocator, idAllocator,
                         warningCollector);
                 }
             }
@@ -103,7 +104,6 @@ public class IterativeOptimizer
             return plan;
         }
 
-        //System.out.println("Iterative Optimizer: optimizer: ");
         Memo memo = new Memo(idAllocator, plan);
         Lookup lookup = Lookup.from(planNode -> Stream.of(memo.resolve(planNode)));
 
@@ -111,7 +111,6 @@ public class IterativeOptimizer
         Context context = new Context(memo, lookup, idAllocator, planSymbolAllocator, System.nanoTime(), timeout.toMillis(), session, warningCollector);
         exploreGroup(memo.getRootGroup(), context);
 
-        //System.out.println("Iterative Optimizer: optimizer: exit()");
         return memo.extract();
     }
 
@@ -204,7 +203,6 @@ public class IterativeOptimizer
     {
         // tracks whether this group or any children groups change as
         // this method executes
-        //System.out.println("Iterative Optimizer Explore Group");
         boolean progress = exploreNode(group, context);
 
         while (exploreChildren(group, context)) {
@@ -218,13 +216,11 @@ public class IterativeOptimizer
             }
         }
 
-        //System.out.println("Iterative Optimizer Explore Group: exit()");
         return progress;
     }
 
     private boolean exploreNode(int group, Context context)
     {
-        //System.out.println("Iterative Optimizer Explore Node");
         PlanNode node = context.memo.getNode(group);
 
         boolean done = false;
@@ -253,7 +249,6 @@ public class IterativeOptimizer
             }
         }
 
-        //System.out.println("Iterative Optimizer Explore Node: exit()");
         return progress;
     }
 
@@ -297,7 +292,6 @@ public class IterativeOptimizer
 
     private <T> Rule.Result transform(PlanNode node, Rule<T> rule, Context context)
     {
-        //System.out.println("Iterative Optimizer transform");
         Capture<T> nodeCapture = newCapture();
         Pattern<T> pattern = rule.getPattern().capturedAs(nodeCapture);
         Iterator<Match> matches = pattern.match(node, context.lookup).iterator();
@@ -321,8 +315,6 @@ public class IterativeOptimizer
             }
         }
 
-        //System.out.println("Iterative Optimizer transform: exit()");
-
         return Rule.Result.empty();
     }
 
@@ -345,7 +337,6 @@ public class IterativeOptimizer
 
     private boolean exploreChildren(int group, Context context)
     {
-        //System.out.println("Iterative Optimizer Explore Children");
         boolean progress = false;
 
         PlanNode expression = context.memo.getNode(group);

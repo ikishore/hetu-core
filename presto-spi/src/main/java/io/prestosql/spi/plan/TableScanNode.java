@@ -395,7 +395,7 @@ public class TableScanNode
         return true;
     }
 
-    public String getActualColName(String var)
+    public static String getActualColName(String var)
     {
         // TODO: Instead of stripping off _, we can get corresponding name from assigments column mapping.
         int index = var.lastIndexOf("_");
@@ -407,7 +407,7 @@ public class TableScanNode
         }
     }
 
-    private boolean isInteger(String st)
+    private static boolean isInteger(String st)
     {
         try {
             Integer.parseInt(st);

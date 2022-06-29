@@ -1,5 +1,5 @@
 /*
- * Copyright (C) 2018-2020. Huawei Technologies Co., Ltd. All rights reserved.
+ * Copyright (C) 2018-2021. Huawei Technologies Co., Ltd. All rights reserved.
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
  * You may obtain a copy of the License at
@@ -17,9 +17,6 @@ package io.prestosql.spi.filesystem;
 import java.io.IOException;
 import java.io.InputStream;
 import java.io.OutputStream;
-import java.nio.file.DirectoryNotEmptyException;
-import java.nio.file.FileAlreadyExistsException;
-import java.nio.file.NoSuchFileException;
 import java.nio.file.OpenOption;
 import java.nio.file.Path;
 import java.util.stream.Stream;
@@ -197,5 +194,20 @@ public interface HetuFileSystemClient
      */
     @Override
     void close()
+            throws IOException;
+
+    long getUsableSpace(Path path)
+            throws IOException;
+
+    long getTotalSpace(Path path)
+            throws IOException;
+
+    Path createTemporaryFile(Path path, String prefix, String suffix)
+            throws IOException;
+
+    Path createFile(Path path)
+            throws IOException;
+
+    Stream<Path> getDirectoryStream(Path path, String prefix, String suffix)
             throws IOException;
 }

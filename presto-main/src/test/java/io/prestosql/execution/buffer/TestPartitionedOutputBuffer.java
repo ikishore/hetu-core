@@ -16,21 +16,36 @@ package io.prestosql.execution.buffer;
 import com.google.common.collect.ImmutableList;
 import com.google.common.util.concurrent.ListenableFuture;
 import io.airlift.units.DataSize;
+import io.hetu.core.transport.execution.buffer.SerializedPage;
 import io.prestosql.execution.StateMachine;
 import io.prestosql.execution.buffer.OutputBuffers.OutputBufferId;
 import io.prestosql.memory.context.SimpleLocalMemoryContext;
+import io.prestosql.operator.PageAssertions;
+import io.prestosql.operator.TaskContext;
+import io.prestosql.snapshot.SnapshotStateId;
+import io.prestosql.snapshot.SnapshotUtils;
+import io.prestosql.snapshot.TaskSnapshotManager;
 import io.prestosql.spi.Page;
+import io.prestosql.spi.snapshot.MarkerPage;
+import io.prestosql.spi.snapshot.SnapshotTestUtil;
 import io.prestosql.spi.type.BigintType;
+import org.mockito.ArgumentCaptor;
 import org.testng.annotations.AfterClass;
 import org.testng.annotations.BeforeClass;
 import org.testng.annotations.Test;
 
 import java.util.ArrayList;
+import java.util.Arrays;
+import java.util.HashMap;
 import java.util.List;
+import java.util.Map;
+import java.util.Optional;
 import java.util.concurrent.ScheduledExecutorService;
+import java.util.stream.Collectors;
 
 import static io.airlift.concurrent.Threads.daemonThreadsNamed;
 import static io.airlift.units.DataSize.Unit.BYTE;
+import static io.prestosql.SessionTestUtils.TEST_SNAPSHOT_SESSION;
 import static io.prestosql.execution.buffer.BufferResult.emptyResults;
 import static io.prestosql.execution.buffer.BufferState.OPEN;
 import static io.prestosql.execution.buffer.BufferState.TERMINAL_BUFFER_STATES;
@@ -54,7 +69,13 @@ import static io.prestosql.execution.buffer.OutputBuffers.BufferType.PARTITIONED
 import static io.prestosql.execution.buffer.OutputBuffers.createInitialEmptyOutputBuffers;
 import static io.prestosql.memory.context.AggregatedMemoryContext.newSimpleAggregatedMemoryContext;
 import static io.prestosql.spi.type.BigintType.BIGINT;
+import static io.prestosql.testing.TestingTaskContext.createTaskContext;
 import static java.util.concurrent.Executors.newScheduledThreadPool;
+import static org.mockito.Matchers.anyObject;
+import static org.mockito.Mockito.mock;
+import static org.mockito.Mockito.times;
+import static org.mockito.Mockito.verify;
+import static org.mockito.Mockito.when;
 import static org.testng.Assert.assertEquals;
 import static org.testng.Assert.assertFalse;
 import static org.testng.Assert.assertTrue;
@@ -62,7 +83,6 @@ import static org.testng.Assert.fail;
 
 public class TestPartitionedOutputBuffer
 {
-    private static final String TASK_INSTANCE_ID = "task-instance-id";
     private static final ImmutableList<BigintType> TYPES = ImmutableList.of(BIGINT);
     private static final OutputBufferId FIRST = new OutputBufferId(0);
     private static final OutputBufferId SECOND = new OutputBufferId(1);
@@ -230,9 +250,212 @@ public class TestPartitionedOutputBuffer
                 createPage(15)));
         assertQueueState(buffer, FIRST, 10, 6);
         // acknowledge all pages from the first partition, should transition to finished state
-        assertBufferResultEquals(TYPES, getBufferResult(buffer, FIRST, 16, sizeOfPages(10), NO_WAIT), emptyResults(TASK_INSTANCE_ID, 16, true));
+        assertBufferResultEquals(TYPES, getBufferResult(buffer, FIRST, 16, sizeOfPages(10), NO_WAIT), emptyResults(16, true));
         buffer.abort(FIRST);
         assertQueueClosed(buffer, FIRST, 16);
+        assertFinished(buffer);
+    }
+
+    @Test
+    public void testSnapshot()
+    {
+        int firstPartition = 0;
+        int secondPartition = 1;
+        PartitionedOutputBuffer buffer = createPartitionedBuffer(
+                createInitialEmptyOutputBuffers(PARTITIONED)
+                        .withBuffer(FIRST, firstPartition)
+                        .withBuffer(SECOND, secondPartition)
+                        .withNoMoreBufferIds(),
+                sizeOfPages(20));
+
+        // add three items to each buffer
+        for (int i = 0; i < 3; i++) {
+            addPage(buffer, createPage(i), firstPartition);
+            addPage(buffer, createPage(i), secondPartition);
+        }
+
+        // add first partition
+        assertQueueState(buffer, FIRST, 3, 0);
+        assertQueueState(buffer, SECOND, 3, 0);
+
+        Object snapshot = buffer.capture(null);
+        Map<String, Object> actual = SnapshotTestUtil.toSimpleSnapshotMapping(snapshot);
+        assertEquals(actual, createExpectedMapping());
+
+        addPage(buffer, createPage(3), firstPartition);
+        addPage(buffer, createPage(3), secondPartition);
+
+        buffer.restore(snapshot, null);
+        snapshot = buffer.capture(null);
+        actual = SnapshotTestUtil.toSimpleSnapshotMapping(snapshot);
+        assertEquals(actual, createExpectedMapping());
+    }
+
+    @Test
+    public void testRestorePages()
+            throws Exception
+    {
+        SnapshotUtils snapshotUtils = mock(SnapshotUtils.class);
+        ScheduledExecutorService scheduler = newScheduledThreadPool(4, daemonThreadsNamed("test-%s"));
+        ScheduledExecutorService scheduledExecutor = newScheduledThreadPool(2, daemonThreadsNamed("test-scheduledExecutor-%s"));
+        TaskContext taskContext = createTaskContext(scheduler, scheduledExecutor, TEST_SNAPSHOT_SESSION, snapshotUtils);
+        taskContext.getSnapshotManager().setTotalComponents(2);
+
+        int firstPartition = 0;
+        int secondPartition = 1;
+
+        String channel1 = "channel1";
+        String channel2 = "channel2";
+
+        Page page1 = createPage(1);
+        Page page2 = createPage(2);
+        Page page3 = createPage(3);
+        Page marker = MarkerPage.snapshotPage(1);
+        Page resume = MarkerPage.resumePage(1);
+
+        PartitionedOutputBuffer buffer = createPartitionedBuffer(
+                createInitialEmptyOutputBuffers(PARTITIONED)
+                        .withBuffer(FIRST, firstPartition)
+                        .withBuffer(SECOND, secondPartition)
+                        .withNoMoreBufferIds(),
+                sizeOfPages(20));
+        buffer.setTaskContext(taskContext);
+        buffer.addInputChannel(channel1);
+        buffer.addInputChannel(channel2);
+        buffer.setNoMoreInputChannels();
+
+        // Add a page between markers from 2 input channels.
+        // This page becomes channel state, but needs to be sent to 2nd partition after state is restored.
+        buffer.enqueue(firstPartition, ImmutableList.of(PAGES_SERDE.serialize(marker)), channel1);
+        buffer.enqueue(secondPartition, ImmutableList.of(PAGES_SERDE.serialize(page1)), channel2);
+        buffer.enqueue(secondPartition, ImmutableList.of(PAGES_SERDE.serialize(marker)), channel2);
+
+        ArgumentCaptor<SnapshotStateId> idArgument = ArgumentCaptor.forClass(SnapshotStateId.class);
+        ArgumentCaptor<Object> stateArgument = ArgumentCaptor.forClass(Object.class);
+        ArgumentCaptor<TaskSnapshotManager> collectorArgument = ArgumentCaptor.forClass(TaskSnapshotManager.class);
+        // storeState is called once for each partition
+        verify(snapshotUtils, times(3)).storeState(idArgument.capture(), stateArgument.capture(), collectorArgument.capture());
+        List<SnapshotStateId> ids = idArgument.getAllValues();
+        List<Object> states = stateArgument.getAllValues();
+        List<TaskSnapshotManager> snapshotManagers = collectorArgument.getAllValues();
+        when(snapshotUtils.loadState(ids.get(0), snapshotManagers.get(0))).thenReturn(Optional.of(states.get(0)));
+        when(snapshotUtils.loadState(ids.get(1), snapshotManagers.get(1))).thenReturn(Optional.of(states.get(1)));
+        when(snapshotUtils.loadState(ids.get(2), snapshotManagers.get(2))).thenReturn(Optional.of(states.get(2)));
+
+        buffer = createPartitionedBuffer(
+                createInitialEmptyOutputBuffers(PARTITIONED)
+                        .withBuffer(FIRST, firstPartition)
+                        .withBuffer(SECOND, secondPartition)
+                        .withNoMoreBufferIds(),
+                sizeOfPages(20));
+        buffer.setTaskContext(taskContext);
+        buffer.addInputChannel(channel1);
+        buffer.addInputChannel(channel2);
+        buffer.setNoMoreInputChannels();
+
+        // Resume both partitions
+        buffer.enqueue(firstPartition, ImmutableList.of(PAGES_SERDE.serialize(resume)), channel1);
+        verify(snapshotUtils, times(3)).loadState(anyObject(), anyObject());
+
+        // Newly added page (page2) should be received after the resume marker
+        buffer.enqueue(firstPartition, ImmutableList.of(PAGES_SERDE.serialize(page2)), channel1);
+        ListenableFuture<BufferResult> future = buffer.get(FIRST, 0, sizeOfPages(10));
+        assertTrue(future.isDone());
+        List<SerializedPage> pages = future.get().getSerializedPages();
+        assertEquals(pages.size(), 2);
+        PageAssertions.assertPageEquals(TYPES, PAGES_SERDE.deserialize(pages.get(0)), resume);
+        PageAssertions.assertPageEquals(TYPES, PAGES_SERDE.deserialize(pages.get(1)), page2);
+
+        // Ensure that page1 is received by 2nd partition.
+        // Newly added page (page3) should be received after the resumed page (page1), which is after the resume marker.
+        buffer.enqueue(secondPartition, ImmutableList.of(PAGES_SERDE.serialize(page3)), channel1);
+        future = buffer.get(SECOND, 0, sizeOfPages(10));
+        assertTrue(future.isDone());
+        pages = future.get().getSerializedPages();
+
+        assertEquals(pages.size(), 3);
+        PageAssertions.assertPageEquals(TYPES, PAGES_SERDE.deserialize(pages.get(0)), resume);
+        PageAssertions.assertPageEquals(TYPES, PAGES_SERDE.deserialize(pages.get(1)), page1);
+        PageAssertions.assertPageEquals(TYPES, PAGES_SERDE.deserialize(pages.get(2)), page3);
+    }
+
+    private Map<String, Object> createExpectedMapping()
+    {
+        Map<String, Object> expectedMapping = new HashMap<>();
+        expectedMapping.put("totalPagesAdded", 6L);
+        expectedMapping.put("totalRowsAdded", 6L);
+        return expectedMapping;
+    }
+
+    @Test
+    public void testMarkers()
+    {
+        int firstPartition = 0;
+        int secondPartition = 1;
+        PartitionedOutputBuffer buffer = createPartitionedBuffer(
+                createInitialEmptyOutputBuffers(PARTITIONED)
+                        .withBuffer(FIRST, firstPartition)
+                        .withBuffer(SECOND, secondPartition)
+                        .withNoMoreBufferIds(),
+                sizeOfPages(6));
+
+        ScheduledExecutorService scheduler = newScheduledThreadPool(4, daemonThreadsNamed("test-%s"));
+        ScheduledExecutorService scheduledExecutor = newScheduledThreadPool(2, daemonThreadsNamed("test-scheduledExecutor-%s"));
+        TaskContext taskContext = createTaskContext(scheduler, scheduledExecutor, TEST_SNAPSHOT_SESSION);
+        buffer.setTaskContext(taskContext);
+        buffer.addInputChannel("id");
+        buffer.setNoMoreInputChannels();
+
+        MarkerPage marker1 = MarkerPage.snapshotPage(1);
+        MarkerPage marker2 = MarkerPage.snapshotPage(2);
+
+        // add 1 item to each buffer
+        addPage(buffer, createPage(0), firstPartition);
+        addPage(buffer, createPage(0), secondPartition);
+
+        // broadcast 2 pages
+        addPage(buffer, marker1, true);
+        addPage(buffer, marker2, true);
+        assertEquals(buffer.getInfo().getBuffers().stream().map(BufferInfo::getBufferedPages).collect(Collectors.toList()), Arrays.asList(3, 3));
+        assertEquals(buffer.getInfo().getBuffers().stream().map(BufferInfo::getPagesSent).collect(Collectors.toList()), Arrays.asList(0L, 0L));
+
+        // try to add one more page, which should block
+        ListenableFuture<?> future = enqueuePage(buffer, createPage(3), firstPartition);
+        assertFalse(future.isDone());
+        assertEquals(buffer.getInfo().getBuffers().stream().map(BufferInfo::getBufferedPages).collect(Collectors.toList()), Arrays.asList(4, 3));
+        assertEquals(buffer.getInfo().getBuffers().stream().map(BufferInfo::getPagesSent).collect(Collectors.toList()), Arrays.asList(0L, 0L));
+
+        // get most elements
+        assertBufferResultEquals(TYPES, getBufferResult(buffer, FIRST, 0, sizeOfPages(3), NO_WAIT),
+                bufferResult(0, createPage(0), marker1, marker2));
+        assertBufferResultEquals(TYPES, getBufferResult(buffer, SECOND, 0, sizeOfPages(3), NO_WAIT),
+                bufferResult(0, createPage(0), marker1, marker2));
+        assertEquals(buffer.getInfo().getBuffers().stream().map(BufferInfo::getBufferedPages).collect(Collectors.toList()), Arrays.asList(4, 3));
+        assertEquals(buffer.getInfo().getBuffers().stream().map(BufferInfo::getPagesSent).collect(Collectors.toList()), Arrays.asList(0L, 0L));
+
+        // we should still be blocked
+        assertFalse(future.isDone());
+
+        // acknowledge all pages
+        buffer.get(FIRST, 3, sizeOfPages(3)).cancel(true);
+        buffer.get(SECOND, 3, sizeOfPages(3)).cancel(true);
+        assertEquals(buffer.getInfo().getBuffers().stream().map(BufferInfo::getBufferedPages).collect(Collectors.toList()), Arrays.asList(1, 0));
+        assertEquals(buffer.getInfo().getBuffers().stream().map(BufferInfo::getPagesSent).collect(Collectors.toList()), Arrays.asList(3L, 3L));
+
+        // finish the buffer
+        assertFalse(buffer.isFinished());
+        buffer.setNoMorePages();
+
+        assertBufferResultEquals(TYPES, getBufferResult(buffer, FIRST, 3, sizeOfPages(1), NO_WAIT), bufferResult(3, createPage(3)));
+        buffer.get(FIRST, 4, sizeOfPages(1)).cancel(true);
+        assertEquals(buffer.getInfo().getBuffers().stream().map(BufferInfo::getBufferedPages).collect(Collectors.toList()), Arrays.asList(0, 0));
+        assertEquals(buffer.getInfo().getBuffers().stream().map(BufferInfo::getPagesSent).collect(Collectors.toList()), Arrays.asList(4L, 3L));
+        assertFutureIsDone(future);
+
+        buffer.abort(FIRST);
+        buffer.abort(SECOND);
+        assertQueueClosed(buffer, FIRST, 4);
+        assertQueueClosed(buffer, SECOND, 3);
         assertFinished(buffer);
     }
 
@@ -314,7 +537,7 @@ public class TestPartitionedOutputBuffer
         buffer.get(FIRST, 3, sizeOfPages(10)).cancel(true);
 
         // attempt to get the three elements again
-        assertBufferResultEquals(TYPES, getBufferResult(buffer, FIRST, 0, sizeOfPages(10), NO_WAIT), emptyResults(TASK_INSTANCE_ID, 0, false));
+        assertBufferResultEquals(TYPES, getBufferResult(buffer, FIRST, 0, sizeOfPages(10), NO_WAIT), emptyResults(0, false));
         // pages not acknowledged yet so state is the same
         assertQueueState(buffer, FIRST, 0, 3);
     }
@@ -442,13 +665,13 @@ public class TestPartitionedOutputBuffer
         assertBufferResultEquals(TYPES, getBufferResult(buffer, FIRST, 0, sizeOfPages(1), NO_WAIT), bufferResult(0, createPage(0)));
         buffer.abort(FIRST);
         assertQueueClosed(buffer, FIRST, 0);
-        assertBufferResultEquals(TYPES, getBufferResult(buffer, FIRST, 1, sizeOfPages(1), NO_WAIT), emptyResults(TASK_INSTANCE_ID, 0, true));
+        assertBufferResultEquals(TYPES, getBufferResult(buffer, FIRST, 1, sizeOfPages(1), NO_WAIT), emptyResults(0, true));
 
         assertBufferResultEquals(TYPES, getBufferResult(buffer, SECOND, 0, sizeOfPages(1), NO_WAIT), bufferResult(0, createPage(0)));
         buffer.abort(SECOND);
         assertQueueClosed(buffer, SECOND, 0);
         assertFinished(buffer);
-        assertBufferResultEquals(TYPES, getBufferResult(buffer, SECOND, 1, sizeOfPages(1), NO_WAIT), emptyResults(TASK_INSTANCE_ID, 0, true));
+        assertBufferResultEquals(TYPES, getBufferResult(buffer, SECOND, 1, sizeOfPages(1), NO_WAIT), emptyResults(0, true));
     }
 
     @Test
@@ -506,7 +729,7 @@ public class TestPartitionedOutputBuffer
 
         // verify the future completed
         // partitioned buffer does not return a "complete" result in this case, but it doesn't matter
-        assertBufferResultEquals(TYPES, getFuture(future, NO_WAIT), emptyResults(TASK_INSTANCE_ID, 1, false));
+        assertBufferResultEquals(TYPES, getFuture(future, NO_WAIT), emptyResults(1, false));
 
         // further requests will see a completed result
         assertQueueClosed(buffer, FIRST, 1);
@@ -543,7 +766,7 @@ public class TestPartitionedOutputBuffer
         assertQueueState(buffer, FIRST, 0, 1);
 
         // verify the future completed
-        assertBufferResultEquals(TYPES, getFuture(future, NO_WAIT), emptyResults(TASK_INSTANCE_ID, 1, true));
+        assertBufferResultEquals(TYPES, getFuture(future, NO_WAIT), emptyResults(1, true));
     }
 
     @Test
@@ -584,7 +807,7 @@ public class TestPartitionedOutputBuffer
         // get and acknowledge the last 6 pages
         assertBufferResultEquals(TYPES, getBufferResult(buffer, FIRST, 1, sizeOfPages(100), NO_WAIT),
                 bufferResult(1, createPage(1), createPage(2), createPage(3), createPage(4), createPage(5), createPage(6)));
-        assertBufferResultEquals(TYPES, getBufferResult(buffer, FIRST, 7, sizeOfPages(100), NO_WAIT), emptyResults(TASK_INSTANCE_ID, 7, true));
+        assertBufferResultEquals(TYPES, getBufferResult(buffer, FIRST, 7, sizeOfPages(100), NO_WAIT), emptyResults(7, true));
 
         buffer.abort(FIRST);
 
@@ -623,7 +846,7 @@ public class TestPartitionedOutputBuffer
         assertQueueClosed(buffer, FIRST, 1);
 
         // verify the future completed
-        assertBufferResultEquals(TYPES, getFuture(future, NO_WAIT), emptyResults(TASK_INSTANCE_ID, 1, false));
+        assertBufferResultEquals(TYPES, getFuture(future, NO_WAIT), emptyResults(1, false));
     }
 
     @Test
@@ -757,7 +980,7 @@ public class TestPartitionedOutputBuffer
         buffer.setNoMorePages();
 
         // get and acknowledge 5 pages
-        assertBufferResultEquals(TYPES, getBufferResult(buffer, FIRST, 0, sizeOfPages(5), MAX_WAIT), createBufferResult(TASK_INSTANCE_ID, 0, pages));
+        assertBufferResultEquals(TYPES, getBufferResult(buffer, FIRST, 0, sizeOfPages(5), MAX_WAIT), createBufferResult(0, pages));
 
         // buffer is not finished
         assertFalse(buffer.isFinished());
@@ -839,7 +1062,6 @@ public class TestPartitionedOutputBuffer
     private PartitionedOutputBuffer createPartitionedBuffer(OutputBuffers buffers, DataSize dataSize)
     {
         return new PartitionedOutputBuffer(
-                TASK_INSTANCE_ID,
                 new StateMachine<>("bufferState", stateNotificationExecutor, OPEN, TERMINAL_BUFFER_STATES),
                 buffers,
                 dataSize,
@@ -850,6 +1072,6 @@ public class TestPartitionedOutputBuffer
     private static BufferResult bufferResult(long token, Page firstPage, Page... otherPages)
     {
         List<Page> pages = ImmutableList.<Page>builder().add(firstPage).add(otherPages).build();
-        return createBufferResult(TASK_INSTANCE_ID, token, pages);
+        return createBufferResult(token, pages);
     }
 }

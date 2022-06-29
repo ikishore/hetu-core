@@ -25,6 +25,7 @@ import io.prestosql.failuredetector.NoOpFailureDetector;
 import io.prestosql.filesystem.FileSystemClientManager;
 import io.prestosql.metadata.InternalNode;
 import io.prestosql.seedstore.SeedStoreManager;
+import io.prestosql.snapshot.QuerySnapshotManager;
 import io.prestosql.spi.QueryId;
 import io.prestosql.spi.plan.PlanNode;
 import io.prestosql.spi.plan.PlanNodeId;
@@ -59,6 +60,7 @@ import static io.prestosql.spi.type.VarcharType.VARCHAR;
 import static io.prestosql.sql.planner.SystemPartitioningHandle.SINGLE_DISTRIBUTION;
 import static io.prestosql.sql.planner.SystemPartitioningHandle.SOURCE_DISTRIBUTION;
 import static io.prestosql.sql.planner.plan.ExchangeNode.Type.REPARTITION;
+import static io.prestosql.testing.TestingSnapshotUtils.NOOP_SNAPSHOT_UTILS;
 import static java.util.concurrent.Executors.newCachedThreadPool;
 import static java.util.concurrent.Executors.newScheduledThreadPool;
 import static java.util.concurrent.TimeUnit.MINUTES;
@@ -66,6 +68,7 @@ import static org.testng.Assert.assertFalse;
 import static org.testng.Assert.assertSame;
 import static org.testng.Assert.assertTrue;
 
+@Test(singleThreaded = true)
 public class TestSqlStageExecution
 {
     private ExecutorService executor;
@@ -117,7 +120,8 @@ public class TestSqlStageExecution
                 new NoOpFailureDetector(),
                 new SplitSchedulerStats(),
                 new DynamicFilterService(new LocalStateStoreProvider(
-                        new SeedStoreManager(new FileSystemClientManager()))));
+                        new SeedStoreManager(new FileSystemClientManager()))),
+                new QuerySnapshotManager(stageId.getQueryId(), NOOP_SNAPSHOT_UTILS, TEST_SESSION));
 
         stage.setOutputBuffers(createInitialEmptyOutputBuffers(ARBITRARY));
 

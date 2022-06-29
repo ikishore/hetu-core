@@ -13,8 +13,11 @@
  */
 package io.prestosql.operator;
 
+
+import com.google.common.collect.ImmutableList;
 import com.google.common.util.concurrent.ListenableFuture;
 import io.prestosql.spi.plan.Symbol;
+import io.prestosql.spi.snapshot.MarkerPage;
 import io.prestosql.spi.type.Type;
 
 import java.util.List;
@@ -44,7 +47,21 @@ public interface LookupSourceFactory
                 i -> {
                     throw new UnsupportedOperationException();
                 },
-                i -> {}));
+                i -> {},
+                i -> {
+                    throw new UnsupportedOperationException();
+                }));
+    }
+
+
+    default ListenableFuture<PartitionedConsumption<OuterPositionIterator>> startOuterOperator(OptionalInt lookupJoinsCount)
+    {
+        return immediateFuture(new PartitionedConsumption<>(
+                1,
+                ImmutableList.of(1),
+                i -> immediateFuture(null),
+                i -> {},
+                i -> immediateFuture(null)));
     }
 
     /**
@@ -62,6 +79,31 @@ public interface LookupSourceFactory
     void destroy();
 
     default ListenableFuture<?> isDestroyed()
+    {
+        throw new UnsupportedOperationException();
+    }
+
+    default void setLookupOuterOperator(LookupOuterOperator operator)
+    {
+        throw new UnsupportedOperationException();
+    }
+
+    default void processMarkerForTableScanOuterJoin(MarkerPage markerPage)
+    {
+        throw new UnsupportedOperationException();
+    }
+
+    default void processMarkerForExchangeOuterJoin(MarkerPage markerPage, int totalDrivers, int driverId)
+    {
+        throw new UnsupportedOperationException();
+    }
+
+    default Object captureJoinPositions()
+    {
+        throw new UnsupportedOperationException();
+    }
+
+    default void restoreJoinPositions(Object state)
     {
         throw new UnsupportedOperationException();
     }

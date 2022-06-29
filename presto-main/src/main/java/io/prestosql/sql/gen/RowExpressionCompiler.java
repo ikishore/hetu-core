@@ -19,7 +19,9 @@ import io.airlift.bytecode.BytecodeBlock;
 import io.airlift.bytecode.BytecodeNode;
 import io.airlift.bytecode.Scope;
 import io.airlift.bytecode.Variable;
+import io.prestosql.metadata.FunctionAndTypeManager;
 import io.prestosql.metadata.Metadata;
+import io.prestosql.spi.function.FunctionMetadata;
 import io.prestosql.spi.relation.CallExpression;
 import io.prestosql.spi.relation.ConstantExpression;
 import io.prestosql.spi.relation.InputReferenceExpression;
@@ -45,7 +47,7 @@ import static io.airlift.bytecode.instruction.Constant.loadString;
 import static io.prestosql.sql.gen.BytecodeUtils.loadConstant;
 import static io.prestosql.sql.gen.ClassContext.SPLIT_EXPRESSION_DEPTH_THRESHOLD;
 import static io.prestosql.sql.gen.LambdaBytecodeGenerator.generateLambda;
-import static io.prestosql.sql.relational.Signatures.CAST;
+import static java.lang.String.format;
 
 public class RowExpressionCompiler
 {
@@ -98,23 +100,21 @@ public class RowExpressionCompiler
         @Override
         public BytecodeNode visitCall(CallExpression call, Context context)
         {
-            BytecodeGenerator generator;
-            // special-cased in function registry
-            if (call.getSignature().getName().equals(CAST)) {
-                generator = new CastCodeGenerator();
+            FunctionAndTypeManager functionAndTypeManager = metadata.getFunctionAndTypeManager();
+            FunctionMetadata functionMetadata = functionAndTypeManager.getFunctionMetadata(call.getFunctionHandle());
+            BytecodeGeneratorContext generatorContext;
+            switch (functionMetadata.getImplementationType()) {
+                case BUILTIN:
+                    generatorContext = new BytecodeGeneratorContext(
+                            RowExpressionCompiler.this,
+                            context.getScope(),
+                            callSiteBinder,
+                            cachedInstanceBinder,
+                            functionAndTypeManager);
+                    return (new FunctionCallCodeGenerator()).generateExpression(call.getFunctionHandle(), generatorContext, call.getType(), call.getArguments());
+                default:
+                    throw new IllegalArgumentException(format("Unsupported function implementation type in RowExpressionCompiler: %s. For the external function, we will support to execute them in the future release.", functionMetadata.getImplementationType()));
             }
-            else {
-                generator = new FunctionCallCodeGenerator();
-            }
-
-            BytecodeGeneratorContext generatorContext = new BytecodeGeneratorContext(
-                    RowExpressionCompiler.this,
-                    context.getScope(),
-                    callSiteBinder,
-                    cachedInstanceBinder,
-                    metadata);
-
-            return generator.generateExpression(call.getSignature(), generatorContext, call.getType(), call.getArguments());
         }
 
         @Override
@@ -158,6 +158,9 @@ public class RowExpressionCompiler
                     }
                     generator = new AndCodeGenerator();
                     break;
+                case BETWEEN_AND:
+                    generator = new AndCodeGenerator();
+                    break;
                 case OR:
                     classContext = functionContext;
                     if (classContext != null) {
@@ -184,21 +187,22 @@ public class RowExpressionCompiler
                     context.getScope(),
                     callSiteBinder,
                     cachedInstanceBinder,
-                    metadata);
+                    metadata.getFunctionAndTypeManager());
 
             BytecodeNode bytecodeNode = null;
             if (classContext != null) {
                 /* if (classContext.getWeight() >= SPLIT_EXPRESSION_WEIGHT) */
                 if (classContext.getWeight() > SPLIT_EXPRESSION_DEPTH_THRESHOLD) {
                     /* Generate a function and change the Scope variable */
-                    functionContext.incrementFuncSeq();
-                    String newFunctionName = "filterInternal" + functionContext.getFuncSeq();
+                    classContext.incrementFuncSeq();
+                    String newFunctionName = "filterInternal" + classContext.getFuncSeq();
+
+                    classContext.resetWeight();
 
                     /* call the new method and return the expression */
-                    bytecodeNode = functionContext.getFilterMethodGenerator()
+                    bytecodeNode = classContext.getFilterMethodGenerator()
                             .generateNewFilterMethod(newFunctionName, RowExpressionCompiler.this,
                                     generator, specialForm, context.getScope());
-                    classContext.resetWeight();
                 }
                 else {
                     bytecodeNode = generator.generateExpression(null, generatorContext, specialForm.getType(), specialForm.getArguments());
@@ -275,7 +279,7 @@ public class RowExpressionCompiler
                     context.getScope(),
                     callSiteBinder,
                     cachedInstanceBinder,
-                    metadata);
+                    metadata.getFunctionAndTypeManager());
 
             return generateLambda(
                     generatorContext,

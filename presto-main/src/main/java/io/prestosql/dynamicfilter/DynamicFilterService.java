@@ -1,5 +1,5 @@
 /*
- * Copyright (C) 2018-2020. Huawei Technologies Co., Ltd. All rights reserved.
+ * Copyright (C) 2018-2021. Huawei Technologies Co., Ltd. All rights reserved.
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
  * You may obtain a copy of the License at
@@ -195,7 +195,7 @@ public class DynamicFilterService
                     }
                     else if (filterDataType == HASHSET) {
                         Set mergedSet = mergeHashSets(results);
-                        mergedFilter = DynamicFilterFactory.create(filterKey, null, mergedSet, filterType, dfFilter);
+                        mergedFilter = DynamicFilterFactory.create(filterKey, null, mergedSet, filterType, dfFilter, Optional.empty());
 
                         if (filterType == GLOBAL) {
                             mergedDynamicFilters.put(filterKey, mergedSet);
@@ -224,26 +224,33 @@ public class DynamicFilterService
     private void removeFinishedQuery()
     {
         List<String> handledQuery = new ArrayList<>();
-        StateMap mergedStateCollection = (StateMap) stateStoreProvider.getStateStore().getOrCreateStateCollection(DynamicFilterUtils.MERGED_DYNAMIC_FILTERS, MAP);
+        StateStore stateStore = stateStoreProvider.getStateStore();
+        StateMap mergedStateCollection = (StateMap) stateStore.getOrCreateStateCollection(DynamicFilterUtils.MERGED_DYNAMIC_FILTERS, MAP);
         // Clear registered dynamic filter tasks
-        for (String queryId : finishedQuery) {
-            Map<String, DynamicFilterRegistryInfo> filters = dynamicFilters.get(queryId);
-            if (filters != null) {
-                for (Entry<String, DynamicFilterRegistryInfo> entry : filters.entrySet()) {
-                    String filterId = entry.getKey();
-                    clearPartialResults(filterId, queryId);
-                    if (entry.getValue().isMerged()) {
-                        String filterKey = createKey(DynamicFilterUtils.FILTERPREFIX, filterId, queryId);
-                        mergedStateCollection.remove(filterKey);
+        synchronized (finishedQuery) {
+            for (String queryId : finishedQuery) {
+                Map<String, DynamicFilterRegistryInfo> filters = dynamicFilters.get(queryId);
+                if (filters != null) {
+                    for (Entry<String, DynamicFilterRegistryInfo> entry : filters.entrySet()) {
+                        String filterId = entry.getKey();
+                        clearPartialResults(filterId, queryId);
+                        if (entry.getValue().isMerged()) {
+                            String filterKey = createKey(DynamicFilterUtils.FILTERPREFIX, filterId, queryId);
+                            mergedStateCollection.remove(filterKey);
+                        }
                     }
                 }
-            }
-            dynamicFilters.remove(queryId);
+                List<String> collectionKeys = stateStore.getStateCollections().keySet().stream().filter(key -> key.contains(queryId)).collect(Collectors.toList());
+                for (String key : collectionKeys) {
+                    clearStatesInStateStore(stateStore, key);
+                }
+                dynamicFilters.remove(queryId);
 
-            cachedDynamicFilters.remove(queryId);
-            handledQuery.add(queryId);
+                cachedDynamicFilters.remove(queryId);
+                handledQuery.add(queryId);
+            }
+            finishedQuery.removeAll(handledQuery);
         }
-        finishedQuery.removeAll(handledQuery);
     }
 
     private static BloomFilter mergeBloomFilters(Collection<Object> partialBloomFilters)
@@ -307,10 +314,6 @@ public class DynamicFilterService
             if (!criterias.isEmpty()) {
                 registerTasksHelper(node, criterias.get(0).getRight(), joinNode.getDynamicFilters(), taskIds, workers, stateMachine);
             }
-            else {
-                log.warn("registerTasks is empty");
-            }
-        //    registerTasksHelper(node, (joinNode.getCriteria().isEmpty() ? null : joinNode.getCriteria().get(0).getRight()), joinNode.getDynamicFilters(), taskIds, workers, stateMachine);
         }
         else if (node instanceof SemiJoinNode) {
             SemiJoinNode semiJoinNode = (SemiJoinNode) node;
@@ -355,7 +358,9 @@ public class DynamicFilterService
      */
     public void clearDynamicFiltersForQuery(String queryId)
     {
-        finishedQuery.add(queryId);
+        synchronized (finishedQuery) {
+            finishedQuery.add(queryId);
+        }
     }
 
     /**
@@ -389,37 +394,47 @@ public class DynamicFilterService
      * dynamic filter can be available at any time
      *
      * @param queryId query id of the query
-     * @param dynamicFilters dynamic filter descriptors from logical plan
+     * @param dynamicFilterList dynamic filter descriptors from logical plan
      * @param columnHandles column handles of the table to be scanned
      * @return supplier that may contain a set of dynamic filters
      */
-    public static Supplier<Set<DynamicFilter>> getDynamicFilterSupplier(QueryId queryId, List<DynamicFilters.Descriptor> dynamicFilters, Map<Symbol, ColumnHandle> columnHandles)
+    public static Supplier<List<Set<DynamicFilter>>> getDynamicFilterSupplier(QueryId queryId, List<List<DynamicFilters.Descriptor>> dynamicFilterList, Map<Symbol, ColumnHandle> columnHandles)
     {
-        Map<String, ColumnHandle> sourceColumnHandles = extractSourceExpressionSymbols(dynamicFilters)
-                .entrySet().stream()
-                .collect(Collectors.toMap(Map.Entry::getKey, entry -> columnHandles.get(entry.getValue())));
+        List<Map<String, ColumnHandle>> sourceColumnHandlesList = new ArrayList<>();
+        for (List<DynamicFilters.Descriptor> dynamicFilters : dynamicFilterList) {
+            Map<String, ColumnHandle> sourceColumnHandles = extractSourceExpressionSymbols(dynamicFilters)
+                    .entrySet().stream()
+                    .collect(Collectors.toMap(Map.Entry::getKey, entry -> columnHandles.get(entry.getValue())));
+            sourceColumnHandlesList.add(sourceColumnHandles);
+        }
         return () -> {
-            ImmutableSet.Builder<DynamicFilter> builder = ImmutableSet.builder();
+            List<Set<DynamicFilter>> supplier = new ArrayList<>();
+            for (int i = 0; i < dynamicFilterList.size(); i++) {
+                ImmutableSet.Builder<DynamicFilter> builder = ImmutableSet.builder();
 
-            if (sourceColumnHandles.isEmpty() || !cachedDynamicFilters.containsKey(queryId.getId())) {
-                return builder.build();
-            }
+                if (sourceColumnHandlesList.get(i).isEmpty() || !cachedDynamicFilters.containsKey(queryId.getId())) {
+                    continue;
+                }
 
-            Map<String, DynamicFilter> cachedDynamicFiltersForQuery = cachedDynamicFilters.get(queryId.getId());
-            if (cachedDynamicFiltersForQuery.isEmpty()) {
-                return builder.build();
-            }
-
-            for (DynamicFilters.Descriptor dynamicFilterDescriptor : dynamicFilters) {
-                String filterId = dynamicFilterDescriptor.getId();
-                if (cachedDynamicFiltersForQuery.containsKey(filterId) && sourceColumnHandles.containsKey(filterId)) {
-                    ColumnHandle column = sourceColumnHandles.get(filterId);
-                    DynamicFilter df = cachedDynamicFiltersForQuery.get(filterId).clone();
-                    df.setColumnHandle(column);
-                    builder.add(df);
+                Map<String, DynamicFilter> cachedDynamicFiltersForQuery = cachedDynamicFilters.get(queryId.getId());
+                if (cachedDynamicFiltersForQuery.isEmpty()) {
+                    continue;
+                }
+                for (DynamicFilters.Descriptor dynamicFilterDescriptor : dynamicFilterList.get(i)) {
+                    String filterId = dynamicFilterDescriptor.getId();
+                    if (cachedDynamicFiltersForQuery.containsKey(filterId) && sourceColumnHandlesList.get(i).containsKey(filterId)) {
+                        ColumnHandle column = sourceColumnHandlesList.get(i).get(filterId);
+                        DynamicFilter df = cachedDynamicFiltersForQuery.get(filterId).clone();
+                        df.setColumnHandle(column);
+                        builder.add(df);
+                    }
+                }
+                Set<DynamicFilter> dynamicFiltersSet = builder.build();
+                if (!dynamicFiltersSet.isEmpty()) {
+                    supplier.add(dynamicFiltersSet);
                 }
             }
-            return builder.build();
+            return supplier;
         };
     }
 

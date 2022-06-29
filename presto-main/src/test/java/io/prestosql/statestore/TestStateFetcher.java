@@ -1,5 +1,5 @@
 /*
- * Copyright (C) 2018-2020. Huawei Technologies Co., Ltd. All rights reserved.
+ * Copyright (C) 2018-2021. Huawei Technologies Co., Ltd. All rights reserved.
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
  * You may obtain a copy of the License at
@@ -35,6 +35,7 @@ import java.io.FileInputStream;
 import java.io.IOException;
 import java.io.InputStream;
 import java.io.InputStreamReader;
+import java.nio.charset.StandardCharsets;
 import java.util.Map;
 import java.util.concurrent.ConcurrentHashMap;
 
@@ -142,7 +143,7 @@ public class TestStateFetcher
     {
         String mockData;
         try (InputStream in = new FileInputStream(file)) {
-            InputStreamReader isReader = new InputStreamReader(in);
+            InputStreamReader isReader = new InputStreamReader(in, StandardCharsets.UTF_8);
             BufferedReader reader = new BufferedReader(isReader);
             StringBuilder stringBuilder = new StringBuilder();
             String tempString;
@@ -185,7 +186,7 @@ public class TestStateFetcher
     {
         supportCollectionTypeMAP(true);
         stateFetcher.start();
-        stateFetcher.fetchStates();
+        stateFetcher.fetchAllStates();
         assertEquals(StateCacheStore.get().getCachedStates(STATE_COLLECTION_QUERY).size(), CACHED_STATES_MAP_SIZE);
     }
 
@@ -194,7 +195,7 @@ public class TestStateFetcher
             throws Exception
     {
         supportCollectionWithInvalidStates();
-        stateFetcher.fetchStates();
+        stateFetcher.fetchAllStates();
         assertEquals(StateCacheStore.get().getCachedStates(STATE_COLLECTION_QUERY).size(), CACHED_STATES_MAP_SIZE);
     }
 
@@ -205,7 +206,7 @@ public class TestStateFetcher
         stateStoreMockData();
         mockStateCollectionData();
         when(stateStoreProvider.getStateStore()).then(new Returns(STRING_NULL));
-        stateFetcher.fetchStates();
+        stateFetcher.fetchAllStates();
         assertEquals(StateCacheStore.get().getCachedStates(STATE_COLLECTION_QUERY).size(), CACHED_STATES_MAP_SIZE);
     }
 
@@ -215,7 +216,7 @@ public class TestStateFetcher
     {
         stateStoreMockData();
         mockStateCollectionEmptyData();
-        stateFetcher.fetchStates();
+        stateFetcher.fetchAllStates();
         assertEquals(StateCacheStore.get().getCachedStates(STATE_COLLECTION_QUERY).size(), CACHED_STATES_MAP_SIZE);
     }
 
@@ -247,7 +248,7 @@ public class TestStateFetcher
             throws Exception
     {
         supportCollectionTypeMAP(true);
-        stateFetcher.fetchStates();
+        stateFetcher.fetchAllStates();
         assertEquals(StateCacheStore.get().getCachedStates(STATE_COLLECTION_QUERY).size(), CACHED_STATES_MAP_SIZE);
     }
 
@@ -256,7 +257,7 @@ public class TestStateFetcher
             throws Exception
     {
         supportCollectionTypeMAP(false);
-        stateFetcher.fetchStates();
+        stateFetcher.fetchAllStates();
         Map stateCacheStore = StateCacheStore.get().getCachedStates(STATE_COLLECTION_QUERY);
         assertEquals(StateCacheStore.get().getCachedStates(STATE_COLLECTION_QUERY).size(), CACHED_STATES_MAP_SIZE);
         //TODO check state change

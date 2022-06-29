@@ -1,5 +1,5 @@
 /*
- * Copyright (C) 2018-2020. Huawei Technologies Co., Ltd. All rights reserved.
+ * Copyright (C) 2018-2021. Huawei Technologies Co., Ltd. All rights reserved.
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
  * You may obtain a copy of the License at
@@ -15,6 +15,7 @@
 package io.prestosql.statestore;
 
 import com.google.common.annotations.VisibleForTesting;
+import com.google.common.collect.ImmutableMap;
 import com.google.inject.Inject;
 import io.airlift.http.server.HttpServerInfo;
 import io.airlift.log.Logger;
@@ -22,11 +23,17 @@ import io.prestosql.seedstore.SeedStoreManager;
 import io.prestosql.server.InternalCommunicationConfig;
 import io.prestosql.spi.PrestoException;
 import io.prestosql.spi.filesystem.FileBasedLock;
+import io.prestosql.spi.seedstore.Seed;
+import io.prestosql.spi.seedstore.SeedStoreSubType;
 import io.prestosql.spi.statestore.StateCollection;
 import io.prestosql.spi.statestore.StateMap;
 import io.prestosql.spi.statestore.StateStore;
 import io.prestosql.spi.statestore.StateStoreBootstrapper;
 import io.prestosql.utils.HetuConfig;
+
+import javax.net.ServerSocketFactory;
+import javax.net.ssl.SSLServerSocket;
+import javax.net.ssl.SSLServerSocketFactory;
 
 import java.io.File;
 import java.io.IOException;
@@ -111,11 +118,11 @@ public class EmbeddedStateStoreLauncher
             if (staticSeeds.size() > 0) {
                 launchStateStore(staticSeeds, properties);
             }
-            else if (seedStoreManager.getSeedStore() != null) {
+            else if (seedStoreManager.getSeedStore(SeedStoreSubType.HAZELCAST) != null) {
                 // Set seed store name
-                seedStoreManager.getSeedStore().setName(properties.get(STATE_STORE_CLUSTER_PROPERTY_NAME));
+                seedStoreManager.getSeedStore(SeedStoreSubType.HAZELCAST).setName(properties.get(STATE_STORE_CLUSTER_PROPERTY_NAME));
                 // Clear expired seeds
-                seedStoreManager.clearExpiredSeeds();
+                seedStoreManager.clearExpiredSeeds(SeedStoreSubType.HAZELCAST);
                 // Use lock to control synchronization of state store launch among all coordinators
                 Lock launcherLock = new FileBasedLock(seedStoreManager.getFileSystemClient(), Paths.get(LAUNCHER_LOCK_FILE_PATH));
                 try {
@@ -141,19 +148,52 @@ public class EmbeddedStateStoreLauncher
 
     private void launchStateStoreFromSeedStore(Map<String, String> properties) throws IOException
     {
+        URI externalUri = httpServerInfo.getHttpExternalUri() != null ? httpServerInfo.getHttpExternalUri() : httpServerInfo.getHttpsExternalUri();
         // Get all seeds
-        Set<String> locations = seedStoreManager.getAllSeeds()
+        Set<String> locations = seedStoreManager.getAllSeeds(SeedStoreSubType.HAZELCAST)
                 .stream()
                 .map(x -> x.getLocation())
                 .collect(Collectors.toSet());
         String launcherPort = getStateStoreLauncherPort(properties);
         requireNonNull(launcherPort, "The launcher port is null");
+        // Detect port conflict and get the next usable one
+        launcherPort = checkAndGetAvailablePort(launcherPort);
+        properties.put(HAZELCAST_DISCOVERY_PORT_PROPERTY_NAME, launcherPort);
         // Launch state store
         String currentLocation = getNodeUri().getHost() + ":" + launcherPort;
         locations.add(currentLocation);
         if (launchStateStore(locations, properties) != null) {
             // Add seed to seed store if and only if state store launched successfully
-            seedStoreManager.addSeed(currentLocation, true);
+            seedStoreManager.addSeed(SeedStoreSubType.HAZELCAST, currentLocation, true);
+        }
+        // Also add this hazelcast state store uri to the on-yarn seedstore
+        if (seedStoreManager.getSeedStore(SeedStoreSubType.ON_YARN) != null) {
+            Map<String, String> seedProperties = ImmutableMap.of(
+                    Seed.LOCATION_PROPERTY_NAME, externalUri.toString(),
+                    Seed.TIMESTAMP_PROPERTY_NAME, String.valueOf(System.currentTimeMillis()),
+                    Seed.INTERNAL_STATE_STORE_URI_PROPERTY_NAME, currentLocation);
+            seedStoreManager.updateSeed(SeedStoreSubType.ON_YARN, externalUri.toString(), seedProperties);
+        }
+    }
+
+    private String checkAndGetAvailablePort(String port)
+    {
+        int nextPort = Integer.parseInt(port);
+        while (!isPortAvailable(nextPort)) {
+            nextPort++;
+        }
+
+        return String.valueOf(nextPort);
+    }
+
+    private static boolean isPortAvailable(int port)
+    {
+        ServerSocketFactory sslServerSocketFactory = SSLServerSocketFactory.getDefault();
+        try (SSLServerSocket socket = (SSLServerSocket) sslServerSocketFactory.createServerSocket(port)) {
+            return true;
+        }
+        catch (IOException e) {
+            return false;
         }
     }
 
@@ -211,6 +251,7 @@ public class EmbeddedStateStoreLauncher
             Thread.sleep((long) (new SecureRandom().nextDouble() * 1000));
         }
         catch (InterruptedException e) {
+            LOG.debug("Error message: " + e.getMessage());
         }
 
         boolean registered = false;
@@ -271,18 +312,28 @@ public class EmbeddedStateStoreLauncher
 
     private void handleNodeFailure(Object failureMember)
     {
+        LOG.debug("EmbeddedStateStoreLauncher::handleNodeFailure invoked on %s", (String) failureMember);
         if (hetuConfig.isMultipleCoordinatorEnabled()) {
             // failureMember format host:port
             String failureMemberHost = ((String) failureMember).split(":")[0];
             registerDiscoveryService(failureMemberHost);
         }
 
-        if (seedStoreManager.getSeedStore() != null) {
+        if (seedStoreManager.getSeedStore(SeedStoreSubType.HAZELCAST) != null) {
             try {
-                seedStoreManager.removeSeed((String) failureMember);
+                seedStoreManager.removeSeed(SeedStoreSubType.HAZELCAST, (String) failureMember);
             }
             catch (Exception e) {
                 LOG.error("Cannot remove failure node %s from seed store: %s", failureMember, e.getMessage());
+            }
+        }
+
+        if (seedStoreManager.getSeedStore(SeedStoreSubType.ON_YARN) != null) {
+            try {
+                seedStoreManager.removeSeed(SeedStoreSubType.ON_YARN, (String) failureMember);
+            }
+            catch (Exception e) {
+                LOG.error("Cannot remove failure node %s from seeds-resources.json: %s", (String) failureMember, e.getMessage());
             }
         }
     }

@@ -5,7 +5,7 @@
     <parent>
         <artifactId>presto-root</artifactId>
         <groupId>io.hetu.core</groupId>
-        <version>1.2.0-SNAPSHOT</version>
+        <version>1.7.0-SNAPSHOT</version>
     </parent>
 
     <artifactId>hetu-hazelcast</artifactId>
@@ -13,14 +13,28 @@
 
     <properties>
         <air.main.basedir>${project.parent.basedir}</air.main.basedir>
-        <hazelcast.version>4.0.3</hazelcast.version>
+        <picocli.version>4.6.3</picocli.version>
+        <jline.version>3.21.0</jline.version>
+        <hazelcast.version>5.1</hazelcast.version>
         <aspectjweaver.version>1.9.4</aspectjweaver.version>
-        <spring-context.version>5.2.5.RELEASE</spring-context.version>
+        <spring-context.version>5.2.19.RELEASE</spring-context.version>
         <cache-api.version>1.1.1</cache-api.version>
         <jmockit.version>1.38</jmockit.version>
     </properties>
 
     <dependencies>
+        <dependency>
+            <groupId>info.picocli</groupId>
+            <artifactId>picocli</artifactId>
+            <version>${picocli.version}</version>
+            <scope>compile</scope>
+        </dependency>
+        <dependency>
+            <groupId>org.jline</groupId>
+            <artifactId>jline</artifactId>
+            <version>${jline.version}</version>
+            <scope>compile</scope>
+        </dependency>
         <dependency>
             <groupId>com.hazelcast</groupId>
             <artifactId>hazelcast</artifactId>

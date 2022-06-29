@@ -30,6 +30,7 @@ import javax.annotation.Nullable;
 import java.util.List;
 import java.util.OptionalDouble;
 import java.util.Set;
+import java.util.concurrent.TimeUnit;
 
 import static com.google.common.base.Preconditions.checkArgument;
 import static io.airlift.units.DataSize.succinctBytes;
@@ -52,6 +53,8 @@ public class QueryStats
     private final Duration analysisTime;
     private final Duration distributedPlanningTime;
     private final Duration totalPlanningTime;
+    private final Duration totalLogicalPlanningTime;
+    private final Duration totalSyntaxAnalysisTime;
     private final Duration finishingTime;
 
     private final int totalTasks;
@@ -118,6 +121,8 @@ public class QueryStats
             @JsonProperty("analysisTime") Duration analysisTime,
             @JsonProperty("distributedPlanningTime") Duration distributedPlanningTime,
             @JsonProperty("totalPlanningTime") Duration totalPlanningTime,
+            @JsonProperty("totalLogicalPlanningTime") Duration totalLogicalPlanningTime,
+            @JsonProperty("totalSyntaxAnalysisTime") Duration totalSyntaxAnalysisTime,
             @JsonProperty("finishingTime") Duration finishingTime,
 
             @JsonProperty("totalTasks") int totalTasks,
@@ -182,6 +187,8 @@ public class QueryStats
         this.analysisTime = requireNonNull(analysisTime, "analysisTime is null");
         this.distributedPlanningTime = requireNonNull(distributedPlanningTime, "distributedPlanningTime is null");
         this.totalPlanningTime = requireNonNull(totalPlanningTime, "totalPlanningTime is null");
+        this.totalLogicalPlanningTime = requireNonNull(totalLogicalPlanningTime, "totalLogicalPlanningTime is null");
+        this.totalSyntaxAnalysisTime = requireNonNull(totalSyntaxAnalysisTime, "totalSyntaxAnalysisTime is null");
         this.finishingTime = requireNonNull(finishingTime, "finishingTime is null");
 
         checkArgument(totalTasks >= 0, "totalTasks is negative");
@@ -317,6 +324,18 @@ public class QueryStats
     public Duration getTotalPlanningTime()
     {
         return totalPlanningTime;
+    }
+
+    @JsonProperty
+    public Duration getTotalLogicalPlanningTime()
+    {
+        return totalLogicalPlanningTime;
+    }
+
+    @JsonProperty
+    public Duration getTotalSyntaxAnalysisTime()
+    {
+        return totalSyntaxAnalysisTime;
     }
 
     @JsonProperty
@@ -581,5 +600,23 @@ public class QueryStats
         return succinctBytes(operatorSummaries.stream()
                 .mapToLong(stats -> stats.getSpilledDataSize().toBytes())
                 .sum());
+    }
+
+    @JsonProperty
+    public Duration getSpilledReadTime()
+    {
+        return new Duration(operatorSummaries.stream()
+                    .mapToLong(stats -> stats.getSpillReadTime().toMillis())
+                    .sum(),
+                TimeUnit.MILLISECONDS).convertToMostSuccinctTimeUnit();
+    }
+
+    @JsonProperty
+    public Duration getSpilledWriteTime()
+    {
+        return new Duration(operatorSummaries.stream()
+                .mapToLong(stats -> stats.getSpillWriteTime().toMillis())
+                .sum(),
+                TimeUnit.MILLISECONDS).convertToMostSuccinctTimeUnit();
     }
 }

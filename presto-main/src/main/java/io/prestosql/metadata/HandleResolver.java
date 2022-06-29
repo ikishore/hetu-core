@@ -15,6 +15,7 @@ package io.prestosql.metadata;
 
 import io.prestosql.connector.informationschema.InformationSchemaHandleResolver;
 import io.prestosql.connector.system.SystemHandleResolver;
+import io.prestosql.snapshot.MarkerSplitHandleResolver;
 import io.prestosql.spi.connector.ColumnHandle;
 import io.prestosql.spi.connector.ConnectorDeleteAsInsertTableHandle;
 import io.prestosql.spi.connector.ConnectorHandleResolver;
@@ -28,6 +29,8 @@ import io.prestosql.spi.connector.ConnectorTableLayoutHandle;
 import io.prestosql.spi.connector.ConnectorTransactionHandle;
 import io.prestosql.spi.connector.ConnectorUpdateTableHandle;
 import io.prestosql.spi.connector.ConnectorVacuumTableHandle;
+import io.prestosql.spi.function.FunctionHandle;
+import io.prestosql.spi.function.FunctionHandleResolver;
 import io.prestosql.split.EmptySplitHandleResolver;
 
 import javax.inject.Inject;
@@ -49,6 +52,7 @@ import static java.util.Objects.requireNonNull;
 public class HandleResolver
 {
     private final ConcurrentMap<String, MaterializedHandleResolver> handleResolvers = new ConcurrentHashMap<>();
+    private final ConcurrentMap<String, MaterializedFunctionHandleResolver> functionHandleResolvers = new ConcurrentHashMap<>();
 
     @Inject
     public HandleResolver()
@@ -57,6 +61,9 @@ public class HandleResolver
         handleResolvers.put("$system", new MaterializedHandleResolver(new SystemHandleResolver()));
         handleResolvers.put("$info_schema", new MaterializedHandleResolver(new InformationSchemaHandleResolver()));
         handleResolvers.put("$empty", new MaterializedHandleResolver(new EmptySplitHandleResolver()));
+        handleResolvers.put("$marker", new MaterializedHandleResolver(new MarkerSplitHandleResolver()));
+
+        functionHandleResolvers.put("$static", new MaterializedFunctionHandleResolver(new BuiltInFunctionNamespaceHandleResolver()));
     }
 
     public void addConnectorName(String name, ConnectorHandleResolver resolver)
@@ -66,6 +73,14 @@ public class HandleResolver
         MaterializedHandleResolver existingResolver = handleResolvers.putIfAbsent(name, new MaterializedHandleResolver(resolver));
         checkState(existingResolver == null || existingResolver.equals(resolver),
                 "Connector '%s' is already assigned to resolver: %s", name, existingResolver);
+    }
+
+    public void addFunctionNamespace(String name, FunctionHandleResolver resolver)
+    {
+        requireNonNull(name, "name is null");
+        requireNonNull(resolver, "resolver is null");
+        MaterializedFunctionHandleResolver existingResolver = functionHandleResolvers.putIfAbsent(name, new MaterializedFunctionHandleResolver(resolver));
+        checkState(existingResolver == null || existingResolver.equals(resolver), "Name %s is already assigned to function resolver: %s", name, existingResolver);
     }
 
     public String getId(ConnectorTableHandle tableHandle)
@@ -204,6 +219,7 @@ public class HandleResolver
                 }
             }
             catch (UnsupportedOperationException ignored) {
+                // could be ignored
             }
         }
         throw new IllegalArgumentException("No connector for handle: " + handle);
@@ -219,9 +235,54 @@ public class HandleResolver
                 }
             }
             catch (UnsupportedOperationException ignored) {
+                // could be ignored
             }
         }
         throw new IllegalArgumentException("No connector for handle: " + handle);
+    }
+
+    private static class MaterializedFunctionHandleResolver
+    {
+        private final Optional<Class<? extends FunctionHandle>> functionHandle;
+
+        public MaterializedFunctionHandleResolver(FunctionHandleResolver resolver)
+        {
+            functionHandle = getHandleClass(resolver::getFunctionHandleClass);
+        }
+
+        private static <T> Optional<Class<? extends T>> getHandleClass(Supplier<Class<? extends T>> callable)
+        {
+            try {
+                return Optional.of(callable.get());
+            }
+            catch (UnsupportedOperationException e) {
+                return Optional.empty();
+            }
+        }
+
+        public Optional<Class<? extends FunctionHandle>> getFunctionHandleClass()
+        {
+            return functionHandle;
+        }
+
+        @Override
+        public boolean equals(Object o)
+        {
+            if (this == o) {
+                return true;
+            }
+            if (o == null || getClass() != o.getClass()) {
+                return false;
+            }
+            MaterializedFunctionHandleResolver that = (MaterializedFunctionHandleResolver) o;
+            return Objects.equals(functionHandle, that.functionHandle);
+        }
+
+        @Override
+        public int hashCode()
+        {
+            return Objects.hash(functionHandle);
+        }
     }
 
     private static class MaterializedHandleResolver

@@ -1,5 +1,5 @@
 /*
- * Copyright (C) 2018-2020. Huawei Technologies Co., Ltd. All rights reserved.
+ * Copyright (C) 2018-2021. Huawei Technologies Co., Ltd. All rights reserved.
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
  * You may obtain a copy of the License at
@@ -16,6 +16,7 @@
 package io.hetu.core.cube.startree.tree;
 
 import com.google.common.collect.ImmutableSet;
+import io.hetu.core.spi.cube.CubeFilter;
 import io.hetu.core.spi.cube.CubeMetadata;
 import io.hetu.core.spi.cube.CubeMetadataBuilder;
 import io.hetu.core.spi.cube.CubeStatus;
@@ -28,31 +29,48 @@ public class StarTreeMetadataBuilder
         implements CubeMetadataBuilder
 {
     private final String starTableName;
-    private final String tableName;
+    private final String sourceTableName;
     private final List<StarTreeColumn> columns = new ArrayList<>();
     private final List<Set<String>> groups = new ArrayList<>();
-    private String predicateString;
+    private CubeFilter cubeFilter;
     private CubeStatus cubeStatus;
+    private long tableLastUpdatedTime;
+    private long cubeLastUpdatedTime;
 
-    public StarTreeMetadataBuilder(String starTableName, String tableName)
+    public StarTreeMetadataBuilder(String starTableName, String sourceTableName)
     {
         this.starTableName = starTableName;
-        this.tableName = tableName;
+        this.sourceTableName = sourceTableName;
     }
 
     public StarTreeMetadataBuilder(StarTreeMetadata starTreeMetadata)
     {
-        this.starTableName = starTreeMetadata.getCubeTableName();
-        this.tableName = starTreeMetadata.getOriginalTableName();
+        this.starTableName = starTreeMetadata.getCubeName();
+        this.sourceTableName = starTreeMetadata.getSourceTableName();
         this.columns.addAll(starTreeMetadata.getColumns());
         this.groups.add(starTreeMetadata.getGroup());
-        this.predicateString = starTreeMetadata.getPredicateString();
+        this.cubeFilter = starTreeMetadata.getCubeFilter();
+        this.tableLastUpdatedTime = starTreeMetadata.getSourceTableLastUpdatedTime();
+        this.cubeLastUpdatedTime = starTreeMetadata.getLastUpdatedTime();
+        this.cubeStatus = starTreeMetadata.getCubeStatus();
     }
 
     @Override
     public void setCubeStatus(CubeStatus cubeStatus)
     {
         this.cubeStatus = cubeStatus;
+    }
+
+    @Override
+    public void setTableLastUpdatedTime(long tableLastUpdatedTime)
+    {
+        this.tableLastUpdatedTime = tableLastUpdatedTime;
+    }
+
+    @Override
+    public void setCubeLastUpdatedTime(long cubeLastUpdatedTime)
+    {
+        this.cubeLastUpdatedTime = cubeLastUpdatedTime;
     }
 
     @Override
@@ -74,9 +92,9 @@ public class StarTreeMetadataBuilder
     }
 
     @Override
-    public void withPredicate(String predicateString)
+    public void withCubeFilter(CubeFilter cubeFilter)
     {
-        this.predicateString = predicateString;
+        this.cubeFilter = cubeFilter;
     }
 
     @Override
@@ -84,24 +102,12 @@ public class StarTreeMetadataBuilder
     {
         return new StarTreeMetadata(
                 starTableName,
-                tableName,
+                sourceTableName,
+                tableLastUpdatedTime,
                 columns,
                 groups,
-                predicateString,
-                System.currentTimeMillis(),
-                cubeStatus);
-    }
-
-    @Override
-    public CubeMetadata build(long updatedTime)
-    {
-        return new StarTreeMetadata(
-                starTableName,
-                tableName,
-                columns,
-                groups,
-                predicateString,
-                updatedTime,
+                cubeFilter,
+                cubeLastUpdatedTime,
                 cubeStatus);
     }
 }

@@ -63,6 +63,7 @@ public class Query
     private final AtomicBoolean ignoreUserInterrupt = new AtomicBoolean();
     private final StatementClient client;
     private final boolean debug;
+    private String cubeInitQueryResult;
 
     public Query(StatementClient client, boolean debug)
     {
@@ -337,6 +338,11 @@ public class Query
     public void close()
     {
         client.close();
+    }
+
+    public String getcubeInitQueryResult()
+    {
+        return cubeInitQueryResult;
     }
 
     public void renderFailure(PrintStream out)

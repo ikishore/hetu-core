@@ -30,6 +30,7 @@ import io.prestosql.execution.SqlQueryExecution;
 import io.prestosql.execution.StageInfo;
 import io.prestosql.execution.StageStats;
 import io.prestosql.execution.TableInfo;
+import io.prestosql.expressions.LogicalRowExpressions;
 import io.prestosql.metadata.Metadata;
 import io.prestosql.operator.StageExecutionDescriptor;
 import io.prestosql.spi.connector.ColumnHandle;
@@ -64,7 +65,6 @@ import io.prestosql.spi.predicate.Range;
 import io.prestosql.spi.predicate.TupleDomain;
 import io.prestosql.spi.relation.RowExpression;
 import io.prestosql.spi.relation.VariableReferenceExpression;
-import io.prestosql.spi.sql.RowExpressionUtils;
 import io.prestosql.spi.statistics.ColumnStatisticMetadata;
 import io.prestosql.spi.statistics.TableStatisticType;
 import io.prestosql.spi.type.Type;
@@ -80,12 +80,20 @@ import io.prestosql.sql.planner.optimizations.JoinNodeUtils;
 import io.prestosql.sql.planner.plan.*;
 import io.prestosql.sql.planner.plan.ExchangeNode.Scope;
 import io.prestosql.sql.planner.planprinter.NodeRepresentation.TypedSymbol;
+import io.prestosql.sql.relational.FunctionResolution;
+import io.prestosql.sql.relational.RowExpressionDeterminismEvaluator;
 import io.prestosql.sql.tree.ComparisonExpression;
 import io.prestosql.sql.tree.Expression;
 import io.prestosql.util.GraphvizPrinter;
 
-import java.util.*;
+import java.util.ArrayList;
+import java.util.Collection;
+import java.util.LinkedList;
+import java.util.List;
+import java.util.Map;
 import java.util.Map.Entry;
+import java.util.Optional;
+import java.util.Set;
 import java.util.function.Function;
 import java.util.stream.Collectors;
 import java.util.stream.Stream;
@@ -153,7 +161,7 @@ public class PlanPrinter
 
         this.representation = new PlanRepresentation(planRoot, types, totalCpuTime, totalScheduledTime);
 
-        RowExpressionFormatter rowExpressionFormatter = new RowExpressionFormatter();
+        RowExpressionFormatter rowExpressionFormatter = new RowExpressionFormatter(metadata);
         this.formatter = rowExpressionFormatter::formatRowExpression;
 
         Visitor visitor = new Visitor(stageExecutionStrategy, types, estimatedStatsAndCosts, stats, metadata);
@@ -176,9 +184,9 @@ public class PlanPrinter
                 .distinct()
                 .collect(toImmutableMap(Map.Entry::getKey, Map.Entry::getValue)));
 
-        TableInfoSupplier tableInfoSupplier = new TableInfoSupplier(metadata, session);
-        ValuePrinter valuePrinter = new ValuePrinter(metadata, session);
-        return new PlanPrinter(root, typeProvider, Optional.empty(), tableInfoSupplier, valuePrinter, StatsAndCosts.empty(), Optional.empty(), metadata).toJson();
+        TableInfoSupplier supplier = new TableInfoSupplier(metadata, session);
+        ValuePrinter printer = new ValuePrinter(metadata, session);
+        return new PlanPrinter(root, typeProvider, Optional.empty(), supplier, printer, StatsAndCosts.empty(), Optional.empty(), metadata).toJson();
     }
 
     public static String textLogicalPlan(
@@ -190,25 +198,23 @@ public class PlanPrinter
             int level,
             boolean verbose)
     {
-        TableInfoSupplier tableInfoSupplier = new TableInfoSupplier(metadata, session);
-        ValuePrinter valuePrinter = new ValuePrinter(metadata, session);
-        return new PlanPrinter(plan, types, Optional.empty(), tableInfoSupplier, valuePrinter, estimatedStatsAndCosts, Optional.empty(), metadata).toText(verbose, level);
+        TableInfoSupplier supplier = new TableInfoSupplier(metadata, session);
+        ValuePrinter printer = new ValuePrinter(metadata, session);
+        return new PlanPrinter(plan, types, Optional.empty(), supplier, printer, estimatedStatsAndCosts, Optional.empty(), metadata).toText(verbose, level);
     }
 
     public static String textDistributedPlan(StageInfo outputStageInfo, Metadata metadata, Session session, boolean verbose)
     {
-        return "";
-        /*return textDistributedPlan(
+        return textDistributedPlan(
                 outputStageInfo,
                 new ValuePrinter(metadata, session),
                 verbose,
-                metadata);*/
+                metadata);
     }
 
     public static String textDistributedPlan(StageInfo outputStageInfo, ValuePrinter valuePrinter, boolean verbose, Metadata metadata)
     {
-        return "";
-        /*Map<PlanNodeId, TableInfo> tableInfos = getAllStages(Optional.of(outputStageInfo)).stream()
+        Map<PlanNodeId, TableInfo> tableInfos = getAllStages(Optional.of(outputStageInfo)).stream()
                 .map(StageInfo::getTables)
                 .map(Map::entrySet)
                 .flatMap(Collection::stream)
@@ -232,16 +238,16 @@ public class PlanPrinter
                     metadata));
         }
 
-        return builder.toString();*/
+        return builder.toString();
     }
 
     public static String textDistributedPlan(SubPlan plan, Metadata metadata, Session session, boolean verbose)
     {
-        TableInfoSupplier tableInfoSupplier = new TableInfoSupplier(metadata, session);
-        ValuePrinter valuePrinter = new ValuePrinter(metadata, session);
+        TableInfoSupplier supplier = new TableInfoSupplier(metadata, session);
+        ValuePrinter printer = new ValuePrinter(metadata, session);
         StringBuilder builder = new StringBuilder();
         for (PlanFragment fragment : plan.getAllFragments()) {
-            builder.append(formatFragment(tableInfoSupplier, valuePrinter, fragment, Optional.empty(), Optional.empty(), verbose, plan.getAllFragments(), metadata));
+            builder.append(formatFragment(supplier, printer, fragment, Optional.empty(), Optional.empty(), verbose, plan.getAllFragments(), metadata));
         }
 
         return builder.toString();
@@ -362,6 +368,7 @@ public class PlanPrinter
         private final StatsAndCosts estimatedStatsAndCosts;
         private final Optional<Map<PlanNodeId, PlanNodeStats>> stats;
         private final Metadata metadata;
+        private final LogicalRowExpressions logicalRowExpressions;
 
         public Visitor(Optional<StageExecutionDescriptor> stageExecutionStrategy, TypeProvider types, StatsAndCosts estimatedStatsAndCosts, Optional<Map<PlanNodeId, PlanNodeStats>> stats, Metadata metadata)
         {
@@ -370,6 +377,7 @@ public class PlanPrinter
             this.estimatedStatsAndCosts = requireNonNull(estimatedStatsAndCosts, "estimatedStatsAndCosts is null");
             this.stats = requireNonNull(stats, "stats is null");
             this.metadata = requireNonNull(metadata, "metadata is null");
+            this.logicalRowExpressions = new LogicalRowExpressions(new RowExpressionDeterminismEvaluator(metadata), new FunctionResolution(metadata.getFunctionAndTypeManager()), metadata.getFunctionAndTypeManager());
         }
 
         @Override
@@ -519,8 +527,15 @@ public class PlanPrinter
                 key = node.getGroupingKeys().toString();
             }
 
-            NodeRepresentation nodeOutput = addNode(node,
-                    format("Aggregate%s%s%s", type, key, formatHash(node.getHashSymbol())));
+            NodeRepresentation nodeOutput;
+            if (node.getAggregationType().equals(AggregationNode.AggregationType.SORT_BASED)) {
+                nodeOutput = addNode(node,
+                        format("SortAggregate%s%s%s", type, key, formatHash(node.getHashSymbol())));
+            }
+            else {
+                nodeOutput = addNode(node,
+                        format("HashAggregate%s%s%s", type, key, formatHash(node.getHashSymbol())));
+            }
 
             node.getAggregations().forEach((symbol, aggregation) -> nodeOutput.appendDetailsLine("%s := %s", symbol, formatAggregation(aggregation)));
 
@@ -606,7 +621,7 @@ public class PlanPrinter
                 nodeOutput.appendDetailsLine(
                         "%s := %s(%s) %s",
                         entry.getKey(),
-                        function.getSignature().getName(),
+                        function.getFunctionCall().getDisplayName(),
                         Joiner.on(", ").join(function.getArguments()),
                         frameInfo);
             }
@@ -728,6 +743,12 @@ public class PlanPrinter
         }
 
         @Override
+        public Void visitUpdateIndex(UpdateIndexNode node, Void context)
+        {
+            return processChildren(node, context);
+        }
+
+        @Override
         public Void visitValues(ValuesNode node, Void context)
         {
             NodeRepresentation nodeOutput = addNode(node, "Values");
@@ -814,25 +835,8 @@ public class PlanPrinter
                 operatorName += "Filter";
                 formatString += "filterPredicate = %s, ";
                 RowExpression predicate = filterNode.get().getPredicate();
-                PlanNode tableNode = filterNode.get().getSource();
-
-
-                /*if (tableNode instanceof TableScanNode) {
-                    String tableName = ((TableScanNode) tableNode).getTable().getConnectorHandle().getTableName().toString();
-                    if (!SqlQueryExecution.aggregateFilterInfo.containsKey(tableName)) {
-                        Map<Integer, RowExpression> QIDMapping = new HashMap<Integer, RowExpression>();
-                        QIDMapping.put(SqlQueryExecution.queryCount, predicate);
-                        SqlQueryExecution.aggregateFilterInfo.put(tableName, QIDMapping);
-                    } else {
-                        if (!SqlQueryExecution.aggregateFilterInfo.get(tableName).containsKey(SqlQueryExecution.queryCount)) {
-                            System.out.print(" Sql query execution query count " + SqlQueryExecution.queryCount + " predicate " + predicate);
-                            SqlQueryExecution.aggregateFilterInfo.get(tableName).put(SqlQueryExecution.queryCount, predicate);
-                        }
-                    }
-                }*/
                 DynamicFilters.ExtractResult extractResult = extractDynamicFilters(predicate);
-
-                arguments.add(formatter.apply(RowExpressionUtils.combineConjuncts(extractResult.getStaticConjuncts())));
+                arguments.add(formatter.apply(logicalRowExpressions.combineConjuncts(extractResult.getStaticConjuncts())));
                 if (!extractResult.getDynamicConjuncts().isEmpty()) {
                     formatString += "dynamicFilter = %s, ";
                     arguments.add(printDynamicFilters(extractResult.getDynamicConjuncts()));
@@ -1142,7 +1146,6 @@ public class PlanPrinter
         @Override
         public Void visitExchange(ExchangeNode node, Void context)
         {
-            System.out.println(node.getPartitioningScheme().toString());
             if (node.getOrderingScheme().isPresent()) {
                 OrderingScheme orderingScheme = node.getOrderingScheme().get();
                 List<String> orderBy = orderingScheme.getOrderBy()
@@ -1183,6 +1186,18 @@ public class PlanPrinter
         }
 
         @Override
+        public Void visitUpdate(UpdateNode node, Void context)
+        {
+            NodeRepresentation nodeOutput = addNode(node, format("Update[%s]", node.getTarget()));
+            int index = 0;
+            for (String columnName : node.getTarget().getUpdatedColumns()) {
+                nodeOutput.appendDetailsLine("%s := %s", columnName, node.getColumnValueAndRowIdSymbols().get(index).getName());
+                index++;
+            }
+            return processChildren(node, context);
+        }
+
+        @Override
         public Void visitTableDelete(TableDeleteNode node, Void context)
         {
             String formatString = "[%s";
@@ -1194,6 +1209,18 @@ public class PlanPrinter
             }
             formatString += "]";
             addNode(node, "TableDelete", format(formatString, arguments.toArray()));
+
+            return processChildren(node, context);
+        }
+
+        @Override
+        public Void visitTableUpdate(TableUpdateNode node, Void context)
+        {
+            String formatString = "[%s";
+            List<Object> arguments = new ArrayList<>();
+            arguments.add(node.getTarget());
+            formatString += "]";
+            addNode(node, "TableUpdate", format(formatString, arguments.toArray()));
 
             return processChildren(node, context);
         }
@@ -1437,14 +1464,14 @@ public class PlanPrinter
         StringBuilder builder = new StringBuilder();
 
         String arguments = Joiner.on(", ").join(aggregation.getArguments());
-        if (aggregation.getArguments().isEmpty() && "count".equalsIgnoreCase(aggregation.getSignature().getName())) {
+        if (aggregation.getArguments().isEmpty() && "count".equalsIgnoreCase(aggregation.getFunctionCall().getDisplayName())) {
             arguments = "*";
         }
         if (aggregation.isDistinct()) {
             arguments = "DISTINCT " + arguments;
         }
 
-        builder.append(aggregation.getSignature().getName())
+        builder.append(aggregation.getFunctionCall().getDisplayName())
                 .append('(').append(arguments);
 
         aggregation.getOrderingScheme().ifPresent(orderingScheme -> builder.append(' ').append(orderingScheme.getOrderBy().stream()

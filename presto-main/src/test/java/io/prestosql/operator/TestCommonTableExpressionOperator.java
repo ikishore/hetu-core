@@ -1,5 +1,5 @@
 /*
- * Copyright (C) 2018-2020. Huawei Technologies Co., Ltd. All rights reserved.
+ * Copyright (C) 2018-2021. Huawei Technologies Co., Ltd. All rights reserved.
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
  * You may obtain a copy of the License at
@@ -71,7 +71,8 @@ public class TestCommonTableExpressionOperator
                 cteContext,
                 ImmutableList.of(VARCHAR),
                 new DataSize(0, DataSize.Unit.BYTE),
-                0);
+                0,
+                symbol -> symbol);
         parent1.addConsumer(new PlanNodeId("consumer_1"));
 
         CommonTableExpressionOperator.CommonTableExpressionOperatorFactory parent2 = new CommonTableExpressionOperator.CommonTableExpressionOperatorFactory(
@@ -80,7 +81,8 @@ public class TestCommonTableExpressionOperator
                 cteContext,
                 ImmutableList.of(VARCHAR),
                 new DataSize(0, DataSize.Unit.BYTE),
-                0);
+                0,
+                symbol -> symbol);
         parent2.addConsumer(new PlanNodeId("consumer_2"));
 
         //Operator operator = factory.createOperator(driverContext);

@@ -17,28 +17,25 @@ package io.hetu.core.plugin.opengauss;
 import com.google.common.collect.ImmutableMap;
 import io.airlift.configuration.testing.ConfigAssertions;
 import io.prestosql.plugin.postgresql.PostgreSqlConfig;
+import io.prestosql.plugin.postgresql.TestPostgreSqlConfig;
 import org.testng.annotations.Test;
 
 import java.util.Map;
 
 public class TestOpenGaussConfig
+        extends TestPostgreSqlConfig
 {
     @Test
-    public void testDefaults()
-    {
-        ConfigAssertions.assertRecordedDefaults(ConfigAssertions.recordDefaults(PostgreSqlConfig.class)
-                .setArrayMapping(PostgreSqlConfig.ArrayMapping.DISABLED));
-    }
-
-    @Test
-    public void testExplicitPropertyMappings()
+    public void testExplicitPropertyMetaDataSpeedup()
     {
         Map<String, String> properties = new ImmutableMap.Builder<String, String>()
+                .put("opengauss.metadata.speedup", "true")
                 .put("postgresql.experimental.array-mapping", "AS_ARRAY")
                 .build();
 
-        PostgreSqlConfig expected = new PostgreSqlConfig()
-                .setArrayMapping(PostgreSqlConfig.ArrayMapping.AS_ARRAY);
+        OpenGaussClientConfig expected = new OpenGaussClientConfig()
+                .setMetaDataSpeedup(true);
+        expected.setArrayMapping(PostgreSqlConfig.ArrayMapping.AS_ARRAY);
 
         ConfigAssertions.assertFullMapping(properties, expected);
     }

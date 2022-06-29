@@ -148,13 +148,11 @@ public class StageInfo
     @Override
     public String toString()
     {
-//        return toStringHelper(this)
-//                .add("stageId", stageId)
-//                .add("state", state)
-//                .toString();
-        return new String("");
+        return toStringHelper(this)
+                .add("stageId", stageId)
+                .add("state", state)
+                .toString();
     }
-
 
     public static List<StageInfo> getAllStages(Optional<StageInfo> stageInfo)
     {

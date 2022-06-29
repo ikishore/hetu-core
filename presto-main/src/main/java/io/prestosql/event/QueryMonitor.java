@@ -24,7 +24,15 @@ import io.prestosql.SessionRepresentation;
 import io.prestosql.client.NodeVersion;
 import io.prestosql.cost.StatsAndCosts;
 import io.prestosql.eventlistener.EventListenerManager;
-import io.prestosql.execution.*;
+import io.prestosql.execution.Column;
+import io.prestosql.execution.ExecutionFailureInfo;
+import io.prestosql.execution.Input;
+import io.prestosql.execution.QueryInfo;
+import io.prestosql.execution.QueryState;
+import io.prestosql.execution.QueryStats;
+import io.prestosql.execution.StageInfo;
+import io.prestosql.execution.TaskInfo;
+import io.prestosql.execution.TaskState;
 import io.prestosql.heuristicindex.HeuristicIndexerManager;
 import io.prestosql.metadata.Metadata;
 import io.prestosql.metadata.SessionPropertyManager;
@@ -55,11 +63,11 @@ import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
-import java.util.concurrent.ConcurrentLinkedQueue;
 import java.util.stream.Collectors;
 
 import static io.prestosql.execution.QueryState.FAILED;
 import static io.prestosql.execution.QueryState.QUEUED;
+import static io.prestosql.server.protocol.Query.globalUniqueNodes;
 import static io.prestosql.sql.planner.planprinter.PlanPrinter.textDistributedPlan;
 import static java.lang.Math.max;
 import static java.lang.Math.toIntExact;
@@ -177,7 +185,7 @@ public class QueryMonitor
                 ofEpochMilli(queryInfo.getQueryStats().getEndTime().getMillis()),
                 ofEpochMilli(queryInfo.getQueryStats().getEndTime().getMillis())));
 
-        logQueryTimeline(queryInfo, null);
+        logQueryTimeline(queryInfo);
     }
 
     public void indexCreationStateChangeEvent(QueryState state, QueryInfo queryInfo)
@@ -187,7 +195,7 @@ public class QueryMonitor
         }
     }
 
-    public void queryCompletedEvent(QueryInfo queryInfo, ConcurrentLinkedQueue<SqlQueryManager.LogEntry> logQueue)
+    public void queryCompletedEvent(QueryInfo queryInfo)
     {
         QueryStats queryStats = queryInfo.getQueryStats();
         eventListenerManager.queryCompleted(
@@ -202,7 +210,7 @@ public class QueryMonitor
                         ofEpochMilli(queryStats.getExecutionStartTime().getMillis()),
                         ofEpochMilli(queryStats.getEndTime() != null ? queryStats.getEndTime().getMillis() : 0)));
 
-        logQueryTimeline(queryInfo, logQueue);
+        logQueryTimeline(queryInfo);
     }
 
     private QueryMetadata createQueryMetadata(QueryInfo queryInfo)
@@ -222,7 +230,6 @@ public class QueryMonitor
     {
         ImmutableList.Builder<String> operatorSummaries = ImmutableList.builder();
         for (OperatorStats summary : queryInfo.getQueryStats().getOperatorSummaries()) {
-            System.out.println("operator summaries; type: "+summary.getOperatorType()+" ; "+summary.BQOSummary());
             operatorSummaries.add(operatorStatsCodec.toJson(summary));
         }
 
@@ -382,10 +389,11 @@ public class QueryMonitor
         return ImmutableMap.copyOf(mergedProperties);
     }
 
-    private static void logQueryTimeline(QueryInfo queryInfo, ConcurrentLinkedQueue<SqlQueryManager.LogEntry> logQueue)
+    private static void logQueryTimeline(QueryInfo queryInfo)
     {
         try {
             QueryStats queryStats = queryInfo.getQueryStats();
+            StageInfo outputStage = queryInfo.isRunningAsync() ? null : queryInfo.getOutputStage().orElse(null);
             DateTime queryStartTime = queryStats.getCreateTime();
             DateTime queryEndTime = queryStats.getEndTime();
 
@@ -396,25 +404,34 @@ public class QueryMonitor
 
             // planning duration -- start to end of planning
             long planning = queryStats.getTotalPlanningTime().toMillis();
+            long logicalPlanning = queryStats.getTotalLogicalPlanningTime().toMillis();
+            long distributedPlanning = queryStats.getDistributedPlanningTime().toMillis();
+            long physicalPlanning = queryStats.getAnalysisTime().toMillis() - logicalPlanning;
+            long syntaxAnalysisTime = queryStats.getTotalSyntaxAnalysisTime().toMillis();
 
             // Time spent waiting for required no. of worker nodes to be present
             long waiting = queryStats.getResourceWaitingTime().toMillis();
 
             List<StageInfo> stages = StageInfo.getAllStages(queryInfo.getOutputStage());
-            // long lastSchedulingCompletion = 0;
             long firstTaskStartTime = queryEndTime.getMillis();
+            long firstStageFirstTaskStartTime = queryEndTime.getMillis();
             long lastTaskStartTime = queryStartTime.getMillis() + planning;
             long lastTaskEndTime = queryStartTime.getMillis() + planning;
             for (StageInfo stage : stages) {
-                // only consider leaf stages
-                if (!stage.getSubStages().isEmpty()) {
-                    continue;
-                }
-
                 for (TaskInfo taskInfo : stage.getTasks()) {
                     TaskStats taskStats = taskInfo.getStats();
 
                     DateTime firstStartTime = taskStats.getFirstStartTime();
+                    if (firstStartTime != null) {
+                        firstStageFirstTaskStartTime = Math.min(firstStartTime.getMillis(), firstStageFirstTaskStartTime);
+                    }
+
+                    // only consider leaf stages for other stats.
+                    if (!stage.getSubStages().isEmpty()) {
+                        continue;
+                    }
+
+                    firstStartTime = taskStats.getFirstStartTime();
                     if (firstStartTime != null) {
                         firstTaskStartTime = Math.min(firstStartTime.getMillis(), firstTaskStartTime);
                     }
@@ -432,31 +449,41 @@ public class QueryMonitor
             }
 
             long elapsed = max(queryEndTime.getMillis() - queryStartTime.getMillis(), 0);
-            long scheduling = max(firstTaskStartTime - queryStartTime.getMillis() - planning, 0);
+            // scheduling time is starting from end of plan time to  start of first task execution corresponding to any first stage.
+            long scheduling = max(firstStageFirstTaskStartTime - queryStartTime.getMillis() - planning, 0);
+            // executionInitializationTime is starting from first task of first stage to first task of leaf stage.
+            long executionInitializationTime = max(firstTaskStartTime - firstStageFirstTaskStartTime, 0);
             long running = max(lastTaskEndTime - firstTaskStartTime, 0);
             long finishing = max(queryEndTime.getMillis() - lastTaskEndTime, 0);
+            int spilledNodes = globalUniqueNodes(outputStage, true).size();
+            long spilledWriteTimeMillisPerNode = spilledNodes > 0 ? (queryStats.getSpilledWriteTime().toMillis() / spilledNodes) : 0;
+            long spilledReadTimeMillisPerNode = spilledNodes > 0 ? (queryStats.getSpilledReadTime().toMillis() / spilledNodes) : 0;
 
             logQueryTimeline(
                     queryInfo.getQueryId(),
                     queryInfo.getSession().getTransactionId().map(TransactionId::toString).orElse(""),
                     elapsed,
+                    syntaxAnalysisTime,
                     planning,
+                    logicalPlanning,
+                    physicalPlanning,
+                    distributedPlanning,
                     waiting,
                     scheduling,
+                    executionInitializationTime,
                     running,
                     finishing,
                     queryStartTime,
-                    queryEndTime);
-
-            if (logQueue != null)
-                logQueue.add(new SqlQueryManager.LogEntry(queryStartTime, queryEndTime, elapsed, running, queryInfo.getBatchQueries()));
+                    queryEndTime,
+                    spilledWriteTimeMillisPerNode,
+                    spilledReadTimeMillisPerNode);
         }
         catch (Exception e) {
             log.error(e, "Error logging query timeline");
         }
     }
 
-    private static void logQueryTimeline(BasicQueryInfo queryInfo, ConcurrentLinkedQueue<SqlQueryManager.LogEntry> logQueue)
+    private static void logQueryTimeline(BasicQueryInfo queryInfo)
     {
         DateTime queryStartTime = queryInfo.getQueryStats().getCreateTime();
         DateTime queryEndTime = queryInfo.getQueryStats().getEndTime();
@@ -472,38 +499,54 @@ public class QueryMonitor
                 queryInfo.getQueryId(),
                 queryInfo.getSession().getTransactionId().map(TransactionId::toString).orElse(""),
                 elapsed,
+                0,
                 elapsed,
                 0,
                 0,
                 0,
                 0,
+                0,
+                0,
+                0,
+                0,
                 queryStartTime,
-                queryEndTime);
-
-        if (logQueue != null)
-            logQueue.add(new SqlQueryManager.LogEntry(queryStartTime, queryEndTime, elapsed, -1, queryInfo.getBatchQueries()));
+                queryEndTime, 0, 0);
     }
 
     private static void logQueryTimeline(
             QueryId queryId,
             String transactionId,
             long elapsedMillis,
+            long syntaxAnalysisTime,
             long planningMillis,
+            long logicalPlanningMillis,
+            long physicalPlanningMillis,
+            long distributedPlanningMillis,
             long waitingMillis,
             long schedulingMillis,
+            long executionInitializationTimeMillis,
             long runningMillis,
             long finishingMillis,
             DateTime queryStartTime,
-            DateTime queryEndTime)
+            DateTime queryEndTime,
+            long spilledWriteTimeMillisPerNode,
+            long spilledReadTimeMillisPerNode)
     {
-        log.info("TIMELINE: Query %s :: Transaction:[%s] :: elapsed %sms :: planning %sms :: waiting %sms :: scheduling %sms :: running %sms :: finishing %sms :: begin %s :: end %s",
+        log.info("TIMELINE: Query %s :: Transaction:[%s] :: elapsed %sms :: syntaxAnalysisTime %sms :: planning %sms :: logicalPlanningMillis %sms :: physicalPlanningMillis %sms :: distributionPlanTime %sms :: waiting %sms :: scheduling %sms :: executionInitializationTime %sms :: running %sms :: spilledWriteTimeMillisPerNode %sms :: spilledReadTimeMillisPerNode %sms :: finishing %sms :: begin %s :: end %s",
                 queryId,
                 transactionId,
                 elapsedMillis,
+                syntaxAnalysisTime,
                 planningMillis,
-                waitingMillis,
-                schedulingMillis,
+                logicalPlanningMillis,
+                physicalPlanningMillis,
+                distributedPlanningMillis,
+                (waitingMillis - syntaxAnalysisTime) < 0 ? 0 : waitingMillis - syntaxAnalysisTime,
+                schedulingMillis - waitingMillis,
+                executionInitializationTimeMillis,
                 runningMillis,
+                spilledWriteTimeMillisPerNode,
+                spilledReadTimeMillisPerNode,
                 finishingMillis,
                 queryStartTime,
                 queryEndTime);

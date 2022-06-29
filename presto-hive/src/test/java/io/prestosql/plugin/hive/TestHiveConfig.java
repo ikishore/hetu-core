@@ -38,7 +38,6 @@ public class TestHiveConfig
     public void testDefaults()
     {
         ConfigAssertions.assertRecordedDefaults(ConfigAssertions.recordDefaults(HiveConfig.class)
-                .setTimeZone(TimeZone.getDefault().getID())
                 .setMaxSplitSize(new DataSize(64, Unit.MEGABYTE))
                 .setMaxPartitionsPerScan(100_000)
                 .setMaxOutstandingSplits(1_000)
@@ -47,6 +46,8 @@ public class TestHiveConfig
                 .setAllowCorruptWritesForTesting(false)
                 .setMetastoreCacheTtl(new Duration(0, TimeUnit.SECONDS))
                 .setMetastoreRefreshInterval(new Duration(1, TimeUnit.SECONDS))
+                .setMetastoreDBCacheTtl(new Duration(0, TimeUnit.SECONDS))
+                .setMetastoreDBRefreshInterval(new Duration(1, TimeUnit.SECONDS))
                 .setMetastoreCacheMaximumSize(10000)
                 .setPerTransactionMetastoreCacheMaximumSize(1000)
                 .setMaxMetastoreRefreshThreads(100)
@@ -82,6 +83,8 @@ public class TestHiveConfig
                 .setMaxOpenSortFiles(50)
                 .setWriteValidationThreads(16)
                 .setTextMaxLineLength(new DataSize(100, Unit.MEGABYTE))
+                .setOrcLegacyTimeZone(TimeZone.getDefault().getID())
+                .setParquetTimeZone(TimeZone.getDefault().getID())
                 .setUseParquetColumnNames(false)
                 .setFailOnCorruptedParquetStatistics(true)
                 .setParquetMaxReadBlockSize(new DataSize(16, Unit.MEGABYTE))
@@ -100,6 +103,7 @@ public class TestHiveConfig
                 .setOrcBloomFiltersCacheEnabled(false).setOrcBloomFiltersCacheTtl(new Duration(4, TimeUnit.HOURS)).setOrcBloomFiltersCacheLimit(250_000)
                 .setOrcRowDataCacheEnabled(false).setOrcRowDataCacheTtl(new Duration(4, TimeUnit.HOURS)).setOrcRowDataCacheMaximumWeight(new DataSize(20, GIGABYTE))
                 .setOrcLazyReadSmallRanges(true)
+                .setRcfileTimeZone(TimeZone.getDefault().getID())
                 .setRcfileWriterValidate(false)
                 .setOrcWriteLegacyVersion(false)
                 .setOrcWriterValidationPercentage(0.0)
@@ -145,14 +149,14 @@ public class TestHiveConfig
                 .setOrcPredicatePushdownEnabled(false)
                 .setVacuumCollectorInterval(new Duration(5, TimeUnit.MINUTES))
                 .setMaxSplitsToGroup(1)
-                .setWorkerMetaStoreCacheEnabled(false));
+                .setWorkerMetaStoreCacheEnabled(false)
+                .setMetastoreWriteBatchSize(8));
     }
 
     @Test
     public void testExplicitPropertyMappings()
     {
         Map<String, String> properties = new ImmutableMap.Builder<String, String>()
-                .put("hive.time-zone", nonDefaultTimeZone().getID())
                 .put("hive.max-split-size", "256MB")
                 .put("hive.max-partitions-per-scan", "123")
                 .put("hive.max-outstanding-splits", "10")
@@ -161,6 +165,8 @@ public class TestHiveConfig
                 .put("hive.allow-corrupt-writes-for-testing", "true")
                 .put("hive.metastore-cache-ttl", "2h")
                 .put("hive.metastore-refresh-interval", "30m")
+                .put("hive.metastore-db-cache-ttl", "2h")
+                .put("hive.metastore-db-refresh-interval", "30m")
                 .put("hive.metastore-cache-maximum-size", "5000")
                 .put("hive.per-transaction-metastore-cache-maximum-size", "500")
                 .put("hive.metastore-refresh-max-threads", "2500")
@@ -198,6 +204,8 @@ public class TestHiveConfig
                 .put("hive.max-concurrent-file-renames", "100")
                 .put("hive.assume-canonical-partition-keys", "true")
                 .put("hive.text.max-line-length", "13MB")
+                .put("hive.orc.time-zone", nonDefaultTimeZone().getID())
+                .put("hive.parquet.time-zone", nonDefaultTimeZone().getID())
                 .put("hive.parquet.use-column-names", "true")
                 .put("hive.parquet.fail-on-corrupted-statistics", "false")
                 .put("hive.parquet.max-read-block-size", "66kB")
@@ -225,6 +233,7 @@ public class TestHiveConfig
                 .put("hive.orc.row-data.block.cache.ttl", "1h")
                 .put("hive.orc.row-data.block.cache.max.weight", "1MB")
                 .put("hive.orc.lazy-read-small-ranges", "false")
+                .put("hive.rcfile.time-zone", nonDefaultTimeZone().getID())
                 .put("hive.rcfile.writer.validate", "true")
                 .put("hive.orc.writer.use-legacy-version-number", "true")
                 .put("hive.orc.writer.validation-percentage", "0.16")
@@ -270,10 +279,10 @@ public class TestHiveConfig
                 .put("hive.vacuum-collector-interval", "5s")
                 .put("hive.max-splits-to-group", "20")
                 .put("hive.worker-metastore-cache-enabled", "true")
+                .put("hive.metastore-write-batch-size", "64")
                 .build();
 
         HiveConfig expected = new HiveConfig()
-                .setTimeZone(nonDefaultTimeZone().toTimeZone().getID())
                 .setMaxSplitSize(new DataSize(256, Unit.MEGABYTE))
                 .setMaxPartitionsPerScan(123)
                 .setMaxOutstandingSplits(10)
@@ -282,6 +291,8 @@ public class TestHiveConfig
                 .setAllowCorruptWritesForTesting(true)
                 .setMetastoreCacheTtl(new Duration(2, TimeUnit.HOURS))
                 .setMetastoreRefreshInterval(new Duration(30, TimeUnit.MINUTES))
+                .setMetastoreDBCacheTtl(new Duration(2, TimeUnit.HOURS))
+                .setMetastoreDBRefreshInterval(new Duration(30, TimeUnit.MINUTES))
                 .setMetastoreCacheMaximumSize(5000)
                 .setPerTransactionMetastoreCacheMaximumSize(500)
                 .setMaxMetastoreRefreshThreads(2500)
@@ -316,11 +327,14 @@ public class TestHiveConfig
                 .setDomainSocketPath("/foo")
                 .setS3FileSystemType(S3FileSystemType.EMRFS)
                 .setTextMaxLineLength(new DataSize(13, Unit.MEGABYTE))
+                .setOrcLegacyTimeZone(nonDefaultTimeZone().getID())
+                .setParquetTimeZone(nonDefaultTimeZone().getID())
                 .setUseParquetColumnNames(true)
                 .setFailOnCorruptedParquetStatistics(false)
                 .setParquetMaxReadBlockSize(new DataSize(66, Unit.KILOBYTE))
                 .setUseOrcColumnNames(true)
                 .setAssumeCanonicalPartitionKeys(true)
+                .setRcfileTimeZone(nonDefaultTimeZone().getID())
                 .setOrcBloomFiltersEnabled(true)
                 .setOrcDefaultBloomFilterFpp(0.96)
                 .setOrcMaxMergeDistance(new DataSize(22, Unit.KILOBYTE))
@@ -334,6 +348,7 @@ public class TestHiveConfig
                 .setOrcBloomFiltersCacheEnabled(true).setOrcBloomFiltersCacheTtl(new Duration(1, TimeUnit.HOURS)).setOrcBloomFiltersCacheLimit(100)
                 .setOrcRowDataCacheEnabled(true).setOrcRowDataCacheTtl(new Duration(1, TimeUnit.HOURS)).setOrcRowDataCacheMaximumWeight(new DataSize(1, MEGABYTE))
                 .setOrcLazyReadSmallRanges(false)
+                .setRcfileTimeZone(nonDefaultTimeZone().getID())
                 .setRcfileWriterValidate(true)
                 .setOrcWriteLegacyVersion(true)
                 .setOrcWriterValidationPercentage(0.16)
@@ -380,7 +395,8 @@ public class TestHiveConfig
                 .setOrcPredicatePushdownEnabled(true)
                 .setVacuumCollectorInterval(new Duration(5, TimeUnit.SECONDS))
                 .setMaxSplitsToGroup(20)
-                .setWorkerMetaStoreCacheEnabled(true);
+                .setWorkerMetaStoreCacheEnabled(true)
+                .setMetastoreWriteBatchSize(64);
 
         ConfigAssertions.assertFullMapping(properties, expected);
     }

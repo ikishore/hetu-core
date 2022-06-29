@@ -1,5 +1,5 @@
 /*
- * Copyright (C) 2018-2020. Huawei Technologies Co., Ltd. All rights reserved.
+ * Copyright (C) 2018-2021. Huawei Technologies Co., Ltd. All rights reserved.
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
  * You may obtain a copy of the License at
@@ -1059,12 +1059,10 @@ public class ImpalaAstBuilder
             addDiff(DiffType.UNSUPPORTED, context.IN().getText(), "[IN] is not supported");
             throw unsupportedError(ErrorType.UNSUPPORTED_STATEMENT, "IN is not supported", context);
         }
-        if (context.LIKE() != null) {
-            addDiff(DiffType.UNSUPPORTED, context.LIKE().getText(), "[LIKE] is not supported");
-            throw unsupportedError(ErrorType.UNSUPPORTED_STATEMENT, "LIKE is not supported", context);
-        }
 
-        return new ShowFunctions(getLocation(context));
+        return new ShowFunctions(getLocation(context),
+                getTextIfPresent(context.pattern).map(ImpalaAstBuilder::unquote),
+                Optional.empty());
     }
 
     @Override
@@ -1923,7 +1921,7 @@ public class ImpalaAstBuilder
     {
         String fieldString = context.identifier().getText();
         Extract.Field field;
-        field = Extract.Field.valueOf(fieldString.toUpperCase());
+        field = Extract.Field.valueOf(fieldString.toUpperCase(Locale.ROOT));
         return new Extract(getLocation(context), (Expression) visit(context.valueExpression()), field);
     }
 
@@ -1994,6 +1992,7 @@ public class ImpalaAstBuilder
                 filter,
                 orderBy,
                 distinct,
+                false,
                 visit(context.expression(), Expression.class));
     }
 

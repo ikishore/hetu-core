@@ -30,6 +30,8 @@ import io.prestosql.memory.ClusterMemoryManager;
 import io.prestosql.metadata.SessionPropertyManager;
 import io.prestosql.queryeditorui.QueryEditorUIModule;
 import io.prestosql.server.BasicQueryInfo;
+import io.prestosql.snapshot.QuerySnapshotManager;
+import io.prestosql.spi.ErrorType;
 import io.prestosql.spi.PrestoException;
 import io.prestosql.spi.QueryId;
 import io.prestosql.spi.statestore.StateMap;
@@ -57,6 +59,7 @@ import java.util.Locale;
 import java.util.Map;
 import java.util.NoSuchElementException;
 import java.util.Objects;
+import java.util.Set;
 import java.util.concurrent.*;
 import java.util.function.Consumer;
 import java.util.function.Supplier;
@@ -68,6 +71,7 @@ import static io.airlift.concurrent.Threads.threadsNamed;
 import static io.prestosql.SystemSessionProperties.getQueryMaxCpuTime;
 import static io.prestosql.execution.QueryState.RUNNING;
 import static io.prestosql.spi.StandardErrorCode.GENERIC_INTERNAL_ERROR;
+import static io.prestosql.spi.StandardErrorCode.QUERY_EXPIRE;
 import static io.prestosql.utils.StateUtils.isMultiCoordinatorEnabled;
 import static java.lang.String.format;
 import static java.util.Objects.requireNonNull;
@@ -79,6 +83,7 @@ public class SqlQueryManager
 {
     private static final Logger log = Logger.get(SqlQueryManager.class);
 
+    //bqo
     private static ConcurrentLinkedQueue<LogEntry> logQueue = new ConcurrentLinkedQueue();
 
     private final ClusterMemoryManager memoryManager;
@@ -115,7 +120,7 @@ public class SqlQueryManager
         this.queryManagementExecutor = Executors.newScheduledThreadPool(queryManagerConfig.getQueryManagerExecutorPoolSize(), threadsNamed("query-management-%s"));
         this.queryManagementExecutorMBean = new ThreadPoolExecutorMBean((ThreadPoolExecutor) queryManagementExecutor);
 
-        this.queryTracker = new QueryTracker<>(queryManagerConfig, queryManagementExecutor);
+        this.queryTracker = new QueryTracker<>(queryManagerConfig, queryManagementExecutor, stateStoreProvider);
         // Inject LocalStateProvider
         this.stateStoreProvider = stateStoreProvider;
         this.sessionPropertyManager = sessionPropertyManager;
@@ -139,6 +144,13 @@ public class SqlQueryManager
             }
             catch (Throwable e) {
                 log.error(e, "Error enforcing query CPU time limits");
+            }
+
+            try {
+                killExpiredQuery();
+            }
+            catch (Throwable e) {
+                log.error(e, "Error killing expired query");
             }
         }, 1, 1, TimeUnit.SECONDS);
     }
@@ -264,6 +276,8 @@ public class SqlQueryManager
             throw new PrestoException(GENERIC_INTERNAL_ERROR, format("Query %s already registered", queryExecution.getQueryId()));
         }
 
+        // CreateIndex operations could not register cleanup operations like connectors
+        // Therefore a listener is added here to clean up index records on failure
         if (isIndexCreationQuery(queryExecution.getQueryInfo())) {
             queryExecution.addStateChangeListener(state -> {
                 try {
@@ -278,7 +292,7 @@ public class SqlQueryManager
 
         queryExecution.addFinalQueryInfoListener(finalQueryInfo -> {
             try {
-                queryMonitor.queryCompletedEvent(finalQueryInfo, logQueue);
+                queryMonitor.queryCompletedEvent(finalQueryInfo);
             }
             finally {
                 // execution MUST be added to the expiration queue or there will be a leak
@@ -440,6 +454,34 @@ public class SqlQueryManager
         }
     }
 
+    /**
+     * Kill query when expired, state has already been updated in StateFetcher.
+     */
+    private void killExpiredQuery()
+    {
+        if (!isMultiCoordinatorEnabled()) {
+            return;
+        }
+        List<QueryExecution> localRunningQueries = queryTracker.getAllQueries().stream()
+                .filter(query -> query.getState() == RUNNING)
+                .collect(toImmutableList());
+
+        Map<String, SharedQueryState> queries = StateCacheStore.get().getCachedStates(StateStoreConstants.FINISHED_QUERY_STATE_COLLECTION_NAME);
+        if (queries != null) {
+            Set<String> expiredQueryIds = queries.entrySet().stream()
+                    .filter(entry -> isQueryExpired(entry.getValue()))
+                    .map(entry -> entry.getKey())
+                    .collect(Collectors.toSet());
+            if (!expiredQueryIds.isEmpty()) {
+                for (QueryExecution localQuery : localRunningQueries) {
+                    if (expiredQueryIds.contains(localQuery.getQueryId().getId())) {
+                        localQuery.fail(new PrestoException(QUERY_EXPIRE, "Query killed because the query has expired. Please try again in a few minutes."));
+                    }
+                }
+            }
+        }
+    }
+
     @Override
     public void checkForQueryPruning(QueryId queryId, QueryInfo queryInfo)
     {
@@ -452,11 +494,18 @@ public class SqlQueryManager
         }
     }
 
+    @Override
+    public QuerySnapshotManager getQuerySnapshotManager(QueryId queryId)
+    {
+        return queryTracker.getQuery(queryId).getQuerySnapshotManager();
+    }
+
     private boolean isIndexCreationQuery(QueryInfo queryInfo)
     {
         return queryInfo.getQuery().toUpperCase(Locale.ROOT).startsWith("CREATE INDEX");
     }
 
+     
     public static class LogEntry
     {
         private Long startTime;
@@ -487,5 +536,11 @@ public class SqlQueryManager
         {
             return startTime.toString() + "," + endTime.toString() + "," + elapsed.toString() + "," + running.toString() + "," + ids;
         }
+    }
+
+    private static boolean isQueryExpired(SharedQueryState state)
+    {
+        BasicQueryInfo info = state.getBasicQueryInfo();
+        return info.getState() == QueryState.FAILED && info.getErrorType() == ErrorType.INTERNAL_ERROR && info.getErrorCode().equals(QUERY_EXPIRE.toErrorCode());
     }
 }
